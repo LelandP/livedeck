@@ -26,6 +26,14 @@ If you prefer a Steam Input layout that sends keys, these are the keys the app u
 arrows, Enter (A), Esc or Backspace (B), `r` (X), `y` (Y) and the Menu key (Start). The list is
 in `crates/input/src/keys.rs`.
 
+## Duplicate controllers
+
+With Steam running, the app can see the Deck's built-in controller and also Steam's virtual pad
+that replaces it. Steam lists the replaced devices in `SDL_GAMECONTROLLER_IGNORE_DEVICES`, and the
+app skips them as SDL games do, as long as another controller is connected. As a fallback, the same
+button arriving from two controllers within 100 ms counts as one press. See
+`crates/input/src/gamepad.rs`.
+
 ## Why no template file
 
 A template (`.vdf`) would only repeat the Gamepad template. Steam also rewrites those files between

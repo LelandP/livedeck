@@ -35,6 +35,7 @@ impl MpvPlayer {
     pub fn new(
         on_event: impl Fn(PlayerEvent) + Send + 'static,
     ) -> Result<(Self, VideoOutput), String> {
+        use_c_numeric_locale();
         let mpv = Mpv::with_initializer(|init| {
             init.set_option("vo", "libmpv")?;
             // Keep the core alive between streams (and after one ends).
@@ -87,6 +88,27 @@ impl Player for MpvPlayer {
         self.send(Control::Stop);
     }
 }
+
+/// libmpv refuses to start (`mpv_create` returns NULL) unless `LC_NUMERIC` is "C". Rust never
+/// changes the locale, but a library in the process may have set it from the environment (a
+/// Flatpak or SteamOS session has `LANG` set). Only number formatting changes: text stays UTF-8.
+#[cfg(target_os = "linux")]
+fn use_c_numeric_locale() {
+    use std::ffi::{c_char, c_int};
+    // glibc and musl both use 1 for LC_NUMERIC.
+    const LC_NUMERIC: c_int = 1;
+    extern "C" {
+        fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
+    }
+    // SAFETY: a valid category and a NUL-terminated string. Runs once, before mpv starts, and
+    // nothing else in the app changes the locale, so no other `setlocale` call races with it.
+    unsafe {
+        setlocale(LC_NUMERIC, c"C".as_ptr());
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn use_c_numeric_locale() {}
 
 fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEvent)) {
     // True from `Load` until the first frame, so `Playing` is reported once per stream.

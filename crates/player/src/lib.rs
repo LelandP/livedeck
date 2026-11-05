@@ -3,7 +3,8 @@
 //! - `MpvPlayer` (feature `mpv`): libmpv renders into an OpenGL texture that Slint shows. Needs a
 //!   system libmpv.
 //! - [`FakePlayer`]: records calls and lets tests send [`PlayerEvent`]s.
-//! - [`UnavailablePlayer`]: what a build without the `mpv` feature uses.
+//! - [`UnavailablePlayer`]: what a build without the `mpv` feature uses, or any build when libmpv
+//!   failed to start. Every load fails with the reason.
 //!
 //! This crate does not depend on `htpc-core`. The app maps its types.
 

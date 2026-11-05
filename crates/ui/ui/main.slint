@@ -86,6 +86,15 @@ export component MainWindow inherits Window {
     out property <length> video-h: root.height;
     property <bool> hud-visible: true;
 
+    // The window size in logical px. The layout is drawn for 1280x800 (theme.slint), so Rust picks
+    // the scale factor that fits it to the window (`htpc_ui::fit_scale`) whenever the size changes,
+    // instead of trusting the system's DPI guess (about 2x on the Deck's small, dense screen).
+    out property <length> window-w: root.width;
+    out property <length> window-h: root.height;
+    callback geometry-changed();
+    changed width => { root.geometry-changed(); }
+    changed height => { root.geometry-changed(); }
+
     changed hud-pulse => {
         root.hud-visible = true;
         hud-timer.restart();

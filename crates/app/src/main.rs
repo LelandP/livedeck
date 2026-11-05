@@ -40,11 +40,17 @@ const HELP: &str = "\
 livedeck: couch-first, unofficial Twitch client for SteamOS
 
 USAGE:
-  livedeck [--mock]
+  livedeck [--mock] [--fullscreen | --windowed]
 
 FLAGS:
-  --mock      Use offline fixture data instead of the Twitch API
-  -h, --help  Print this help
+  --mock        Use offline fixture data instead of the Twitch API
+  --fullscreen  Start full screen (the default in Steam's Game Mode)
+  --windowed    Start in a window, also in Game Mode
+  -h, --help    Print this help
+
+DISPLAY:
+  The layout is drawn for 1280x800 and scaled to fit the window. SLINT_SCALE_FACTOR
+  sets a fixed scale instead.
 
 DATA SOURCE (without --mock):
   Signed out, the app browses anonymously through Twitch's unofficial web GQL API
@@ -87,6 +93,8 @@ const ENV_STREAMLINK: &str = "HTPC_STREAMLINK";
 #[derive(Debug)]
 struct Args {
     mock: bool,
+    /// `Some` when a flag chose; `None` leaves it to `want_fullscreen`.
+    fullscreen: Option<bool>,
 }
 
 fn parse_args() -> Result<Option<Args>> {
@@ -95,9 +103,14 @@ fn parse_args() -> Result<Option<Args>> {
         print!("{HELP}");
         return Ok(None);
     }
-    let parsed = Args {
-        mock: args.contains("--mock"),
+    let mock = args.contains("--mock");
+    let fullscreen = match (args.contains("--fullscreen"), args.contains("--windowed")) {
+        (true, true) => anyhow::bail!("--fullscreen and --windowed cannot be used together"),
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
     };
+    let parsed = Args { mock, fullscreen };
     let rest = args.finish();
     if !rest.is_empty() {
         anyhow::bail!("unexpected arguments: {rest:?}\n\n{HELP}");
@@ -280,15 +293,20 @@ fn make_player(ui: &MainWindow, tx: &UnboundedSender<Msg>) -> Arc<dyn Player> {
         }
     };
     #[cfg(feature = "mpv")]
-    {
-        match attach_mpv(ui, report.clone()) {
-            Ok(player) => return player,
-            Err(err) => tracing::error!(%err, "video is off"),
+    let unavailable = match attach_mpv(ui, report.clone()) {
+        Ok(player) => return player,
+        Err(err) => {
+            tracing::error!(%err, "video is off");
+            // Shown on the player's error screen, so the real cause is visible without a log.
+            UnavailablePlayer::with_reason(report, format!("video could not start: {err:#}"))
         }
-    }
+    };
     #[cfg(not(feature = "mpv"))]
-    let _ = ui;
-    Arc::new(UnavailablePlayer::new(report))
+    let unavailable = {
+        let _ = ui;
+        UnavailablePlayer::new(report)
+    };
+    Arc::new(unavailable)
 }
 
 /// Starts mpv and connects its frames to the window's `video` image.
@@ -326,6 +344,62 @@ fn attach_mpv(
     Ok(Arc::new(player))
 }
 
+/// Full screen when a flag says so, otherwise in Steam's Game Mode (Steam sets `SteamGamepadUI`
+/// for what it launches there).
+fn want_fullscreen(flag: Option<bool>) -> bool {
+    flag.unwrap_or_else(|| env_var("SteamGamepadUI").is_some_and(|v| v != "0"))
+}
+
+/// Keeps the 1280x800 layout fitted to the window: on every size change the scale factor becomes
+/// `htpc_ui::fit_scale` of the window's physical size. The system's own factor can be far off (X11
+/// guesses about 2x on the Deck's screen), which pushed the hints bar off the bottom.
+/// `SLINT_SCALE_FACTOR` turns this off.
+fn wire_scaling(ui: &MainWindow) {
+    if env_var("SLINT_SCALE_FACTOR").is_some() {
+        return;
+    }
+    let weak = ui.as_weak();
+    ui.on_geometry_changed(move || {
+        let weak = weak.clone();
+        // Not from inside the property-change handler: the events below change the size again.
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            if let Some(ui) = weak.upgrade() {
+                fit_to_window(&ui);
+            }
+        });
+    });
+}
+
+fn fit_to_window(ui: &MainWindow) {
+    use slint::platform::WindowEvent;
+
+    let window = ui.window();
+    let size = window.size();
+    let Some(scale) = htpc_ui::fit_scale(size.width, size.height) else {
+        return;
+    };
+    let logical = slint::LogicalSize::new(size.width as f32 / scale, size.height as f32 / scale);
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+    if (window.scale_factor() - scale).abs() < 0.001
+        && close(ui.get_window_w(), logical.width)
+        && close(ui.get_window_h(), logical.height)
+    {
+        return;
+    }
+    tracing::debug!(
+        width = size.width,
+        height = size.height,
+        system = window.scale_factor(),
+        scale,
+        "fitting the layout to the window"
+    );
+    // Only Slint's idea of the window changes. The OS window keeps its size.
+    window.dispatch_event(WindowEvent::ScaleFactorChanged {
+        scale_factor: scale,
+    });
+    window.dispatch_event(WindowEvent::Resized { size: logical });
+}
+
 /// The pieces `main` builds before the window exists: the session (login, tokens, refresh) and
 /// the store's message channel, which the session reports into.
 struct Wiring {
@@ -336,6 +410,8 @@ struct Wiring {
     env_token: Option<String>,
     /// Writes the settings changed on the Settings screen. `None` in `--mock`.
     save_settings: Option<SaveSettings>,
+    /// Start full screen (see `want_fullscreen`).
+    fullscreen: bool,
 }
 
 /// How often the session checks whether the access token is about to run out. It also notices a
@@ -356,6 +432,7 @@ fn run_app<P: Provider, R: StreamResolver>(
         rx,
         env_token,
         save_settings,
+        fullscreen,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -372,6 +449,10 @@ fn run_app<P: Provider, R: StreamResolver>(
 
     let ui = MainWindow::new().context("failed to create the window")?;
     ui.set_version(env!("CARGO_PKG_VERSION").into());
+    wire_scaling(&ui);
+    if fullscreen {
+        ui.window().set_fullscreen(true);
+    }
     wire_ui(&ui, &tx);
     let player = make_player(&ui, &tx);
 
@@ -498,6 +579,7 @@ fn main() -> Result<()> {
     } = load_storage();
     let settings = config.settings;
     let save_settings = settings_saver(&config, config_store);
+    let fullscreen = want_fullscreen(args.fullscreen);
     let (tx, rx) = unbounded_channel::<Msg>();
     let notify: Notify = {
         let tx = tx.clone();
@@ -535,6 +617,7 @@ fn main() -> Result<()> {
             env_token: None,
             // The mock must not overwrite the user's real config.
             save_settings: None,
+            fullscreen,
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -575,6 +658,7 @@ fn main() -> Result<()> {
         rx,
         env_token,
         save_settings,
+        fullscreen,
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

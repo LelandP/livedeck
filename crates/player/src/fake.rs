@@ -60,25 +60,38 @@ impl Player for FakePlayer {
     }
 }
 
-/// A player for builds without libmpv (and `--mock`): loading reports a failure that says why.
+/// A player for builds without libmpv (and `--mock`), or for when libmpv failed to start: loading
+/// reports a failure that says why.
 #[derive(Clone)]
 pub struct UnavailablePlayer {
     report: Arc<dyn Fn(PlayerEvent) + Send + Sync>,
+    reason: Arc<str>,
 }
 
 impl UnavailablePlayer {
+    /// For a build without the `mpv` feature.
     pub fn new(report: impl Fn(PlayerEvent) + Send + Sync + 'static) -> Self {
+        Self::with_reason(
+            report,
+            "this build has no video support (built without the `mpv` feature)",
+        )
+    }
+
+    /// For when video should work but does not, with what went wrong.
+    pub fn with_reason(
+        report: impl Fn(PlayerEvent) + Send + Sync + 'static,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             report: Arc::new(report),
+            reason: reason.into().into(),
         }
     }
 }
 
 impl Player for UnavailablePlayer {
     fn load(&self, _url: &str) {
-        (self.report)(PlayerEvent::Failed(
-            "this build has no video support (built without the `mpv` feature)".into(),
-        ));
+        (self.report)(PlayerEvent::Failed(self.reason.to_string()));
     }
 
     fn set_paused(&self, _paused: bool) {}
@@ -124,5 +137,15 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
         assert!(matches!(seen[0], PlayerEvent::Failed(_)));
+    }
+
+    #[test]
+    fn the_unavailable_player_reports_its_reason() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let player =
+            UnavailablePlayer::with_reason(move |e| sink.lock().unwrap().push(e), "no GPU");
+        player.load("u");
+        assert_eq!(*seen.lock().unwrap(), [PlayerEvent::Failed("no GPU".into())]);
     }
 }
