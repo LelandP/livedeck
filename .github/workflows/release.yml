@@ -85,11 +85,44 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Full history and tags, so the notes can list the commits since the previous release.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
           merge-multiple: true
           path: dist
+      # The release notes: install instructions, then every commit since the previous v* tag
+      # (subject as a bullet, the commit body under it), newest first. Merge commits are left
+      # out. The first release lists the whole history.
+      - name: Write the release notes
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          prev=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then range="$prev..$tag"; else range="$tag"; fi
+          {
+            cat <<'EOF'
+          **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Windows may show a SmartScreen warning because the program is not code-signed.
+
+          **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. This build is new and untested on a Deck.
+
+          LiveDeck is an unofficial Twitch client and finds streams through unofficial endpoints, which can break and may conflict with Twitch's terms of service. See the README.
+
+          ## Changes
+
+          EOF
+            # %w(0,2,2) indents the body under its bullet without rewrapping it.
+            git log --no-merges --format='- %s (%h)%n%n%w(0,2,2)%b' "$range"
+            if [ -n "$prev" ]; then
+              echo
+              echo "**Full changelog:** $REPO_URL/compare/$prev...$tag"
+            fi
+          } > release-notes.md
+          cat release-notes.md
       - name: Rename the Flatpak bundle
         run: |
           if [ -f dist/livedeck.flatpak ]; then
@@ -99,12 +132,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
           # v0.1.0-rc1 and the like are marked as pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Windows may show a SmartScreen warning because the program is not code-signed.
-
-            **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. This build is new and untested on a Deck.
-
-            LiveDeck is an unofficial Twitch client and finds streams through unofficial endpoints, which can break and may conflict with Twitch's terms of service. See the README.
+          # Written by "Write the release notes" above. GitHub's generated notes are left off: they
+          # list merged pull requests, and changes here land as plain commits.
+          body_path: release-notes.md
