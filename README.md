@@ -24,6 +24,25 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - It does not block or skip ads
 - Linux/Steam Deck builds are new and **not yet tested on a real Deck**
 
+## To do
+
+Ideas and plans, from easiest to hardest. Nothing here exists yet.
+
+- [ ] **Video playback options:** switch whatever libmpv lets us (quality, hardware decoding, scaling, audio and so on), perhaps in a "nerds view" with live stats
+- [ ] **Audio-only mode:** drop the video and keep the sound, to save bandwidth and battery
+- [ ] **Sleep timer:** stop playback after a set time (for example 30, 60 or 90 minutes)
+- [ ] **Subscribe button:** opens the channel's Twitch subscribe page in a browser. In Game Mode a browser may be awkward, so a QR code to scan with a phone (like the sign-in screen) may be the better fit
+- [ ] **Search:** find channels and categories by name, with a controller-friendly on-screen keyboard
+- [ ] **Live notifications:** a popup (and a sound) when another followed channel goes live, with a toggle in Settings to turn it off. Signed-in users only, as it needs Twitch EventSub
+- [ ] **Follow raids:** when the channel you are watching ends its stream with a raid, offer to follow it to the target channel (with a short countdown and a way to stay). Signed-in users only. Shares the EventSub client with live notifications
+- [ ] **Chat sending:** write in chat with the on-screen keyboard from Search, and perhaps quick canned messages. Needs the `chat:edit` permission, so users sign in again
+- [ ] **Hype train:** show progress and level while watching, if Twitch lets a viewer read it. Like predictions, it may need the broadcaster's own permission, so this needs checking first
+- [ ] **Predictions and polls:** show them while watching, if Twitch lets a viewer read them. Their EventSub topics may need the broadcaster's own permission, so this needs checking first
+
+**Big project**
+
+- [ ] **Kick support:** watch Kick streams next to Twitch. The app is Twitch-shaped throughout (API trait, feeds, chat, sign-in, config), so this starts with a platform abstraction. Then a read-only Kick platform (browse, play through Streamlink, chat over Kick's own WebSocket), with login and follows later
+
 ## Install
 
 Download the latest build from the **Releases** page of this repository.
