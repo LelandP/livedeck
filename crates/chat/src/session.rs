@@ -6,7 +6,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{ChatMessage, ChatStatus};
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::time::{interval, sleep, sleep_until, timeout, Instant, MissedTickBehavior};
+use tokio::time::{
+    interval, interval_at, sleep, sleep_until, timeout, Instant, MissedTickBehavior,
+};
 use twitch_irc::message::{IRCMessage, ServerMessage};
 
 use crate::badges::{BadgeBook, HttpBadges};
@@ -290,7 +292,9 @@ async fn drive(mut link: Link, ctx: &Ctx, out: &mut Out) -> Ended {
         pending: Vec::new(),
         live_since: None,
     };
-    let mut flush = interval(cfg.flush_every);
+    // The first flush is one period away, not immediate: an immediate tick races the first lines
+    // in `select!` and could split lines that arrived together into two batches.
+    let mut flush = interval_at(Instant::now() + cfg.flush_every, cfg.flush_every);
     flush.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut keepalive = interval(cfg.keepalive);
     keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
