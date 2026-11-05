@@ -196,4 +196,27 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
             "{layout:?}: the list is not full to the top"
         );
     }
+
+    // The quit prompt over Home: it lays out, draws its title in the middle of the screen, and
+    // the hints bar underneath is empty (the prompt has its own buttons).
+    let (home, _) = init();
+    let (asking, _) = reduce(&home, Intent::Back);
+    assert!(asking.exit_prompt);
+    Update::full(view_model(&asking)).apply(&ui);
+    let image = render(&ui);
+    let text = |p: &Rgba8Pixel| p.r > 200 && p.g > 200 && p.b > 200;
+    // The green ring of the A button (`Theme.btn-a`), drawn whether or not there are fonts.
+    let a_button = |p: &Rgba8Pixel| p.g > 150 && p.r < 150 && p.b < 120;
+    assert!(
+        count(&image, 360..920, 260..540, a_button) > 0,
+        "the prompt has no A button"
+    );
+    assert_eq!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button),
+        0,
+        "the hints bar still shows hints behind the prompt"
+    );
+    if count(&image, 360..920, 260..540, text) == 0 {
+        eprintln!("quit prompt: no text was rendered (no fonts?), skipping the title check");
+    }
 }

@@ -227,6 +227,9 @@ pub struct AppState {
     pub settings: Settings,
     /// The focused row of the Settings screen.
     pub settings_focus: SettingsRow,
+    /// The "Quit LiveDeck?" prompt is open (B on a root screen). It takes all input: A quits,
+    /// B closes it.
+    pub exit_prompt: bool,
 }
 
 impl AppState {

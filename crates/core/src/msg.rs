@@ -75,6 +75,8 @@ pub enum Command {
     SignOut,
     /// Write these settings to the config file. There is no `Event`: the state already holds them.
     SaveSettings(Settings),
+    /// Close the window and end the app (confirmed on the quit prompt).
+    Quit,
 }
 
 /// The result of fetching one more page of a row.

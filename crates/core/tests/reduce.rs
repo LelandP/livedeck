@@ -547,11 +547,69 @@ fn chat_is_capped_and_drops_oldest() {
 // ---- back stack ----------------------------------------------------------------------------
 
 #[test]
-fn back_on_home_without_rail_is_a_no_op() {
-    let s = home();
-    let (after, cmds) = reduce(&s, Intent::Back);
-    assert_eq!(after, s);
+fn back_on_a_root_screen_asks_to_quit() {
+    for entry in [RailEntry::Home, RailEntry::Browse, RailEntry::Settings] {
+        let (s, _) = reduce(&home(), Intent::RailPick(entry));
+        let (s, cmds) = reduce(&s, Intent::Back);
+        assert!(s.exit_prompt, "{entry:?}");
+        assert!(cmds.is_empty(), "asking is not quitting yet");
+    }
+}
+
+#[test]
+fn back_with_the_rail_open_closes_the_rail_and_does_not_ask() {
+    let (s, _) = reduce(&home(), Intent::Menu);
+    let (s, _) = reduce(&s, Intent::Back);
+    assert!(!s.rail.focused);
+    assert!(!s.exit_prompt);
+}
+
+#[test]
+fn a_on_the_quit_prompt_quits() {
+    let (s, _) = reduce(&home(), Intent::Back);
+    let (_, cmds) = reduce(&s, Intent::Select);
+    assert_eq!(cmds, vec![Command::Quit]);
+}
+
+#[test]
+fn b_on_the_quit_prompt_cancels_and_leaves_home_as_it_was() {
+    let start = home();
+    let (s, _) = reduce(&start, Intent::Back);
+    let (s, cmds) = reduce(&s, Intent::Back);
+    assert_eq!(s, start);
     assert!(cmds.is_empty());
+    // Start closes it too.
+    let (s, _) = reduce(&reduce(&start, Intent::Back).0, Intent::Menu);
+    assert_eq!(s, start);
+}
+
+#[test]
+fn the_quit_prompt_takes_all_other_input() {
+    let (open, _) = reduce(&home(), Intent::Back);
+    for intent in [
+        Intent::Up,
+        Intent::Down,
+        Intent::Left,
+        Intent::Right,
+        Intent::Retry,
+        Intent::ToggleChat,
+        Intent::Pick { row: 0, col: 0 },
+        Intent::RailPick(RailEntry::Browse),
+    ] {
+        let (s, cmds) = reduce(&open, intent);
+        assert_eq!(s, open, "{intent:?} changed something behind the prompt");
+        assert!(cmds.is_empty(), "{intent:?}");
+    }
+}
+
+#[test]
+fn back_on_a_category_still_goes_back_instead_of_asking() {
+    let mut s = home();
+    s.back_stack = vec![Screen::Browse];
+    s.screen = Screen::Category;
+    let (s, _) = reduce(&s, Intent::Back);
+    assert_eq!(s.screen, Screen::Browse);
+    assert!(!s.exit_prompt);
 }
 
 #[test]

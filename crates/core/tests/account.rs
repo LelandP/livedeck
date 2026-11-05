@@ -200,9 +200,9 @@ fn the_new_quality_is_used_by_the_next_stream() {
 }
 
 #[test]
-fn b_and_left_on_the_account_row_open_the_rail() {
+fn left_on_the_account_row_opens_the_rail_and_b_asks_to_quit() {
     let (s, _) = reduce(&on_settings(), Intent::Back);
-    assert!(s.rail.focused);
+    assert!(s.exit_prompt && !s.rail.focused);
     assert_eq!(s.screen, Screen::Settings);
     let (s, _) = reduce(&on_settings(), Intent::Left);
     assert!(s.rail.focused);

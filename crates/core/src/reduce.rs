@@ -36,6 +36,10 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
 }
 
 fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    if s.exit_prompt {
+        exit_prompt_intent(s, intent, cmds);
+        return;
+    }
     match s.screen {
         Screen::Login => login_intent(s, intent, cmds),
         Screen::Player => player_intent(s, intent, cmds),
@@ -43,6 +47,16 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Screen::Home | Screen::Browse | Screen::Category | Screen::Following | Screen::Settings => {
             home_intent(s, intent, cmds)
         }
+    }
+}
+
+/// Input while the quit prompt is open. A quits, B (or the Start button, which closes things)
+/// cancels. Nothing else gets past the prompt.
+fn exit_prompt_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    match intent {
+        Intent::Select => cmds.push(Command::Quit),
+        Intent::Back | Intent::Menu => s.exit_prompt = false,
+        _ => {}
     }
 }
 
@@ -65,8 +79,8 @@ fn login_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
 }
 
 /// Input on the Settings screen while the rail is closed. Up and Down move between rows. A, and
-/// Left or Right on a choice, change it and save the settings. Left on the account row, and B,
-/// go to the rail (the choices use Left for "previous").
+/// Left or Right on a choice, change it and save the settings. Left on the account row goes to the
+/// rail (the choices use Left for "previous"). B asks to quit, as on every root screen.
 fn settings_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
         Intent::Up => s.settings_focus = s.settings_focus.prev(),
@@ -80,7 +94,7 @@ fn settings_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             SettingsRow::Account => s.rail.focused = true,
             row => change_setting(s, row, false, cmds),
         },
-        Intent::Back => s.rail.focused = true,
+        Intent::Back => s.exit_prompt = true,
         _ => {}
     }
 }
@@ -270,7 +284,9 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Intent::Select => select_tile(s, cmds),
         Intent::Retry => retry(s, cmds),
         // Category is the only feed screen above another one, so it is the only one Back leaves.
+        // On a root screen there is nowhere further back: B asks to quit.
         Intent::Back if s.screen == Screen::Category => back(s, cmds),
+        Intent::Back => s.exit_prompt = true,
         _ => {}
     }
 }

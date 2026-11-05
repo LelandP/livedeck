@@ -182,6 +182,8 @@ pub struct ViewModel {
     pub paused: bool,
     /// Changes whenever the HUD should come back (the window hides it again after a timeout).
     pub hud_pulse: i32,
+    /// The "Quit LiveDeck?" prompt is open.
+    pub exit_prompt: bool,
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
@@ -591,6 +593,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         playback_error,
         paused: state.paused,
         hud_pulse: state.hud_pulse as i32,
+        exit_prompt: state.exit_prompt,
         rows,
         chat: state
             .chat
@@ -742,6 +745,7 @@ impl Update {
         ui.set_playback_error(vm.playback_error.into());
         ui.set_paused(vm.paused);
         ui.set_hud_pulse(vm.hud_pulse);
+        ui.set_exit_prompt(vm.exit_prompt);
     }
 }
 

@@ -366,7 +366,7 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             }
             // Playback commands run in `playback.rs`, chat in `chat.rs`, the login ones in
             // `session.rs`, and thumbnails and chat images are delivered through
-            // `Provider::thumbnail`, so none of them produces events here.
+            // `Provider::thumbnail`, so none of them produces events here. The store runs `Quit`.
             Command::Play { .. }
             | Command::SetPaused(_)
             | Command::StopPlayback
@@ -377,7 +377,8 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::StartLogin
             | Command::CancelLogin
             | Command::SignOut
-            | Command::SaveSettings(_) => Vec::new(),
+            | Command::SaveSettings(_)
+            | Command::Quit => Vec::new(),
         }
     }
 

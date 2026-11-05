@@ -80,6 +80,8 @@ export component MainWindow inherits Window {
     in property <bool> paused: false;
     // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
     in property <int> hud-pulse: 0;
+    // The "Quit LiveDeck?" prompt (B on a root screen). A quits, B cancels.
+    in property <bool> exit-prompt: false;
     // The area mpv renders into (logical px). Rust multiplies by the scale factor. Not animated
     // with the chat slide, so the texture is allocated once per layout change.
     out property <length> video-w: root.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
@@ -236,13 +238,53 @@ export component MainWindow inherits Window {
         hud-visible: root.hud-visible;
     }
 
+    // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
+    // underneath reacts while it is open.
+    if root.exit-prompt : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #000000b8;
+        TouchArea { }
+
+        Rectangle {
+            width: 560px;
+            height: 240px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - Theme.hints-h - self.height) / 2;
+            border-radius: 12px;
+            border-width: 2px;
+            border-color: Theme.surface-high;
+            background: Theme.surface;
+
+            VerticalLayout {
+                alignment: center;
+                padding: 40px;
+                spacing: 32px;
+                Text {
+                    text: "Quit LiveDeck?";
+                    color: Theme.text;
+                    font-size: Theme.fs-display;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 56px;
+                    Hint { glyph: "A"; label: "Quit"; clicked => { root.action(UiAction.select); } }
+                    Hint { glyph: "B"; label: "Cancel"; clicked => { root.action(UiAction.back); } }
+                }
+            }
+        }
+    }
+
     Rectangle {
         y: parent.height - Theme.hints-h;
         height: Theme.hints-h;
         width: parent.width;
         background: #0e0e10f0;
 
-        HorizontalLayout {
+        // Empty while the quit prompt is open: the prompt shows its own buttons.
+        if !root.exit-prompt : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 36px;
@@ -255,6 +297,8 @@ export component MainWindow inherits Window {
             if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 1 : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
             if root.screen == 1 || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: "Back"; clicked => { root.action(UiAction.back); } }
+            // Root screens: nowhere further back, so B asks to quit (with the rail open, B only closes it).
+            if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
             if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "◀"; label: "Menu"; clicked => { root.action(UiAction.menu); } }

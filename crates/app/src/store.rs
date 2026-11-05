@@ -33,6 +33,8 @@ pub trait Sink: Clone + Send + 'static {
     fn thumbnail(&self, url: String, image: Thumbnail);
     /// Delivers a decoded emote or badge for the chat lines that show `url`.
     fn chat_image(&self, url: String, image: Thumbnail);
+    /// Closes the window, which ends the app (`run_app` shuts the runtime down after it).
+    fn quit(&self);
 }
 
 impl Sink for slint::Weak<MainWindow> {
@@ -54,6 +56,17 @@ impl Sink for slint::Weak<MainWindow> {
         if let Err(err) = self.upgrade_in_event_loop(move |ui| apply_chat_image(&ui, &url, &image))
         {
             tracing::debug!(%err, "UI gone, dropping chat image");
+        }
+    }
+
+    fn quit(&self) {
+        // Ends `ui.run()` on the UI thread. Already gone means the app is quitting anyway.
+        if let Err(err) = slint::invoke_from_event_loop(|| {
+            if let Err(err) = slint::quit_event_loop() {
+                tracing::debug!(%err, "event loop already stopped");
+            }
+        }) {
+            tracing::debug!(%err, "UI gone, nothing to quit");
         }
     }
 }
@@ -175,6 +188,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     fn spawn_all(&mut self, cmds: Vec<Command>) {
         for cmd in cmds {
             tracing::debug!(?cmd, "command");
+            if cmd == Command::Quit {
+                tracing::info!("quitting");
+                self.sink.quit();
+                continue;
+            }
             if let Command::SaveSettings(settings) = cmd {
                 if let Some(save) = self.save_settings.clone() {
                     // File IO: keep it off the async workers.
@@ -252,10 +270,14 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::mpsc::unbounded_channel;
 
-    /// Records every update the store would send to the window.
-    /// The updates shown, and the chat images delivered to the window.
+    /// Records what the store would do to the window: the updates shown, the chat images
+    /// delivered, and whether it was asked to quit.
     #[derive(Clone, Default)]
-    struct Recorder(Arc<Mutex<Vec<Update>>>, Arc<Mutex<Vec<String>>>);
+    struct Recorder(
+        Arc<Mutex<Vec<Update>>>,
+        Arc<Mutex<Vec<String>>>,
+        Arc<std::sync::atomic::AtomicBool>,
+    );
 
     impl Sink for Recorder {
         fn show(&self, update: Update) {
@@ -266,6 +288,10 @@ mod tests {
 
         fn chat_image(&self, url: String, _image: Thumbnail) {
             self.1.lock().unwrap().push(url);
+        }
+
+        fn quit(&self) {
+            self.2.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -413,6 +439,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn b_on_home_asks_and_a_quits() {
+        use std::sync::atomic::Ordering;
+        let (tx, rec) = start();
+        rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        tx.send(Intent::Back.into()).unwrap();
+        rec.wait_for("prompt", |vm| vm.exit_prompt).await;
+        assert!(!rec.2.load(Ordering::SeqCst), "asking must not quit");
+
+        tx.send(Intent::Select.into()).unwrap();
+        for _ in 0..400 {
+            if rec.2.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("A on the prompt did not quit");
+    }
+
+    #[tokio::test]
     async fn sign_in_polls_until_approved_then_shows_the_followed_row() {
         let (tx, rec) = start_signed_out();
         // Signed out: no Followed row (hero, Top Live, Categories).
@@ -517,9 +562,9 @@ mod tests {
         let (tx, rec) = start();
         rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
         let before = rec.count();
-        // Up on the first row and Back on Home change nothing.
+        // Up on the first row and Y (chat) on Home change nothing. (B would open the quit prompt.)
         tx.send(Intent::Up.into()).unwrap();
-        tx.send(Intent::Back.into()).unwrap();
+        tx.send(Intent::ToggleChat.into()).unwrap();
         // A visible change afterwards proves both no-ops were processed in order.
         tx.send(Intent::Down.into()).unwrap();
         rec.wait_for("moved", |vm| vm.sel_row == 1).await;
