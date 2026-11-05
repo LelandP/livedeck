@@ -85,6 +85,18 @@ modules:
         tag: v7.387.0
         commit: 275f7dea27924cdd34ab2e6c20e448b6bc4fab65
 
+  # mpv's X11 output needs the Present extension library, which the runtime lacks.
+  - name: libXpresent
+    buildsystem: autotools
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: git
+        url: https://gitlab.freedesktop.org/xorg/lib/libxpresent.git
+        tag: libXpresent-1.0.2
+        commit: 4d92149372461bf575e8a09b1064a2884c38c3aa
+
   # Only the library: no player, no scripting.
   - name: mpv
     buildsystem: meson
