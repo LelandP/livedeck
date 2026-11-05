@@ -106,7 +106,10 @@ where
                 .map(|list| parse_ignore_list(&list))
                 .unwrap_or_default();
             if !ignored.is_empty() {
-                tracing::info!(count = ignored.len(), "Steam Input replaces some controllers");
+                tracing::info!(
+                    count = ignored.len(),
+                    "Steam Input replaces some controllers"
+                );
             }
             for (_, pad) in gilrs.gamepads() {
                 log_connected(&pad, &ignored);

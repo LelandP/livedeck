@@ -146,6 +146,9 @@ mod tests {
         let player =
             UnavailablePlayer::with_reason(move |e| sink.lock().unwrap().push(e), "no GPU");
         player.load("u");
-        assert_eq!(*seen.lock().unwrap(), [PlayerEvent::Failed("no GPU".into())]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [PlayerEvent::Failed("no GPU".into())]
+        );
     }
 }
