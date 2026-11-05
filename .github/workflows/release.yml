@@ -95,8 +95,8 @@ jobs:
           merge-multiple: true
           path: dist
       # The release notes: install instructions, then every commit since the previous v* tag
-      # (subject as a bullet, the commit body under it), newest first. Merge commits are left
-      # out. The first release lists the whole history.
+      # (subject as a bullet, the commit body under it), newest first. Merge commits and version
+      # bumps are left out. The first release lists the whole history.
       - name: Write the release notes
         env:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -115,8 +115,10 @@ jobs:
           ## Changes
 
           EOF
-            # %w(0,2,2) indents the body under its bullet without rewrapping it.
-            git log --no-merges --format='- %s (%h)%n%n%w(0,2,2)%b' "$range"
+            # %w(0,2,2) indents the body under its bullet without rewrapping it. Version bumps
+            # ("Release 0.1.1") are left out: the release itself says that.
+            git log --no-merges --invert-grep --grep='^Release [0-9]' \
+              --format='- %s (%h)%n%n%w(0,2,2)%b' "$range"
             if [ -n "$prev" ]; then
               echo
               echo "**Full changelog:** $REPO_URL/compare/$prev...$tag"
