@@ -1,0 +1,154 @@
+# Flatpak manifest for LiveDeck. Experimental: not yet verified by a CI run
+# (.github/workflows/flatpak.yml), so a module or two may need fixing.
+#
+# Build locally:
+#   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.livedeck.LiveDeck.yml
+#
+# This is a sideload build, not a Flathub one: the cargo and pip steps use the network while
+# building (Flathub forbids that and wants vendored sources). The mpv, libplacebo, libass and
+# FFmpeg module versions are the ones flathub/io.mpv.Mpv builds, cut down to what libmpv needs.
+app-id: io.github.livedeck.LiveDeck
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: livedeck
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  # GPU, and /dev/input for controllers (gilrs reads them through udev).
+  - --device=all
+  # Sign-in tokens go in the desktop keyring when there is one. Otherwise the app keeps them in a
+  # private file inside ~/.var/app/io.github.livedeck.LiveDeck.
+  - --talk-name=org.freedesktop.secrets
+
+cleanup:
+  - '*.la'
+  - '*.a'
+
+modules:
+  - name: libass
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    config-opts:
+      - --disable-static
+      - --enable-asm
+      - --enable-harfbuzz
+      - --enable-fontconfig
+    sources:
+      - type: git
+        url: https://github.com/libass/libass.git
+        tag: 0.17.5
+        commit: 4a05d8127f525943ebf45fdc6497c9e665947f0d
+
+  # H.264 (what Twitch streams use) decodes with FFmpeg's own decoder, so no GPL libraries are
+  # needed. VAAPI gives hardware decoding on the Deck's AMD GPU.
+  - name: ffmpeg
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/ffmpeg/examples
+    config-opts:
+      - --disable-debug
+      - --disable-doc
+      - --disable-static
+      - --disable-programs
+      - --enable-shared
+      - --enable-libass
+      - --enable-libfreetype
+      - --enable-libdrm
+      - --enable-vaapi
+    sources:
+      - type: git
+        url: https://git.ffmpeg.org/ffmpeg.git
+        commit: 946fcce07b6dcd0331c8cc609192aeff5e1924f8
+        tag: n9.0.2
+
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=enabled
+      - -Dshaderc=enabled
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: git
+        url: https://code.videolan.org/videolan/libplacebo.git
+        tag: v7.387.0
+        commit: 275f7dea27924cdd34ab2e6c20e448b6bc4fab65
+
+  # Only the library: no player, no scripting.
+  - name: mpv
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dcplayer=false
+      - -Dbuild-date=false
+      - -Dlua=disabled
+      - -Djavascript=disabled
+      - -Dgl=enabled
+      - -Degl=enabled
+      - -Degl-x11=enabled
+      - -Degl-wayland=enabled
+      - -Dgl-x11=enabled
+      - -Dwayland=enabled
+      - -Dx11=enabled
+      - -Dvaapi=enabled
+      - -Dpulse=enabled
+      - -Dwerror=false
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: git
+        url: https://github.com/mpv-player/mpv.git
+        tag: v0.41.0
+        commit: 41f6a645068483470267271e1d09966ca3b9f413
+
+  # Streamlink stays a separate program. The app looks for a
+  # `streamlink` next to its own executable, which is /app/bin.
+  - name: streamlink
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --no-cache-dir --target=/app/lib/streamlink 'streamlink>=8,<9'
+      - install -Dm755 streamlink-wrapper /app/bin/streamlink
+    sources:
+      - type: script
+        dest-filename: streamlink-wrapper
+        commands:
+          - PYTHONPATH=/app/lib/streamlink${PYTHONPATH:+:$PYTHONPATH} exec python3 -m streamlink_cli "$@"
+
+  - name: livedeck
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/livedeck/cargo
+        # Where the libmpv built above lives, for the linker (crates/player/build.rs).
+        MPV_LIB_DIR: /app/lib
+    build-commands:
+      - cargo build --release --locked -p livedeck --features mpv
+      - install -Dm755 target/release/livedeck /app/bin/livedeck
+      - install -Dm644 packaging/linux/io.github.livedeck.LiveDeck.desktop /app/share/applications/io.github.livedeck.LiveDeck.desktop
+      - install -Dm644 packaging/linux/io.github.livedeck.LiveDeck.metainfo.xml /app/share/metainfo/io.github.livedeck.LiveDeck.metainfo.xml
+      - install -Dm644 packaging/linux/io.github.livedeck.LiveDeck.svg /app/share/icons/hicolor/scalable/apps/io.github.livedeck.LiveDeck.svg
+      - install -Dm644 LICENSE /app/share/licenses/io.github.livedeck.LiveDeck/LICENSE
+      - install -Dm644 packaging/THIRD_PARTY.md /app/share/licenses/io.github.livedeck.LiveDeck/THIRD_PARTY.md
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git

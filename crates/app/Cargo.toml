@@ -1,0 +1,32 @@
+[package]
+name = "livedeck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Real video through libmpv. Off by default so the workspace builds without a system libmpv
+# See crates/player/README.md for the setup.
+default = []
+mpv = ["htpc-player/mpv"]
+
+[dependencies]
+htpc-core.workspace = true
+htpc-input.workspace = true
+htpc-ui.workspace = true
+htpc-twitch-api.workspace = true
+htpc-storage.workspace = true
+htpc-resolver.workspace = true
+htpc-player.workspace = true
+htpc-chat.workspace = true
+slint.workspace = true
+tokio.workspace = true
+pico-args.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+serde_json.workspace = true

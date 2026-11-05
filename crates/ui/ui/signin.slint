@@ -1,0 +1,95 @@
+import { Theme } from "theme.slint";
+
+// Device Code Grant screen: the address and code to type, and a QR code of the same link.
+export component SignInScreen inherits Rectangle {
+    in property <string> code;
+    in property <string> url;
+    // Waiting, or why the login ended.
+    in property <string> status;
+    in property <bool> failed;
+    // The QR code of the verification link, one pixel per module (with its quiet zone).
+    in property <image> qr;
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 96px;
+        padding-bottom: Theme.hints-h;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 16px;
+            width: 520px;
+
+            Text {
+                text: "Sign in to Twitch";
+                color: Theme.text;
+                font-size: Theme.fs-display;
+                font-weight: 900;
+            }
+            Text {
+                text: "On your phone or computer, open";
+                color: Theme.muted;
+                font-size: Theme.fs-body;
+            }
+            Text {
+                text: root.url;
+                color: Theme.accent-light;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+            }
+            Text {
+                text: "and enter this code";
+                color: Theme.muted;
+                font-size: Theme.fs-body;
+            }
+            Rectangle {
+                height: 112px;
+                background: Theme.surface;
+                border-radius: 8px;
+                border-width: 3px;
+                border-color: root.failed ? Theme.muted : Theme.accent;
+                Text {
+                    text: root.code;
+                    color: root.failed ? Theme.muted : Theme.text;
+                    font-size: 56px;
+                    font-weight: 900;
+                    letter-spacing: 8px;
+                }
+            }
+            Text {
+                text: root.status;
+                color: root.failed ? Theme.accent-light : Theme.muted;
+                font-size: Theme.fs-small;
+                wrap: word-wrap;
+            }
+            Text {
+                visible: root.failed;
+                text: "Press A for a new code";
+                color: Theme.text;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+            }
+        }
+
+        // The QR code of the verification link (it already carries the code). Drawn on white with
+        // its own quiet zone, scaled without smoothing so the modules stay sharp.
+        Rectangle {
+            width: 260px;
+            height: 260px;
+            y: (parent.height - self.height) / 2;
+            background: #ffffff;
+            border-radius: 8px;
+            clip: true;
+            opacity: root.failed ? 0.25 : 1.0;
+            animate opacity { duration: Theme.t-fast; }
+
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.qr;
+                image-fit: contain;
+                image-rendering: pixelated;
+            }
+        }
+    }
+}

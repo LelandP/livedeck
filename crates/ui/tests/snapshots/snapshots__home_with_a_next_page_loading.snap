@@ -1,0 +1,7 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: "render(&view_model(&send(&s, &[Intent::Right; 4])))"
+---
+screen=Home heading="Live now" focus=(0, 4) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Landscape "Top Live": [s0 | VALORANT | 100 viewers] [s1 | VALORANT | 100 viewers] [s2 | VALORANT | 100 viewers] [s3 | VALORANT | 100 viewers] [s4 | VALORANT | 100 viewers] [s5 | VALORANT | 100 viewers] [s6 | VALORANT | 100 viewers] [s7 | VALORANT | 100 viewers] [skeleton] [skeleton]

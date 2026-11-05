@@ -1,0 +1,223 @@
+import { Theme } from "theme.slint";
+import { StreamItem, ChatMsg } from "types.slint";
+import { ChatLine } from "components.slint";
+
+// The chat lines, newest at the bottom. Older ones are pushed up and clipped at the top.
+component ChatList inherits Rectangle {
+    in property <[ChatMsg]> chat;
+    clip: true;
+    // The block is as tall as its lines and sits on the bottom edge. A layout with `alignment: end`
+    // would let a full list spill past the bottom instead, hiding the newest lines.
+    block := VerticalLayout {
+        x: 0px;
+        width: root.width;
+        height: self.preferred-height;
+        y: root.height - self.height;
+        spacing: 8px;
+        for m in root.chat : ChatLine {
+            msg: m;
+            line-w: root.width;
+        }
+    }
+}
+
+// Chat is a side panel (the video shrinks to make room) or an overlay (lines over the video).
+export component PlayerScreen inherits Rectangle {
+    in property <StreamItem> stream;
+    in property <[ChatMsg]> chat;
+    in property <bool> chat-open;
+    // Overlay layout instead of the side panel (the `chat_layout` setting).
+    in property <bool> chat-overlay: false;
+    // Connection state to show next to the chat ("Connecting…"), empty when all is well.
+    in property <string> chat-status: "";
+    // The latest video frame (a GL texture rendered by mpv).
+    in property <image> video;
+    // 0 loading, 1 playing, 2 offline, 3 failed (PlaybackId in view_model.rs).
+    in property <int> playback: 0;
+    in property <string> playback-error: "";
+    in property <bool> paused: false;
+    in property <bool> hud-visible: true;
+
+    // Skeleton pulse, 0..1 (only ticks while a skeleton is shown).
+    property <float> pulse: 0.5 + 0.5 * Math.sin(mod(animation-tick() / Theme.t-pulse, 1) * 360deg);
+
+    Rectangle {
+        // Slint centres a child that is smaller than its parent unless x and y are set, which
+        // would push the video to the right while the side panel is open.
+        x: 0px;
+        y: 0px;
+        width: parent.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
+        height: parent.height;
+        animate width { duration: Theme.t-med; easing: ease-out; }
+        background: #000000;
+        clip: true;
+
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.video;
+            image-fit: fill;
+            visible: root.playback == 1;
+        }
+
+        // Loading: the stream's tint, pulsing, until the first frame.
+        Rectangle {
+            visible: root.playback == 0;
+            background: @linear-gradient(135deg, root.stream.tint, #000000);
+            opacity: 0.55 + 0.45 * root.pulse;
+        }
+        Text {
+            visible: root.playback == 0;
+            text: "Starting stream…";
+            color: Theme.text;
+            font-size: Theme.fs-body;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        // End screen: the channel is not live (any more), or the stream could not start.
+        Rectangle {
+            visible: root.playback == 2 || root.playback == 3;
+            background: @linear-gradient(135deg, root.stream.tint, #000000);
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                padding: 48px;
+                Text {
+                    text: root.playback == 2 ? root.stream.channel + " is offline" : "Could not start the stream";
+                    color: Theme.text;
+                    font-size: Theme.fs-display;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Text {
+                    visible: root.playback == 3;
+                    text: root.playback-error;
+                    color: Theme.muted;
+                    font-size: Theme.fs-body;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Press A or X to try again  ·  B to go back";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-body;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Paused badge.
+        Rectangle {
+            visible: root.playback == 1 && root.paused;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 120px;
+            height: 120px;
+            border-radius: 60px;
+            background: #000000a0;
+            Text {
+                text: "❚❚";
+                color: Theme.text;
+                font-size: 44px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // HUD: channel, title and viewers. Fades out on its own while playing.
+        Rectangle {
+            y: parent.height - 190px;
+            height: 190px;
+            opacity: (root.hud-visible || root.playback != 1 || root.paused) ? 1.0 : 0.0;
+            animate opacity { duration: Theme.t-med; }
+            background: @linear-gradient(180deg, #00000000, #000000d0);
+
+            VerticalLayout {
+                padding-left: Theme.safe-x;
+                padding-right: Theme.safe-x;
+                padding-bottom: Theme.hints-h + 8px;
+                alignment: end;
+                spacing: 4px;
+
+                Text {
+                    text: root.stream.channel;
+                    color: Theme.text;
+                    font-size: Theme.fs-title;
+                    font-weight: 800;
+                }
+                Text {
+                    text: root.stream.title + "  ·  " + root.stream.viewers;
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+
+    // Side panel: slides in from the right, over the strip the video made room for.
+    if !root.chat-overlay : Rectangle {
+        x: parent.width - (root.chat-open ? Theme.chat-w : 0px);
+        width: Theme.chat-w;
+        height: parent.height;
+        background: Theme.surface;
+        clip: true;
+        animate x { duration: Theme.t-med; easing: ease-out; }
+
+        VerticalLayout {
+            padding: Theme.chat-pad;
+            padding-bottom: Theme.hints-h + 8px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                Text {
+                    text: "CHAT";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-small;
+                    font-weight: 800;
+                    letter-spacing: 3px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.chat-status;
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                }
+            }
+            ChatList {
+                chat: root.chat;
+                vertical-stretch: 1;
+            }
+        }
+    }
+
+    // Overlay: lines over the right of the video on a soft scrim, above the hints bar. It fades
+    // in and out, and the video keeps its full size.
+    if root.chat-overlay : Rectangle {
+        x: parent.width - Theme.chat-overlay-w;
+        width: Theme.chat-overlay-w;
+        height: parent.height;
+        opacity: root.chat-open ? 1.0 : 0.0;
+        animate opacity { duration: Theme.t-med; }
+        background: @linear-gradient(90deg, #00000000, #000000b0);
+
+        VerticalLayout {
+            padding: Theme.chat-pad;
+            padding-bottom: Theme.hints-h + 8px;
+            spacing: 8px;
+
+            Text {
+                text: root.chat-status;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                horizontal-alignment: right;
+            }
+            ChatList {
+                chat: root.chat;
+                vertical-stretch: 1;
+            }
+        }
+    }
+}

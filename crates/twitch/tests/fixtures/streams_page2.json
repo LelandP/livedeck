@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "40952121087",
+      "user_id": "101051821",
+      "user_login": "brickby",
+      "user_name": "brickby",
+      "game_id": "27471",
+      "game_name": "Minecraft",
+      "type": "live",
+      "title": "Building a 1:1 castle",
+      "tags": null,
+      "viewer_count": 22400,
+      "started_at": "2026-11-04T08:00:00Z",
+      "language": "en",
+      "thumbnail_url": "https://static-cdn.jtvnw.net/previews-ttv/live_user_brickby-{width}x{height}.jpg",
+      "tag_ids": [],
+      "is_mature": false
+    }
+  ],
+  "pagination": {}
+}

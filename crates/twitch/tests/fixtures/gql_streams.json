@@ -1,0 +1,40 @@
+{
+  "data": {
+    "streams": {
+      "edges": [
+        {
+          "cursor": "eyJzIjoyNTU1MC4yMjg5Nzc1ODU5NjQsImQiOmZhbHNlLCJ0Ijp0cnVlfQ==",
+          "node": {
+            "title": "Ranked climb to Radiant",
+            "viewersCount": 48100,
+            "broadcaster": { "id": "101051819", "login": "grandmaster_k", "displayName": "Grandmaster_K" },
+            "game": { "id": "516575", "name": "VALORANT" },
+            "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_grandmaster_k-440x248.jpg"
+          }
+        },
+        {
+          "cursor": "eyJzIjoxODM0MC42NzIyMzM5OTY4MzYsImQiOmZhbHNlLCJ0Ijp0cnVlfQ==",
+          "node": {
+            "title": null,
+            "viewersCount": 31500,
+            "broadcaster": { "id": "101051820", "login": "tidewatch", "displayName": null },
+            "game": null,
+            "previewImageURL": null
+          }
+        },
+        {
+          "cursor": "eyJzIjoxMDAwMC4wLCJkIjpmYWxzZSwidCI6dHJ1ZX0=",
+          "node": {
+            "title": "hidden broadcaster",
+            "viewersCount": 1,
+            "broadcaster": null,
+            "game": null,
+            "previewImageURL": null
+          }
+        }
+      ],
+      "pageInfo": { "hasNextPage": true }
+    }
+  },
+  "extensions": { "durationMilliseconds": 47, "requestID": "01M6KKXXEPJSVYEY9AJY1NDE5V" }
+}

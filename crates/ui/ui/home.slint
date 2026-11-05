@@ -1,0 +1,60 @@
+﻿import { Theme } from "theme.slint";
+import { RowData } from "types.slint";
+import { StreamCard } from "components.slint";
+
+// Rows of cards. The focused row slides to a fixed anchor and
+// the focused column scrolls horizontally, so focus never leaves the screen.
+// Row shapes: landscape streams, portrait categories and a one-card hero row.
+export component HomeContent inherits Rectangle {
+    in property <[RowData]> rows;
+    in property <int> sel-row;
+    in property <int> sel-col;
+    in property <bool> active;
+    in property <string> heading;
+    callback picked(int, int);
+    clip: true;
+
+    Text {
+        x: Theme.safe-x - 24px;
+        y: 36px;
+        text: root.heading;
+        color: Theme.text;
+        font-size: Theme.fs-display;
+        font-weight: 900;
+    }
+
+    Rectangle {
+        y: 120px - root.sel-row * Theme.row-h;
+        animate y { duration: Theme.t-med; easing: ease-out; }
+
+        for r[ri] in root.rows : Rectangle {
+            y: ri * Theme.row-h;
+            height: Theme.row-h;
+            opacity: ri == root.sel-row ? 1.0 : 0.6;
+            animate opacity { duration: Theme.t-med; }
+
+            Text {
+                x: Theme.safe-x - 24px;
+                text: r.title;
+                color: ri == root.sel-row ? Theme.accent-light : Theme.muted;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                y: 44px;
+                x: ri == root.sel-row ? -max(0, root.sel-col - 1) * Theme.slot-width(r.shape) : 0px;
+                animate x { duration: Theme.t-med; easing: ease-out; }
+
+                for item[ci] in r.items : StreamCard {
+                    x: Theme.safe-x - 24px + ci * Theme.slot-width(r.shape);
+                    item: item;
+                    shape: r.shape;
+                    focused: root.active && ri == root.sel-row && ci == root.sel-col && !item.loading;
+                    dimmed: ri != root.sel-row;
+                    clicked => { root.picked(ri, ci); }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,96 @@
+//! `RefreshingApi`: retries a request once after the token was refreshed.
+//!
+//! Helix answers 401 when the access token has expired. The wrapper asks its [`Refresher`] for a
+//! new token and repeats the request once. Refresh tokens are single use and a Home load sends
+//! three requests at once, so the wrapper passes the credentials *generation* it started with:
+//! the refresher renews only if nobody did already, and everybody else just retries.
+
+use std::future::Future;
+use std::sync::Arc;
+
+use crate::{
+    Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi, UserInfo,
+};
+
+/// Renews the credentials of the inner API. The app's session implements it.
+pub trait Refresher: Send + Sync + 'static {
+    /// Changes every time the credentials change (sign-in, refresh, sign-out).
+    fn generation(&self) -> u64;
+
+    /// Renews the credentials if they still are generation `seen`. Returns true if the request
+    /// is worth repeating (new credentials are in place), false if there is nothing to retry
+    /// with (no refresh token, refresh refused, network down).
+    fn refresh(&self, seen: u64) -> impl Future<Output = bool> + Send;
+}
+
+#[derive(Debug)]
+pub struct RefreshingApi<A, R> {
+    inner: A,
+    refresher: Arc<R>,
+}
+
+impl<A, R> RefreshingApi<A, R> {
+    pub fn new(inner: A, refresher: Arc<R>) -> Self {
+        Self { inner, refresher }
+    }
+}
+
+impl<A: TwitchApi, R: Refresher> RefreshingApi<A, R> {
+    /// Runs `op`, and once more if it failed with 401 and the credentials could be renewed.
+    async fn with_refresh<T, Fut>(&self, op: impl Fn() -> Fut) -> Result<T>
+    where
+        Fut: Future<Output = Result<T>>,
+    {
+        let seen = self.refresher.generation();
+        match op().await {
+            Err(Error::Unauthorized(why)) => {
+                if self.refresher.refresh(seen).await {
+                    tracing::debug!(%why, "token refreshed, repeating the request");
+                    op().await
+                } else {
+                    Err(Error::Unauthorized(why))
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+impl<A: TwitchApi, R: Refresher> TwitchApi for RefreshingApi<A, R> {
+    async fn top_streams(&self, page: PageRequest) -> Result<Page<StreamInfo>> {
+        self.with_refresh(|| self.inner.top_streams(page.clone()))
+            .await
+    }
+
+    async fn followed_streams(&self, user_id: &str, page: PageRequest) -> Result<Page<StreamInfo>> {
+        self.with_refresh(|| self.inner.followed_streams(user_id, page.clone()))
+            .await
+    }
+
+    async fn followed_channels(
+        &self,
+        user_id: &str,
+        page: PageRequest,
+    ) -> Result<Page<FollowedChannel>> {
+        self.with_refresh(|| self.inner.followed_channels(user_id, page.clone()))
+            .await
+    }
+
+    async fn top_categories(&self, page: PageRequest) -> Result<Page<Game>> {
+        self.with_refresh(|| self.inner.top_categories(page.clone()))
+            .await
+    }
+
+    async fn streams_by_category(
+        &self,
+        game_id: &str,
+        page: PageRequest,
+    ) -> Result<Page<StreamInfo>> {
+        self.with_refresh(|| self.inner.streams_by_category(game_id, page.clone()))
+            .await
+    }
+
+    async fn user(&self, login: Option<&str>) -> Result<Option<UserInfo>> {
+        self.with_refresh(|| self.inner.user(login)).await
+    }
+}

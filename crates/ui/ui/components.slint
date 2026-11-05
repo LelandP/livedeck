@@ -1,0 +1,251 @@
+import { Theme } from "theme.slint";
+import { StreamItem, ChatMsg, ChatPiece } from "types.slint";
+
+// Card that grows into its slot when focused and shrinks/dims otherwise.
+export component StreamCard inherits Rectangle {
+    in property <StreamItem> item;
+    in property <bool> focused;
+    in property <bool> dimmed;
+    // Row shape: 0 landscape, 1 portrait (box art), 2 hero.
+    in property <int> shape: 0;
+    callback clicked;
+
+    width: Theme.slot-width(root.shape);
+    height: Theme.slot-height(root.shape);
+    // Skeleton pulse, 0..1, driven by the animation clock (only ticks while a skeleton is shown).
+    property <float> pulse: 0.5 + 0.5 * Math.sin(mod(animation-tick() / Theme.t-pulse, 1) * 360deg);
+
+    // Mouse fallback: click opens the card. Hover does not move controller focus.
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    card := Rectangle {
+        width: root.focused ? root.width : root.width - 36px;
+        height: root.focused ? root.height : root.height - 36px;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: 6px;
+        clip: true;
+        opacity: (root.focused ? 1.0 : (root.dimmed ? 0.55 : 0.85)) * (root.item.offline ? 0.6 : 1.0);
+        background: @linear-gradient(160deg, root.item.tint, Theme.surface);
+
+        animate width, height { duration: Theme.t-fast; easing: ease-out; }
+        animate opacity { duration: Theme.t-fast; }
+
+        // The thumbnail fades in over the tint once it has loaded.
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.item.thumbnail;
+            image-fit: cover;
+            opacity: self.source.width > 0 ? 1.0 : 0.0;
+            animate opacity { duration: Theme.t-med; easing: ease-out; }
+        }
+
+        // Legibility scrim.
+        Rectangle {
+            visible: !root.item.loading && !root.item.retry;
+            y: parent.height * 0.45;
+            height: parent.height * 0.55;
+            background: @linear-gradient(180deg, #0e0e1000, #0e0e10e6);
+        }
+
+        VerticalLayout {
+            visible: !root.item.loading && !root.item.retry;
+            alignment: end;
+            padding: 16px;
+            spacing: 4px;
+
+            Text {
+                text: root.item.channel;
+                color: Theme.text;
+                font-size: root.shape == 2 ? Theme.fs-title : Theme.fs-body;
+                font-weight: 800;
+                overflow: elide;
+            }
+            Text {
+                visible: (root.focused || root.shape == 2) && root.item.title != "";
+                text: root.item.title;
+                color: Theme.text;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+            Text {
+                visible: root.item.offline;
+                text: "Offline";
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                visible: root.item.viewers != "";
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    y: 4px;
+                    border-radius: 5px;
+                    background: Theme.live;
+                }
+                Text {
+                    text: root.item.viewers + "  ·  " + root.item.category;
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // Skeleton: a pulsing placeholder while the data has not arrived.
+        Rectangle {
+            visible: root.item.loading;
+            background: Theme.surface-high;
+            opacity: 0.55 + 0.45 * root.pulse;
+        }
+
+        // End-of-row card when the next page failed to load.
+        Rectangle {
+            visible: root.item.retry;
+            background: Theme.surface;
+            VerticalLayout {
+                alignment: center;
+                padding: 16px;
+                spacing: 8px;
+                Text {
+                    text: "Could not load more";
+                    color: Theme.text;
+                    font-size: Theme.fs-body;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Press X to retry";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-small;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Focus ring: accent border drawn above everything else.
+        Rectangle {
+            border-radius: parent.border-radius;
+            border-width: root.focused ? 4px : 0px;
+            border-color: Theme.accent-light;
+            animate border-width { duration: Theme.t-fast; }
+        }
+    }
+}
+
+// Controller glyph + label for the bottom hints bar.
+// Also clickable, as the mouse fallback for the same action.
+export component Hint inherits TouchArea {
+    in property <string> glyph;
+    in property <string> label;
+    // Face buttons wear their controller colour. Anything else (the menu arrow) stays neutral.
+    property <color> button-color: root.glyph == "A" ? Theme.btn-a
+        : (root.glyph == "B" ? Theme.btn-b
+        : (root.glyph == "X" ? Theme.btn-x
+        : (root.glyph == "Y" ? Theme.btn-y : Theme.text)));
+
+    preferred-width: row.preferred-width;
+
+    row := HorizontalLayout {
+        spacing: 10px;
+
+        Rectangle {
+            width: 34px;
+            height: 34px;
+            border-radius: 17px;
+            border-width: 2px;
+            border-color: root.has-hover ? Theme.accent-light : root.button-color;
+            Text {
+                text: root.glyph;
+                color: root.button-color;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.has-hover ? Theme.text : Theme.muted;
+            font-size: Theme.fs-small;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A word of chat, or an emote once its image has arrived (until then the emote's name).
+component ChatWord inherits Rectangle {
+    in property <ChatPiece> piece;
+    in property <color> text-color;
+    in property <length> max-w;
+    property <bool> image-ready: root.piece.emote && root.piece.image.width > 0;
+
+    // An emote is as tall as a line of text and as wide as its picture is, so a wide one keeps
+    // its shape.
+    preferred-width: root.image-ready ? Theme.chat-emote * (root.piece.image.width / root.piece.image.height) : label.preferred-width;
+    // A constant, not the text's own height: that depends on the text's width, which comes from
+    // the flex layout asking for this height, a loop that Slint reports as a panic.
+    preferred-height: Theme.chat-line;
+    // A word longer than the line is cut instead of widening the line.
+    max-width: root.max-w;
+
+    label := Text {
+        visible: !root.image-ready;
+        width: parent.width;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.piece.text;
+        color: root.text-color;
+        font-size: Theme.fs-chat;
+        overflow: elide;
+    }
+    // Conditional on purpose. A static Image child feeds its layout info to this word, and a loaded
+    // picture's height depends on its width, which the line's flex layout derives from this word's
+    // layout info: Slint reports that loop as a panic.
+    if root.image-ready : Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.piece.image;
+        image-fit: contain;
+    }
+}
+
+// One chat line: badges, the name in the chatter's colour, then the words and emotes, wrapping at
+// the end of the line. A badge or emote takes room only once its image is there.
+export component ChatLine inherits FlexboxLayout {
+    in property <ChatMsg> msg;
+    in property <length> line-w;
+
+    flex-direction: row;
+    flex-wrap: wrap;
+    cross-axis-alignment: center;
+    spacing-horizontal: Theme.chat-gap;
+    spacing-vertical: 2px;
+
+    // A badge takes room only once its image is there (see ChatWord for why the Image is an `if`).
+    for badge in root.msg.badges : Rectangle {
+        width: badge.image.width > 0 ? Theme.chat-badge : 0px;
+        height: Theme.chat-badge;
+        if badge.image.width > 0 : Image {
+            width: parent.width;
+            height: parent.height;
+            source: badge.image;
+            image-fit: contain;
+        }
+    }
+    if root.msg.kind != 2 : Text {
+        text: root.msg.kind == 0 ? root.msg.user + ":" : root.msg.user;
+        color: root.msg.tint;
+        font-size: Theme.fs-chat;
+        font-weight: 800;
+    }
+    for piece in root.msg.pieces : ChatWord {
+        piece: piece;
+        max-w: root.line-w;
+        text-color: root.msg.kind == 1 ? root.msg.tint : (root.msg.kind == 2 ? Theme.muted : Theme.text);
+    }
+}

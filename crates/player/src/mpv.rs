@@ -1,0 +1,142 @@
+//! `MpvPlayer`: libmpv behind the [`Player`] trait.
+//!
+//! Threading follows the rules in mpv's `render.h`:
+//! - The Slint UI thread is the mpv *render thread*. It only calls `mpv_render_*` functions, and
+//!   only from inside the rendering notifier (see `output.rs`).
+//! - The control thread made here makes every other libmpv call, so the UI thread never waits on
+//!   the mpv core. [`MpvPlayer`]'s methods only queue a command for it.
+
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use libmpv2::events::Event;
+use libmpv2::{mpv_end_file_reason, Mpv};
+
+use crate::output::VideoOutput;
+use crate::{Player, PlayerEvent};
+
+/// How often the control thread looks for mpv events when no command arrives.
+const POLL: Duration = Duration::from_millis(50);
+
+enum Control {
+    Load(String),
+    Pause(bool),
+    Stop,
+}
+
+pub struct MpvPlayer {
+    tx: Mutex<Sender<Control>>,
+}
+
+impl MpvPlayer {
+    /// Starts mpv and its control thread. `on_event` runs on that thread. Fails if libmpv cannot
+    /// be loaded or initialised.
+    pub fn new(
+        on_event: impl Fn(PlayerEvent) + Send + 'static,
+    ) -> Result<(Self, VideoOutput), String> {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_option("vo", "libmpv")?;
+            // Keep the core alive between streams (and after one ends).
+            init.set_option("idle", "yes")?;
+            // Live streaming: small buffers, no waiting to refill the cache.
+            init.set_option("profile", "low-latency")?;
+            // Hardware decode where mpv considers it safe (VAAPI on the Deck, D3D11VA on Windows).
+            init.set_option("hwdec", "auto-safe")?;
+            // Without this, mpv_render_context_render() blocks until the frame's display time,
+            // which would stall the Slint UI thread.
+            init.set_option("video-timing-offset", 0.0)?;
+            init.set_option("ytdl", false)?;
+            if let Ok(path) = std::env::var("HTPC_MPV_LOG") {
+                init.set_option("log-file", path.as_str())?;
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("libmpv failed to start: {e}"))?;
+        let mpv = Arc::new(mpv);
+
+        let (tx, rx) = channel();
+        let core = Arc::clone(&mpv);
+        std::thread::Builder::new()
+            .name("mpv-control".into())
+            .spawn(move || control_loop(&core, &rx, &on_event))
+            .map_err(|e| format!("could not start the mpv thread: {e}"))?;
+
+        Ok((Self { tx: Mutex::new(tx) }, VideoOutput::new(mpv)))
+    }
+
+    fn send(&self, control: Control) {
+        let tx = self.tx.lock().expect("mpv sender lock");
+        // Fails only once the control thread is gone (mpv shut down), when nothing can play.
+        if tx.send(control).is_err() {
+            tracing::debug!("mpv control thread is gone");
+        }
+    }
+}
+
+impl Player for MpvPlayer {
+    fn load(&self, url: &str) {
+        self.send(Control::Load(url.to_owned()));
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.send(Control::Pause(paused));
+    }
+
+    fn stop(&self) {
+        self.send(Control::Stop);
+    }
+}
+
+fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEvent)) {
+    // True from `Load` until the first frame, so `Playing` is reported once per stream.
+    let mut starting = false;
+    loop {
+        match rx.recv_timeout(POLL) {
+            Ok(Control::Load(url)) => {
+                let _ = mpv.set_property("pause", false);
+                match mpv.command("loadfile", &[url.as_str(), "replace"]) {
+                    Ok(()) => starting = true,
+                    Err(e) => on_event(PlayerEvent::Failed(format!("loadfile failed: {e}"))),
+                }
+            }
+            Ok(Control::Pause(paused)) => {
+                if let Err(e) = mpv.set_property("pause", paused) {
+                    tracing::warn!(%e, "could not change the pause state");
+                }
+            }
+            Ok(Control::Stop) => {
+                starting = false;
+                if let Err(e) = mpv.command("stop", &[]) {
+                    tracing::warn!(%e, "could not stop mpv");
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            // The player was dropped: the app is quitting.
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+
+        while let Some(event) = mpv.wait_event(0.0) {
+            match event {
+                Ok(Event::PlaybackRestart) if starting => {
+                    starting = false;
+                    on_event(PlayerEvent::Playing);
+                }
+                Ok(Event::EndFile(reason)) if reason == mpv_end_file_reason::Eof => {
+                    starting = false;
+                    on_event(PlayerEvent::Ended);
+                }
+                // `Stop` and `Redirect` are our own doing (a new load or `stop`).
+                Ok(Event::EndFile(_)) => {}
+                Ok(Event::Shutdown) => return,
+                Ok(_) => {}
+                // An end-of-file with an error code arrives as an `Err`.
+                Err(e) => {
+                    starting = false;
+                    on_event(PlayerEvent::Failed(e.to_string()));
+                }
+            }
+        }
+    }
+    tracing::debug!("mpv control thread finished");
+}

@@ -1,0 +1,18 @@
+{
+  "data": {
+    "games": {
+      "edges": [
+        {
+          "cursor": "eyJzIjoxLCJkIjpmYWxzZSwidCI6dHJ1ZX0=",
+          "node": { "id": "509658", "name": "Just Chatting", "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg" }
+        },
+        {
+          "cursor": "eyJzIjoyLCJkIjpmYWxzZSwidCI6dHJ1ZX0=",
+          "node": { "id": "27471", "name": "Minecraft", "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/27471_IGDB-285x380.jpg" }
+        }
+      ],
+      "pageInfo": { "hasNextPage": false }
+    }
+  },
+  "extensions": { "durationMilliseconds": 25, "requestID": "01M6KKY6M5NF8SMF8VP1EQ373J" }
+}

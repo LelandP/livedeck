@@ -1,0 +1,22 @@
+[package]
+name = "htpc-ui"
+description = "Slint views, theme and the view-model that turns core AppState into Slint models."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+htpc-core.workspace = true
+qrcode.workspace = true
+slint.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+# Slint's own headless backend (same version as `slint`): lays out and renders the window in tests.
+i-slint-backend-testing = { version = "1.18.1", features = ["renderer-software"] }
+
+[build-dependencies]
+slint-build.workspace = true

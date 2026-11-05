@@ -1,0 +1,80 @@
+import { Theme } from "theme.slint";
+import { NavIcon } from "icons.slint";
+
+component NavEntry inherits TouchArea {
+    in property <string> label;
+    in property <int> kind;
+    in property <bool> current;
+    in property <bool> expanded;
+    // True when the controller cursor is on this entry.
+    in property <bool> focused;
+
+    height: 64px;
+
+    Rectangle {
+        x: 12px;
+        width: parent.width - 24px;
+        border-radius: 8px;
+        background: root.focused ? Theme.accent : (root.has-hover ? Theme.surface-high : transparent);
+        animate background { duration: Theme.t-fast; }
+    }
+    NavIcon {
+        x: 34px;
+        y: (parent.height - self.height) / 2;
+        kind: root.kind;
+        fill: root.focused || root.current ? Theme.text : Theme.muted;
+    }
+    Text {
+        x: 84px;
+        width: parent.width - 96px;
+        opacity: root.expanded ? 1.0 : 0.0;
+        animate opacity { duration: Theme.t-fast; }
+        text: root.label;
+        color: root.focused || root.current ? Theme.text : Theme.muted;
+        font-size: Theme.fs-body;
+        font-weight: root.current ? 800 : 500;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// Icons only when idle; icons + labels when expanded.
+export component Rail inherits Rectangle {
+    in property <[string]> items;
+    in property <int> selected;
+    in property <bool> expanded;
+    in property <string> user-name;
+    in property <int> current;
+    callback activated(int);
+
+    width: root.expanded ? Theme.rail-expanded : Theme.rail-collapsed;
+    background: Theme.surface;
+    clip: true;
+    animate width { duration: Theme.t-med; easing: ease-out; }
+
+    VerticalLayout {
+        padding-top: 40px;
+        padding-bottom: 24px;
+        spacing: 8px;
+
+        for name[i] in root.items : NavEntry {
+            label: name;
+            kind: i;
+            current: i == root.current;
+            expanded: root.expanded;
+            focused: root.expanded && i == root.selected;
+            clicked => { root.activated(i); }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        NavEntry {
+            label: root.user-name == "" ? "Sign in" : root.user-name;
+            kind: 4;
+            current: false;
+            expanded: root.expanded;
+            focused: root.expanded && root.selected == root.items.length;
+            clicked => { root.activated(root.items.length); }
+        }
+    }
+}

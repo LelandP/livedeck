@@ -1,0 +1,4 @@
+/target
+# Release packaging output and downloaded dependencies (packaging/windows, release.yml)
+/dist
+/deps

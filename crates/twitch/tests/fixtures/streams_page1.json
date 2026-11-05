@@ -1,0 +1,41 @@
+{
+  "data": [
+    {
+      "id": "40952121085",
+      "user_id": "101051819",
+      "user_login": "grandmaster_k",
+      "user_name": "Grandmaster_K",
+      "game_id": "516575",
+      "game_name": "VALORANT",
+      "type": "live",
+      "title": "Ranked climb to Radiant",
+      "tags": ["English"],
+      "viewer_count": 48100,
+      "started_at": "2026-11-04T10:00:00Z",
+      "language": "en",
+      "thumbnail_url": "https://static-cdn.jtvnw.net/previews-ttv/live_user_grandmaster_k-{width}x{height}.jpg",
+      "tag_ids": [],
+      "is_mature": false
+    },
+    {
+      "id": "40952121086",
+      "user_id": "101051820",
+      "user_login": "tidewatch",
+      "user_name": "tidewatch",
+      "game_id": "512953",
+      "game_name": "Elden Ring",
+      "type": "live",
+      "title": "World first attempts",
+      "tags": [],
+      "viewer_count": 31500,
+      "started_at": "2026-11-04T09:00:00Z",
+      "language": "en",
+      "thumbnail_url": "https://static-cdn.jtvnw.net/previews-ttv/live_user_tidewatch-{width}x{height}.jpg",
+      "tag_ids": [],
+      "is_mature": false
+    }
+  ],
+  "pagination": {
+    "cursor": "eyJiIjpudWxsLCJhIjp7Ik9mZnNldCI6Mn19"
+  }
+}

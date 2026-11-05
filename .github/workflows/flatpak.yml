@@ -1,0 +1,34 @@
+name: Flatpak
+
+# Builds the Linux package (which includes libmpv and Streamlink). Slow, because mpv, FFmpeg and
+# libplacebo are built from source, so pull requests only run it when packaging changes. The release
+# workflow calls it for tags.
+on:
+  pull_request:
+    paths:
+      - packaging/flatpak/**
+      - packaging/linux/**
+      - .github/workflows/flatpak.yml
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  flatpak:
+    name: flatpak bundle
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: livedeck.flatpak
+          manifest-path: packaging/flatpak/io.github.livedeck.LiveDeck.yml
+          cache-key: flatpak-${{ hashFiles('packaging/flatpak/**', 'Cargo.lock') }}
+          upload-artifact: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-flatpak
+          path: livedeck.flatpak
+          if-no-files-found: error

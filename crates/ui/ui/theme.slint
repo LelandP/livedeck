@@ -1,0 +1,74 @@
+// Design tokens. Every colour, size and duration used by the UI lives here.
+export global Theme {
+    // Colour: Twitch-style dark palette.
+    out property <color> bg: #0e0e10;
+    out property <color> surface: #18181b;
+    out property <color> surface-high: #26262c;
+    out property <color> text: #efeff1;
+    out property <color> muted: #adadb8;
+    out property <color> accent: #9146ff;
+    out property <color> accent-light: #bf94ff;
+    out property <color> live: #eb0400;
+    // Face-button colours of the controller glyphs in the hints bar (Steam Deck / Xbox layout).
+    out property <color> btn-a: #6cc04a;
+    out property <color> btn-b: #e8504a;
+    out property <color> btn-x: #4a8fe8;
+    out property <color> btn-y: #f0c030;
+
+    // Typeface (bundled in assets/fonts/, imported in main.slint). Only Regular and Bold exist, so
+    // every weight of 700 or more draws Bold.
+    out property <string> font: "Atkinson Hyperlegible";
+
+    // Layout (1280x800 baseline, ~5% TV safe margin).
+    out property <length> safe-x: 64px;
+    out property <length> rail-collapsed: 96px;
+    out property <length> rail-expanded: 300px;
+    out property <length> slot-w: 360px;
+    out property <length> slot-h: 240px;
+    out property <length> row-h: 330px;
+    out property <length> hints-h: 72px;
+    out property <length> chat-w: 380px;
+    // Chat lines: text size, inline image sizes (emote, badge) and the gap between words. The
+    // overlay layout is wider than the side panel because it has no frame around it.
+    out property <length> fs-chat: 18px;
+    // Every word and emote of a line is this tall, so a line's height never depends on its width.
+    out property <length> chat-line: 26px;
+    out property <length> chat-emote: 26px;
+    out property <length> chat-badge: 20px;
+    out property <length> chat-gap: 6px;
+    out property <length> chat-pad: 20px;
+    out property <length> chat-overlay-w: 460px;
+    // Portrait (box art) and hero slots. A row is `row-h` tall whatever its shape.
+    out property <length> slot-pw: 220px;
+    out property <length> slot-ph: 280px;
+    out property <length> hero-w: 640px;
+    out property <length> hero-h: 280px;
+    // Vertical pitch of a grid row (Browse and Category screens), by card shape.
+    out property <length> grid-row-landscape: 256px;
+    out property <length> grid-row-portrait: 312px;
+    // Space above the first grid row: heading plus breathing room.
+    out property <length> grid-top: 124px;
+
+    // Card slot width by row shape: 0 landscape, 1 portrait, 2 hero (see `RowData.shape`).
+    public pure function slot-width(shape: int) -> length {
+        return shape == 1 ? slot-pw : (shape == 2 ? hero-w : slot-w);
+    }
+    public pure function slot-height(shape: int) -> length {
+        return shape == 1 ? slot-ph : (shape == 2 ? hero-h : slot-h);
+    }
+    public pure function grid-row-height(shape: int) -> length {
+        return shape == 1 ? grid-row-portrait : grid-row-landscape;
+    }
+
+    // Type scale (sized for ~3 m viewing).
+    out property <length> fs-display: 44px;
+    out property <length> fs-title: 26px;
+    out property <length> fs-body: 20px;
+    out property <length> fs-small: 16px;
+
+    // Motion.
+    out property <duration> t-fast: 160ms;
+    out property <duration> t-med: 240ms;
+    // Period of the skeleton-card pulse (a loop, not a transition).
+    out property <duration> t-pulse: 1400ms;
+}

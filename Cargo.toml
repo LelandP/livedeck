@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twitch", "crates/storage", "crates/resolver", "crates/player", "crates/chat"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+# Shared dependency versions, verified on crates.io 2026-11-04.
+# Members opt in with `name.workspace = true` and may add features locally.
+# libmpv2 (7.0.0) is intentionally absent: it needs a system libmpv, so it is added per crate.
+[workspace.dependencies]
+# Internal crates. Package names carry an `htpc-` prefix because `core` would shadow Rust's `core`.
+htpc-core = { path = "crates/core", version = "0.1.0" }
+htpc-input = { path = "crates/input", version = "0.1.0" }
+htpc-ui = { path = "crates/ui", version = "0.1.0" }
+# Named after what it talks to; the binary package is `livedeck`.
+htpc-twitch-api = { path = "crates/twitch", version = "0.1.0" }
+htpc-storage = { path = "crates/storage", version = "0.1.0" }
+htpc-resolver = { path = "crates/resolver", version = "0.1.0" }
+htpc-player = { path = "crates/player", version = "0.1.0" }
+htpc-chat = { path = "crates/chat", version = "0.1.0" }
+
+# UI
+slint = "1.18.1"
+slint-build = "1.18.1"
+
+# Video (OpenGL bindings for the mpv render target; same version Slint's FemtoVG already uses)
+glow = "0.18.0"
+
+# Async, errors, logging
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Network and serialisation
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "query"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2"
+
+# Storage
+directories = "6.0.0"
+keyring = "4.2.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+
+# Chat, input, misc
+twitch-irc = { version = "6.1.3", default-features = false, features = ["transport-ws-rustls-webpki-roots"] }
+gilrs = "0.11.2"
+# Already in the tree through twitch-irc and reqwest. The chat crate drives the IRC transport with it.
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+qrcode = { version = "0.14.1", default-features = false }
+pico-args = "0.5.0"
+
+# Dev / test only
+wiremock = "0.6.5"
+insta = "1.49.0"
+tempfile = "3.27.0"

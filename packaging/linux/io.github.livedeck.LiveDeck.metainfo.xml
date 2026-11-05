@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.livedeck.LiveDeck</id>
+  <name>LiveDeck</name>
+  <summary>Couch-first, controller-only Twitch client (unofficial)</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>LiveDeck is an unofficial Twitch client made for a TV and a controller, such as SteamOS Game Mode on the Steam Deck. Browse live streams and categories, watch with read-only chat, and sign in with a code to see who you follow.</p>
+    <p>LiveDeck is not affiliated with Twitch or Valve. Streams are found with Streamlink through unofficial endpoints, which can break and may conflict with Twitch's terms of service.</p>
+  </description>
+  <launchable type="desktop-id">io.github.livedeck.LiveDeck.desktop</launchable>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
+</component>

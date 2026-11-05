@@ -1,0 +1,18 @@
+[package]
+name = "htpc-player"
+description = "Video playback behind the Player trait: libmpv rendering into a Slint GL texture (mpv feature), plus fakes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Off by default so the workspace builds on machines without a system libmpv.
+default = []
+mpv = ["dep:libmpv2", "dep:glow", "dep:slint"]
+
+[dependencies]
+tracing.workspace = true
+slint = { workspace = true, optional = true }
+glow = { workspace = true, optional = true }
+libmpv2 = { version = "7.0.0", optional = true }

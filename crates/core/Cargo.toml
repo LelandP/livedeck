@@ -1,0 +1,9 @@
+[package]
+name = "htpc-core"
+description = "Pure application core: domain types, AppState, Intent/Command/Event and the reducer. No UI, network or IO dependencies."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

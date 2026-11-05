@@ -1,0 +1,687 @@
+//! The store loop: `Msg -> reduce -> (state, Commands)`.
+//!
+//! One tokio task owns `AppState` and handles messages one at a time, so the reducer never runs
+//! concurrently. Each `Command` runs as its own tokio task and sends its `Event`s back into the
+//! same channel. After every reduce, the store pushes a view-model diff to the UI thread with
+//! `slint::invoke_from_event_loop` (via `Weak::upgrade_in_event_loop`), so the UI never blocks.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use htpc_core::{reduce, AppState, Command, Msg};
+use htpc_ui::{
+    apply_chat_image, apply_thumbnail, view_model, MainWindow, Thumbnail, Update, ViewModel,
+};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::Semaphore;
+
+use htpc_resolver::StreamResolver;
+
+use crate::chat::Chat;
+use crate::playback::Playback;
+use crate::provider::Provider;
+use crate::session::Session;
+
+/// Thumbnail downloads running at once. A page of 30 cards must not open 30 connections.
+const THUMBNAIL_CONCURRENCY: usize = 6;
+
+/// Anything that can show a view-model update. The Slint window in the app, a recorder in tests.
+/// Cloned into the tasks that deliver thumbnails.
+pub trait Sink: Clone + Send + 'static {
+    fn show(&self, update: Update);
+    /// Delivers a decoded thumbnail for the cards that show `url`.
+    fn thumbnail(&self, url: String, image: Thumbnail);
+    /// Delivers a decoded emote or badge for the chat lines that show `url`.
+    fn chat_image(&self, url: String, image: Thumbnail);
+}
+
+impl Sink for slint::Weak<MainWindow> {
+    fn show(&self, update: Update) {
+        // Fails only once the event loop has quit, when there is nothing left to update.
+        if let Err(err) = self.upgrade_in_event_loop(move |ui| update.apply(&ui)) {
+            tracing::debug!(%err, "UI gone, dropping update");
+        }
+    }
+
+    fn thumbnail(&self, url: String, image: Thumbnail) {
+        // Queued behind the row update that created the cards, so the cards exist by then.
+        if let Err(err) = self.upgrade_in_event_loop(move |ui| apply_thumbnail(&ui, &url, &image)) {
+            tracing::debug!(%err, "UI gone, dropping thumbnail");
+        }
+    }
+
+    fn chat_image(&self, url: String, image: Thumbnail) {
+        if let Err(err) = self.upgrade_in_event_loop(move |ui| apply_chat_image(&ui, &url, &image))
+        {
+            tracing::debug!(%err, "UI gone, dropping chat image");
+        }
+    }
+}
+
+/// Writes the settings to the config file. Blocking, so the store runs it off the async workers.
+pub type SaveSettings = Arc<dyn Fn(htpc_core::Settings) + Send + Sync>;
+
+pub struct Store<P, R, S> {
+    state: AppState,
+    /// `None` when there is nowhere to save (no config folder, tests, `--mock`).
+    save_settings: Option<SaveSettings>,
+    shown: Option<ViewModel>,
+    provider: Arc<P>,
+    playback: Arc<Playback<R>>,
+    /// Joins and leaves the chat of the channel on screen.
+    chat: Chat,
+    /// Chat images already requested for the channel on screen. Emotes repeat all the time, and
+    /// each is fetched and sent to the window once.
+    chat_images: HashSet<String>,
+    /// Runs the login and sign-out commands.
+    session: Arc<Session>,
+    sink: S,
+    tx: UnboundedSender<Msg>,
+    downloads: Arc<Semaphore>,
+}
+
+impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
+    /// `tx` must be the sender of the channel later passed to [`Store::run`]. Command results
+    /// are sent through it.
+    pub fn new(
+        state: AppState,
+        provider: P,
+        playback: Playback<R>,
+        chat: Chat,
+        session: Arc<Session>,
+        sink: S,
+        tx: UnboundedSender<Msg>,
+    ) -> Self {
+        Self {
+            state,
+            save_settings: None,
+            shown: None,
+            provider: Arc::new(provider),
+            playback: Arc::new(playback),
+            chat,
+            chat_images: HashSet::new(),
+            session,
+            sink,
+            tx,
+            downloads: Arc::new(Semaphore::new(THUMBNAIL_CONCURRENCY)),
+        }
+    }
+
+    /// Persists changed settings with `save`.
+    pub fn with_settings_saver(mut self, save: SaveSettings) -> Self {
+        self.save_settings = Some(save);
+        self
+    }
+
+    /// Shows the initial state, runs the startup commands, then handles messages. The store holds
+    /// a sender itself, so this runs until the tokio runtime shuts down.
+    pub async fn run(mut self, startup: Vec<Command>, mut rx: UnboundedReceiver<Msg>) {
+        self.publish();
+        self.spawn_all(startup);
+        while let Some(msg) = rx.recv().await {
+            self.handle(msg);
+        }
+        tracing::debug!("store loop finished");
+    }
+
+    fn handle(&mut self, msg: Msg) {
+        tracing::trace!(?msg, "reduce");
+        let (next, cmds) = reduce(&self.state, msg);
+        self.state = next;
+        self.publish();
+        self.spawn_all(cmds);
+    }
+
+    /// Sends a view-model to the UI if anything visible changed.
+    fn publish(&mut self) {
+        let next = view_model(&self.state);
+        let update = match &self.shown {
+            None => Some(Update::full(next.clone())),
+            Some(prev) => Update::diff(prev, next.clone()),
+        };
+        if let Some(update) = update {
+            self.shown = Some(next);
+            self.sink.show(update);
+        }
+    }
+
+    /// Downloads `urls` in order with at most [`THUMBNAIL_CONCURRENCY`] in flight (across all
+    /// commands). One task takes a download slot per URL before starting it, so within a command
+    /// the earlier URLs (the hero, the first row) always start first.
+    ///
+    /// `deliver` hands each decoded image to the window: card thumbnails and chat images take
+    /// the same road and differ only in which models they patch.
+    fn spawn_images(&self, urls: Vec<String>, deliver: fn(&S, String, Thumbnail)) {
+        let provider = Arc::clone(&self.provider);
+        let sink = self.sink.clone();
+        let downloads = Arc::clone(&self.downloads);
+        tokio::spawn(async move {
+            for url in urls {
+                let Ok(slot) = Arc::clone(&downloads).acquire_owned().await else {
+                    return;
+                };
+                let provider = Arc::clone(&provider);
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    if let Some(image) = provider.thumbnail(&url).await {
+                        deliver(&sink, url, image);
+                    }
+                    drop(slot);
+                });
+            }
+        });
+    }
+
+    fn spawn_all(&mut self, cmds: Vec<Command>) {
+        for cmd in cmds {
+            tracing::debug!(?cmd, "command");
+            if let Command::SaveSettings(settings) = cmd {
+                if let Some(save) = self.save_settings.clone() {
+                    // File IO: keep it off the async workers.
+                    tokio::task::spawn_blocking(move || save(settings));
+                }
+                continue;
+            }
+            if let Command::FetchThumbnails { urls } = cmd {
+                self.spawn_images(urls, S::thumbnail);
+                continue;
+            }
+            if let Command::FetchChatImages { urls } = cmd {
+                // Only the ones this channel has not asked for yet.
+                let fresh: Vec<String> = urls
+                    .into_iter()
+                    .filter(|u| self.chat_images.insert(u.clone()))
+                    .collect();
+                if !fresh.is_empty() {
+                    self.spawn_images(fresh, S::chat_image);
+                }
+                continue;
+            }
+            if Chat::handles(&cmd) {
+                // A new channel starts with a clean slate: its lines are new, and the window may
+                // have dropped the images of the last one.
+                self.chat_images.clear();
+                self.chat.execute(cmd);
+                continue;
+            }
+            if Session::handles(&cmd) {
+                // The session reports back through the `Notify` it was built with.
+                let session = Arc::clone(&self.session);
+                tokio::spawn(async move { session.execute(cmd).await });
+                continue;
+            }
+            if Playback::<R>::handles(&cmd) {
+                let playback = Arc::clone(&self.playback);
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    for event in playback.execute(cmd).await {
+                        if tx.send(event.into()).is_err() {
+                            break;
+                        }
+                    }
+                });
+                continue;
+            }
+            let provider = Arc::clone(&self.provider);
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                for event in provider.execute(cmd).await {
+                    // The store has stopped (shutdown), so the result is no longer needed.
+                    if tx.send(event.into()).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::{fake_api, fake_chat, MOCK_USER, MOCK_USER_CODE};
+    use crate::provider::ApiProvider;
+    use crate::session::{AppAuth, Apply, Notify, Viewer};
+    use htpc_chat::{ChatEvent, FakeChat};
+    use htpc_core::{init, ChatMessage, ChatSpan, ChatStatus, Event, Intent, RailEntry};
+    use htpc_player::FakePlayer;
+    use htpc_resolver::FakeResolver;
+    use htpc_twitch_api::{DeviceGrant, FakeApi, FakeAuth, Game};
+    use htpc_ui::{ScreenId, Shape};
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    /// Records every update the store would send to the window.
+    /// The updates shown, and the chat images delivered to the window.
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<Mutex<Vec<Update>>>, Arc<Mutex<Vec<String>>>);
+
+    impl Sink for Recorder {
+        fn show(&self, update: Update) {
+            self.0.lock().unwrap().push(update);
+        }
+
+        fn thumbnail(&self, _url: String, _image: Thumbnail) {}
+
+        fn chat_image(&self, url: String, _image: Thumbnail) {
+            self.1.lock().unwrap().push(url);
+        }
+    }
+
+    impl Recorder {
+        fn count(&self) -> usize {
+            self.0.lock().unwrap().len()
+        }
+
+        /// Waits until the latest view-model matches, so tests do not depend on task timing.
+        async fn wait_for(&self, what: &str, pred: impl Fn(&ViewModel) -> bool) -> ViewModel {
+            for _ in 0..400 {
+                if let Some(u) = self.0.lock().unwrap().last() {
+                    if pred(&u.vm) {
+                        return u.vm.clone();
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("timed out waiting for: {what}");
+        }
+    }
+
+    fn start_with(api: FakeApi) -> (UnboundedSender<Msg>, Recorder) {
+        let (tx, rx) = unbounded_channel();
+        let rec = Recorder::default();
+        let (state, startup) = init();
+        // The token's owner is looked up once, as with an environment token: Home has its
+        // Followed row from the start.
+        let provider = ApiProvider::new(api);
+        let playback = Playback::new(
+            FakeResolver::playing("https://example.test/live.m3u8"),
+            Arc::new(FakePlayer::new()),
+        );
+        let session = fast_session(&tx, Viewer::default());
+        let chat = Chat::new(Arc::new(fake_chat(false)), tx.clone());
+        let store = Store::new(
+            state,
+            provider,
+            playback,
+            chat,
+            session,
+            rec.clone(),
+            tx.clone(),
+        );
+        tokio::spawn(store.run(startup, rx));
+        (tx, rec)
+    }
+
+    /// A session whose fake Twitch approves a code on the second poll, 5 ms apart.
+    fn fast_session(tx: &UnboundedSender<Msg>, viewer: Viewer) -> Arc<Session> {
+        let grant = DeviceGrant {
+            device_code: "dev".into(),
+            user_code: MOCK_USER_CODE.into(),
+            verification_uri: "https://www.twitch.tv/activate?device-code=KQRT7ZMP".into(),
+            expires_in: Duration::from_secs(60),
+            interval: Duration::from_millis(5),
+        };
+        let auth = FakeAuth::approving().with_grant(grant);
+        let tx = tx.clone();
+        let notify: Notify = Arc::new(move |event| {
+            let _ = tx.send(event.into());
+        });
+        let apply: Apply = Arc::new(|_| {});
+        Session::new(AppAuth::Fake(auth), "client", None, apply, notify, viewer)
+    }
+
+    /// Like `start`, but the provider follows the session's account, as in the real app: Home
+    /// is signed out until the login finishes.
+    fn start_signed_out() -> (UnboundedSender<Msg>, Recorder) {
+        let (tx, rx) = unbounded_channel();
+        let rec = Recorder::default();
+        let (state, startup) = init();
+        let viewer = Viewer::default();
+        let provider = ApiProvider::new(fake_api()).with_account(Arc::clone(&viewer));
+        let playback = Playback::new(
+            FakeResolver::playing("https://example.test/live.m3u8"),
+            Arc::new(FakePlayer::new()),
+        );
+        let session = fast_session(&tx, viewer);
+        let chat = Chat::new(Arc::new(fake_chat(false)), tx.clone());
+        let store = Store::new(
+            state,
+            provider,
+            playback,
+            chat,
+            session,
+            rec.clone(),
+            tx.clone(),
+        );
+        tokio::spawn(store.run(startup, rx));
+        (tx, rec)
+    }
+
+    fn start() -> (UnboundedSender<Msg>, Recorder) {
+        start_with(fake_api())
+    }
+
+    async fn press(tx: &UnboundedSender<Msg>, intent: Intent, times: usize) {
+        for _ in 0..times {
+            tx.send(intent.into()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_shows_skeletons_then_loads_mock_rows() {
+        let (_tx, rec) = start();
+        // The first update is published before any command runs: skeleton cards, no error.
+        while rec.count() == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let first = rec.0.lock().unwrap()[0].clone();
+        assert!(
+            first.rows_changed && first.chat_changed,
+            "first update is full"
+        );
+        assert!(first
+            .vm
+            .rows
+            .iter()
+            .all(|r| r.cards.iter().all(|c| c.loading)));
+
+        let vm = rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        let titles: Vec<_> = vm.rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, ["", "Followed · Live", "Top Live", "Categories"]);
+        assert_eq!(vm.rows[0].shape, Shape::Hero);
+        assert_eq!(vm.rows[0].cards[0].channel, "grandmaster_k");
+        assert_eq!(vm.rows[1].cards[0].viewers, "4.2K");
+        assert_eq!(vm.rows[3].shape, Shape::Portrait);
+        assert_eq!(vm.screen, ScreenId::Home);
+        assert!(vm.rows.iter().all(|r| r.cards.iter().all(|c| !c.loading)));
+    }
+
+    #[tokio::test]
+    async fn play_receives_chat_and_back_clears_it() {
+        let (tx, rec) = start();
+        rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        tx.send(Intent::Select.into()).unwrap();
+        let vm = rec.wait_for("chat", |vm| vm.chat.len() == 6).await;
+        assert_eq!(vm.screen, ScreenId::Player);
+        assert_eq!(vm.now_playing.channel, "grandmaster_k");
+
+        tx.send(Intent::Back.into()).unwrap();
+        let vm = rec.wait_for("home", |vm| vm.screen == ScreenId::Home).await;
+        assert!(vm.chat.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sign_in_polls_until_approved_then_shows_the_followed_row() {
+        let (tx, rec) = start_signed_out();
+        // Signed out: no Followed row (hero, Top Live, Categories).
+        let vm = rec.wait_for("rows", |vm| vm.rows.len() == 3).await;
+        assert!(vm.user_name.is_empty());
+        tx.send(Intent::RailPick(RailEntry::Account).into())
+            .unwrap();
+        let vm = rec
+            .wait_for("code", |vm| vm.device_code == MOCK_USER_CODE)
+            .await;
+        assert_eq!(vm.screen, ScreenId::SignIn);
+        assert_eq!(vm.verification_url, "www.twitch.tv/activate");
+        assert!(vm.qr_width > 0, "the QR code is drawn for the link");
+
+        // Nobody presses anything: the fake approves on its second poll.
+        let vm = rec
+            .wait_for("signed in", |vm| vm.user_name == MOCK_USER)
+            .await;
+        assert_eq!(vm.screen, ScreenId::Home);
+        // Home reloads for the account and gains the Followed row.
+        let vm = rec.wait_for("followed", |vm| vm.rows.len() == 4).await;
+        assert_eq!(vm.rows[1].title, "Followed \u{b7} Live");
+    }
+
+    #[tokio::test]
+    async fn following_lists_live_channels_then_dims_the_offline_ones() {
+        let (tx, rec) = start_signed_out();
+        rec.wait_for("rows", |vm| vm.rows.len() == 3).await;
+        // Following while signed out asks to sign in, and continues there once approved.
+        tx.send(Intent::RailPick(RailEntry::Following).into())
+            .unwrap();
+        let vm = rec
+            .wait_for("sign-in", |vm| vm.screen == ScreenId::SignIn)
+            .await;
+        assert!(vm.device_code.is_empty() || vm.device_code == MOCK_USER_CODE);
+
+        let vm = rec
+            .wait_for("following", |vm| {
+                vm.heading == "Following" && vm.rows.len() == 2 && !vm.rows[0].cards[0].loading
+            })
+            .await;
+        assert_eq!(vm.screen, ScreenId::Home);
+        assert_eq!(vm.rail_current, 1);
+        let live: Vec<_> = vm.rows[0]
+            .cards
+            .iter()
+            .map(|c| c.channel.as_str())
+            .collect();
+        assert_eq!(
+            live,
+            [
+                "nightowl_dev",
+                "pixelpilgrim",
+                "marrow",
+                "lofi_lena",
+                "quietcoast"
+            ]
+        );
+        assert_eq!(vm.rows[1].title, "Offline");
+        let off: Vec<_> = vm.rows[1]
+            .cards
+            .iter()
+            .map(|c| c.channel.as_str())
+            .collect();
+        assert_eq!(off, ["sleepy_fox", "driftwood", "kettle_kai"]);
+        assert!(vm.rows[1].cards.iter().all(|c| c.offline));
+    }
+
+    #[tokio::test]
+    async fn sign_out_from_settings_returns_to_the_anonymous_home() {
+        let (tx, rec) = start_signed_out();
+        rec.wait_for("rows", |vm| vm.rows.len() == 3).await;
+        tx.send(Intent::RailPick(RailEntry::Account).into())
+            .unwrap();
+        rec.wait_for("signed in", |vm| vm.user_name == MOCK_USER)
+            .await;
+        rec.wait_for("followed", |vm| vm.rows.len() == 4).await;
+
+        // The account entry is Settings now, and A there signs out.
+        tx.send(Intent::RailPick(RailEntry::Account).into())
+            .unwrap();
+        let vm = rec
+            .wait_for("settings", |vm| vm.screen == ScreenId::Settings)
+            .await;
+        assert_eq!(vm.select_label, "Sign out");
+        tx.send(Intent::Select.into()).unwrap();
+        let vm = rec
+            .wait_for("signed out", |vm| vm.user_name.is_empty())
+            .await;
+        assert_eq!(vm.select_label, "Sign in");
+        tx.send(Intent::RailPick(RailEntry::Home).into()).unwrap();
+        let vm = rec
+            .wait_for("anonymous home", |vm| {
+                vm.screen == ScreenId::Home && vm.rows.len() == 3
+            })
+            .await;
+        assert!(vm.rows.iter().all(|r| r.title != "Followed \u{b7} Live"));
+    }
+
+    #[tokio::test]
+    async fn unchanged_state_sends_no_update() {
+        let (tx, rec) = start();
+        rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        let before = rec.count();
+        // Up on the first row and Back on Home change nothing.
+        tx.send(Intent::Up.into()).unwrap();
+        tx.send(Intent::Back.into()).unwrap();
+        // A visible change afterwards proves both no-ops were processed in order.
+        tx.send(Intent::Down.into()).unwrap();
+        rec.wait_for("moved", |vm| vm.sel_row == 1).await;
+        assert_eq!(rec.count(), before + 1);
+    }
+
+    /// 70 games, so the directory has a second and a third page (30 per page).
+    fn many_games() -> FakeApi {
+        let mut api = fake_api();
+        api.games = (0..70)
+            .map(|i| Game {
+                id: format!("g{i}"),
+                name: format!("Game {i}"),
+                box_art_url: String::new(),
+            })
+            .collect();
+        api
+    }
+
+    #[tokio::test]
+    async fn browse_loads_on_first_open_and_pages_on_scroll() {
+        let (tx, rec) = start_with(many_games());
+        rec.wait_for("home", |vm| vm.rows.len() == 4).await;
+        tx.send(Intent::RailPick(RailEntry::Browse).into()).unwrap();
+
+        // Skeleton grid first, then 30 categories in rows of 5.
+        let vm = rec
+            .wait_for("browse", |vm| vm.screen == ScreenId::Grid)
+            .await;
+        assert_eq!(vm.heading, "Categories");
+        let vm = rec.wait_for("grid", |vm| vm.rows.len() == 6).await;
+        assert!(vm
+            .rows
+            .iter()
+            .all(|r| r.shape == Shape::Portrait && r.cards.len() == 5));
+        assert_eq!(vm.rail_current, 2);
+
+        // Scrolling to the last rows loads the next page without blocking input.
+        press(&tx, Intent::Down, 5).await;
+        let vm = rec.wait_for("page 2", |vm| vm.rows.len() >= 12).await;
+        assert_eq!(vm.rows[6].cards[0].channel, "Game 30");
+        assert!(!vm.can_retry);
+    }
+
+    #[tokio::test]
+    async fn category_opens_with_its_streams_and_back_returns() {
+        let (tx, rec) = start_with(fake_api());
+        rec.wait_for("home", |vm| vm.rows.len() == 4).await;
+        // Down to the Categories row, then A on "Just Chatting".
+        press(&tx, Intent::Down, 3).await;
+        tx.send(Intent::Select.into()).unwrap();
+
+        let vm = rec
+            .wait_for("category", |vm| vm.screen == ScreenId::Grid)
+            .await;
+        assert_eq!(vm.heading, "Just Chatting");
+        assert!(vm.can_back);
+        // The mock's only Just Chatting stream is `sable`. Skeletons give way to its card.
+        let vm = rec
+            .wait_for("streams", |vm| {
+                vm.rows.iter().any(|r| r.cards.iter().any(|c| !c.loading))
+            })
+            .await;
+        assert_eq!(vm.rows.len(), 1);
+        assert_eq!(vm.rows[0].cards[0].channel, "sable");
+        assert_eq!(vm.rows[0].shape, Shape::Landscape);
+        assert!(vm.feed_error.is_empty() && !vm.feed_empty);
+
+        tx.send(Intent::Back.into()).unwrap();
+        let vm = rec.wait_for("home", |vm| vm.screen == ScreenId::Home).await;
+        assert_eq!(vm.sel_row, 3, "focus is kept on the category card");
+    }
+
+    /// Hands out a 1x1 image for every URL and remembers which ones were asked for.
+    struct CountingProvider {
+        inner: ApiProvider<FakeApi>,
+        asked: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Provider for CountingProvider {
+        async fn execute(&self, cmd: Command) -> Vec<Event> {
+            self.inner.execute(cmd).await
+        }
+
+        async fn thumbnail(&self, url: &str) -> Option<Thumbnail> {
+            self.asked.lock().unwrap().push(url.to_owned());
+            Some(Thumbnail {
+                width: 1,
+                height: 1,
+                rgba: vec![255; 4],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_images_are_fetched_once_per_channel() {
+        let line = |id: &str| ChatMessage {
+            id: id.into(),
+            badges: vec!["https://cdn/mod.png".into()],
+            spans: vec![ChatSpan::Emote {
+                name: "Kappa".into(),
+                url: "https://cdn/kappa.png".into(),
+            }],
+            ..ChatMessage::plain("a", "")
+        };
+        // The same badge and emote in two batches.
+        let script = vec![
+            ChatEvent::Status(ChatStatus::Live),
+            ChatEvent::Messages(vec![line("1")]),
+            ChatEvent::Messages(vec![line("2")]),
+        ];
+        let (tx, rx) = unbounded_channel();
+        let rec = Recorder::default();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let provider = CountingProvider {
+            inner: ApiProvider::new(fake_api()),
+            asked: Arc::clone(&asked),
+        };
+        let playback = Playback::new(
+            FakeResolver::playing("https://example.test/live.m3u8"),
+            Arc::new(FakePlayer::new()),
+        );
+        let chat = Chat::new(Arc::new(FakeChat::new(script)), tx.clone());
+        let session = fast_session(&tx, Viewer::default());
+        let (state, startup) = init();
+        let store = Store::new(
+            state,
+            provider,
+            playback,
+            chat,
+            session,
+            rec.clone(),
+            tx.clone(),
+        );
+        tokio::spawn(store.run(startup, rx));
+
+        let chat_urls = |rec: &Recorder| rec.1.lock().unwrap().len();
+        let wait_for_images = |rec: Recorder, n: usize| async move {
+            for _ in 0..400 {
+                if chat_urls(&rec) >= n {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("timed out waiting for {n} chat images");
+        };
+
+        rec.wait_for("home", |vm| vm.rows.len() == 4).await;
+        tx.send(Intent::Select.into()).unwrap();
+        rec.wait_for("two lines", |vm| vm.chat.len() == 2).await;
+        wait_for_images(rec.clone(), 2).await;
+        // Give a wrongly repeated fetch time to show up.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(chat_urls(&rec), 2, "badge and emote, once each");
+        let delivered = rec.1.lock().unwrap().clone();
+        assert!(delivered.contains(&"https://cdn/mod.png".to_owned()));
+        assert!(delivered.contains(&"https://cdn/kappa.png".to_owned()));
+
+        // Watching again starts over: the window may have dropped the images meanwhile.
+        tx.send(Intent::Back.into()).unwrap();
+        rec.wait_for("home", |vm| vm.screen == ScreenId::Home).await;
+        tx.send(Intent::Select.into()).unwrap();
+        wait_for_images(rec.clone(), 4).await;
+    }
+}

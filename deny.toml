@@ -1,0 +1,56 @@
+# cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/). Run: `cargo deny check`.
+# The workspace is GPL-3.0-only, so every dependency licence must be GPL-3.0-compatible.
+
+[graph]
+all-features = false
+
+[advisories]
+# RustSec advisories. Unmaintained crates are reported for direct and transitive deps.
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+# Allowances that the default graph does not use (e.g. LGPL for libmpv2 behind the
+# optional `mpv` feature) should not produce warnings.
+unused-allowed-license = "allow"
+allow = [
+    "GPL-3.0-only",
+    "LGPL-2.1",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    # ksni (Slint system-tray dependency on Linux). Public-domain dedication, GPL-compatible.
+    "Unlicense",
+    # webpki-root-certs (Mozilla CA bundle, via reqwest's rustls-platform-verifier).
+    # Permissive data licence, GPL-compatible.
+    "CDLA-Permissive-2.0",
+    # option-ext (via directories -> dirs-sys). File-level copyleft, GPL-3.0-compatible
+    # (MPL-2.0 section 3.3, listed as compatible by the FSF).
+    "MPL-2.0",
+]
+
+[licenses.private]
+# Workspace crates are `publish = false` or path-only and carry the workspace licence.
+ignore = true
+
+[bans]
+# Duplicate versions are common in the Slint/winit tree. Report them without failing CI.
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between workspace crates have no version, which is fine.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

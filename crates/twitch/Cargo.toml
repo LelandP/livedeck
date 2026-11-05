@@ -1,0 +1,20 @@
+[package]
+name = "htpc-twitch-api"
+description = "Twitch Helix client behind the mockable TwitchApi trait, with pagination, rate limiting and a FakeApi."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock.workspace = true
+serde_json.workspace = true

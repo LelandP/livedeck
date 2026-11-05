@@ -1,0 +1,22 @@
+[package]
+name = "htpc-chat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Read-only Twitch chat: anonymous IRC over WebSocket, message mapping, emotes and badges"
+
+[dependencies]
+htpc-core.workspace = true
+htpc-twitch-api.workspace = true
+twitch-irc.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+wiremock.workspace = true

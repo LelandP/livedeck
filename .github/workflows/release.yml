@@ -1,0 +1,110 @@
+name: Release
+
+# Push a tag like v0.1.0 (it must match `version` in the root Cargo.toml) and this builds the
+# packages and publishes them on the repository's Releases page. "Run workflow" builds the same
+# packages as downloadable artifacts of the run without publishing anything.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows portable zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Name and version
+        id: ver
+        shell: pwsh
+        run: |
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $name = $env:GITHUB_REF_NAME
+            if ($name -ne "v$cargo") { throw "Tag $name does not match Cargo.toml version $cargo. Bump the version first." }
+          } else {
+            $name = "v$cargo-dev$env:GITHUB_RUN_NUMBER"
+          }
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Download libmpv and Streamlink
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force deps\mpv, deps\streamlink | Out-Null
+          # Prebuilt libmpv (x86-64, not the "v3" CPU-specific one). The package has only the DLL and a MinGW
+          # import library, so mpv.lib for MSVC is generated from the DLL.
+          gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*' --dir deps\mpv
+          Push-Location deps\mpv; tar -xf (Get-ChildItem mpv-dev-x86_64-2*.7z).Name; Pop-Location
+          ./packaging/windows/make-import-lib.ps1 -Dir deps\mpv
+          # Portable Streamlink with its own Python.
+          gh release download --repo streamlink/windows-builds --pattern 'streamlink-*-x86_64.zip' --dir deps\streamlink
+          Expand-Archive (Get-ChildItem deps\streamlink\*.zip).FullName deps\streamlink\x
+          $sl = Get-ChildItem deps\streamlink\x -Directory | Select-Object -First 1
+          "STREAMLINK_DIR=$($sl.FullName)" >> $env:GITHUB_ENV
+          "MPV_LIB_DIR=$((Resolve-Path deps\mpv).Path)" >> $env:GITHUB_ENV
+
+      - name: Build
+        run: cargo build --release --locked -p livedeck --features mpv
+
+      - name: Package
+        shell: pwsh
+        run: |
+          ./packaging/windows/package.ps1 `
+            -Exe target\release\livedeck.exe `
+            -MpvDll deps\mpv\libmpv-2.dll `
+            -StreamlinkDir $env:STREAMLINK_DIR `
+            -Version "${{ steps.ver.outputs.name }}" `
+            -OutDir dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # Linux. Experimental until it has built once (see the manifest header).
+  flatpak:
+    uses: ./.github/workflows/flatpak.yml
+
+  publish:
+    name: Publish release
+    needs: [windows, flatpak]
+    # A broken Linux build must not hold back the Windows release.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && needs.windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Rename the Flatpak bundle
+        run: |
+          if [ -f dist/livedeck.flatpak ]; then
+            mv dist/livedeck.flatpak "dist/LiveDeck-${GITHUB_REF_NAME}-linux-x86_64.flatpak"
+          fi
+          ls -l dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          # v0.1.0-rc1 and the like are marked as pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Windows may show a SmartScreen warning because the program is not code-signed.
+
+            **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. This build is new and untested on a Deck.
+
+            LiveDeck is an unofficial Twitch client and finds streams through unofficial endpoints, which can break and may conflict with Twitch's terms of service. See the README.

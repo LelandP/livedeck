@@ -1,0 +1,1649 @@
+//! `AppState` -> view-model -> Slint properties.
+//!
+//! The view-model is plain Rust data (`Send`, no Slint types), so the store can build it on any
+//! thread and tests can check it without a window. [`Update::apply`] converts it to Slint models
+//! on the UI thread. Row models are updated in place (cards are changed, added or removed one by
+//! one) so appending a page or a thumbnail arriving never recreates the cards, which would skip
+//! their focus animations.
+
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+
+use htpc_core::{
+    grid_cols, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus, Feed, FeedId,
+    LoginProblem, Paging, Playback, Rgb, Row, RowKind, Screen, SettingsRow, Stream, Tile,
+};
+use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+
+use crate::{ChatMsg, ChatPiece, MainWindow, RowData, StreamItem};
+
+/// Name colour for chatters who have not picked one. Matches the scaffold's mock colour.
+pub const DEFAULT_CHAT_NAME: Rgb = Rgb::new(214, 255, 58);
+
+/// Chat lines handed to the window. The newest ones: older lines are off screen anyway, and every
+/// line is a row of elements the window has to lay out.
+pub const CHAT_LINES_SHOWN: usize = 40;
+
+/// Names darker than this (relative brightness, 0 to 1) are lightened. Twitch lets people pick
+/// near-black colours that its own site corrects for dark themes.
+const MIN_NAME_BRIGHTNESS: f32 = 0.45;
+
+/// Decoded chat images (emotes, badges) kept for re-use. They are small, about 16 KB.
+const CHAT_IMAGE_MEMORY_CAP: usize = 600;
+
+/// Skeleton cards shown at the end of a Home row while its next page loads.
+const SKELETON_TAIL: usize = 2;
+/// Skeleton cards per row while a feed loads for the first time.
+const SKELETON_HOME_COLS: usize = 5;
+
+/// Decoded thumbnails kept for re-use when rows are rebuilt (about 0.4 MB each).
+const IMAGE_MEMORY_CAP: usize = 160;
+
+/// The screen ids `main.slint` switches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenId {
+    #[default]
+    Home = 0,
+    Player = 1,
+    SignIn = 2,
+    /// Browse and Category: rows of cards that scroll vertically.
+    Grid = 3,
+    /// Settings: account, chat layout, quality, about.
+    Settings = 4,
+}
+
+/// What the Player screen shows. The values are what `main.slint` switches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlaybackId {
+    /// Resolving or buffering: a skeleton.
+    #[default]
+    Loading = 0,
+    Playing = 1,
+    /// The channel is not live (the end screen).
+    Offline = 2,
+    Failed = 3,
+}
+
+/// The card shape of a row. The values are what `RowData.shape` carries in `types.slint`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Shape {
+    #[default]
+    Landscape = 0,
+    Portrait = 1,
+    Hero = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CardVm {
+    pub channel: String,
+    pub title: String,
+    pub category: String,
+    /// Formatted, e.g. "4.2K". Empty for category cards, which hides the live line.
+    pub viewers: String,
+    pub tint: Rgb,
+    /// Cache key of the thumbnail. Empty if the card has none.
+    pub thumb_url: String,
+    /// A pulsing placeholder for data that has not arrived yet.
+    pub loading: bool,
+    /// The card at the end of a row whose next page failed.
+    pub retry: bool,
+    /// A followed channel that is not live: drawn dimmed, with an "Offline" label.
+    pub offline: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RowVm {
+    pub title: String,
+    pub shape: Shape,
+    pub cards: Vec<CardVm>,
+}
+
+/// How a chat line is drawn. The values are what `ChatMsg.kind` carries in `types.slint`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChatLineKind {
+    /// `name: words`
+    #[default]
+    Message = 0,
+    /// `/me`: the whole line in the chatter's colour.
+    Action = 1,
+    /// From Twitch itself: muted, no name.
+    Notice = 2,
+}
+
+/// A word of a chat line, or an emote.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PieceVm {
+    /// The word, or the emote's name (shown until its image has arrived).
+    pub text: String,
+    /// Cache key of the image. Empty for plain words.
+    pub url: String,
+    pub emote: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChatLineVm {
+    pub user: String,
+    pub tint: Rgb,
+    pub kind: ChatLineKind,
+    /// Badge image URLs, in display order.
+    pub badges: Vec<String>,
+    pub pieces: Vec<PieceVm>,
+}
+
+/// Everything `MainWindow` displays.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ViewModel {
+    pub screen: ScreenId,
+    pub sel_row: i32,
+    pub sel_col: i32,
+    pub rail_index: i32,
+    pub rail_focused: bool,
+    /// Rail entry highlighted as the current destination.
+    pub rail_current: i32,
+    pub chat_open: bool,
+    /// Chat is drawn over the video instead of in a side panel.
+    pub chat_overlay: bool,
+    /// The chat connection, when it is not simply working: "Connecting…", "Reconnecting…", or
+    /// that no message has come yet. Empty otherwise.
+    pub chat_status: String,
+    pub user_name: String,
+    pub device_code: String,
+    /// The address to type, without the scheme and the code in the query.
+    pub verification_url: String,
+    /// What the sign-in screen says under the code: waiting, or why the login ended.
+    pub login_status: String,
+    /// The login ended without signing in (A asks for a new code).
+    pub login_failed: bool,
+    /// The QR code of the verification URL, row by row, `true` = dark module. Empty without one.
+    pub qr: Vec<bool>,
+    /// Modules per side of `qr`.
+    pub qr_width: i32,
+    /// The screen title above the rows.
+    pub heading: String,
+    /// The last load error, or empty.
+    pub feed_error: String,
+    /// The feed loaded fine and has nothing to show.
+    pub feed_empty: bool,
+    /// What to say about an empty feed.
+    pub empty_text: String,
+    /// What A does on the focused card: "Watch" or "Open".
+    pub select_label: String,
+    /// Something failed and X would try again.
+    pub can_retry: bool,
+    /// B has somewhere to go on this feed screen (only the Category screen).
+    pub can_back: bool,
+    /// Focused row of the Settings screen (`SettingsRow` order: account, chat layout, quality).
+    pub settings_focus: i32,
+    pub chat_layout_label: String,
+    pub quality_label: String,
+    pub playback: PlaybackId,
+    /// Why playback failed, or empty.
+    pub playback_error: String,
+    pub paused: bool,
+    /// Changes whenever the HUD should come back (the window hides it again after a timeout).
+    pub hud_pulse: i32,
+    pub rows: Vec<RowVm>,
+    pub chat: Vec<ChatLineVm>,
+    pub now_playing: CardVm,
+}
+
+/// Compact viewer count: `860`, `4.2K`, `48.1K`, `1.3M`. Rounds to the nearest tenth.
+pub fn format_viewers(viewers: u64) -> String {
+    if viewers < 1_000 {
+        return viewers.to_string();
+    }
+    let tenths_k = (viewers + 50) / 100;
+    if tenths_k < 10_000 {
+        return format!("{}.{}K", tenths_k / 10, tenths_k % 10);
+    }
+    let tenths_m = (viewers + 50_000) / 100_000;
+    format!("{}.{}M", tenths_m / 10, tenths_m % 10)
+}
+
+fn row_title(kind: RowKind, grid: bool) -> &'static str {
+    match kind {
+        // Grid screens have a heading instead of row titles, and the hero speaks for itself.
+        _ if grid => "",
+        RowKind::Featured | RowKind::CategoryStreams => "",
+        RowKind::FollowedLive => "Followed · Live",
+        RowKind::FollowedOffline => "Offline",
+        RowKind::TopLive => "Top Live",
+        RowKind::Categories => "Categories",
+    }
+}
+
+fn shape_of(kind: RowKind) -> Shape {
+    match kind {
+        RowKind::Featured => Shape::Hero,
+        RowKind::Categories => Shape::Portrait,
+        RowKind::FollowedLive
+        | RowKind::FollowedOffline
+        | RowKind::TopLive
+        | RowKind::CategoryStreams => Shape::Landscape,
+    }
+}
+
+fn stream_card(s: &Stream) -> CardVm {
+    CardVm {
+        channel: s.channel.clone(),
+        title: s.title.clone(),
+        category: s.category.clone(),
+        viewers: format_viewers(s.viewers),
+        tint: s.tint,
+        thumb_url: s.thumbnail.clone().unwrap_or_default(),
+        ..CardVm::default()
+    }
+}
+
+fn tile_card(tile: &Tile) -> CardVm {
+    match tile {
+        Tile::Stream(s) => stream_card(s),
+        Tile::Category(c) => CardVm {
+            channel: c.name.clone(),
+            tint: c.tint,
+            thumb_url: c.thumbnail.clone().unwrap_or_default(),
+            ..CardVm::default()
+        },
+        Tile::Channel(c) => CardVm {
+            channel: c.name.clone(),
+            tint: c.tint,
+            offline: true,
+            ..CardVm::default()
+        },
+    }
+}
+
+fn skeleton() -> CardVm {
+    CardVm {
+        loading: true,
+        ..CardVm::default()
+    }
+}
+
+fn retry_card() -> CardVm {
+    CardVm {
+        retry: true,
+        ..CardVm::default()
+    }
+}
+
+/// Placeholder rows shown while a feed's first load is in flight.
+fn skeleton_rows(id: &FeedId) -> Vec<RowVm> {
+    let row = |shape, n| RowVm {
+        title: String::new(),
+        shape,
+        cards: vec![skeleton(); n],
+    };
+    match id {
+        FeedId::Home => vec![
+            row(Shape::Hero, 1),
+            row(Shape::Landscape, SKELETON_HOME_COLS),
+        ],
+        FeedId::Following => vec![row(Shape::Landscape, SKELETON_HOME_COLS)],
+        FeedId::Browse => vec![
+            row(Shape::Portrait, grid_cols(RowKind::Categories)),
+            row(Shape::Portrait, grid_cols(RowKind::Categories)),
+        ],
+        FeedId::Category(_) => vec![
+            row(Shape::Landscape, grid_cols(RowKind::CategoryStreams)),
+            row(Shape::Landscape, grid_cols(RowKind::CategoryStreams)),
+        ],
+    }
+}
+
+/// Adds `extra` cards after the last row of a grid, filling it up to `cols` before starting a
+/// new row.
+fn push_grid_tail(rows: &mut Vec<RowVm>, cols: usize, extra: Vec<CardVm>) {
+    for card in extra {
+        match rows.last_mut() {
+            Some(last) if last.cards.len() < cols => last.cards.push(card),
+            Some(last) => {
+                let next = RowVm {
+                    title: String::new(),
+                    shape: last.shape,
+                    cards: vec![card],
+                };
+                rows.push(next);
+            }
+            None => {}
+        }
+    }
+}
+
+/// The rows to draw for a feed: its tiles, skeleton cards for what is still loading and a retry
+/// card where a page failed.
+fn feed_rows(id: &FeedId, feed: &Feed) -> Vec<RowVm> {
+    if feed.rows.is_empty() {
+        return if feed.loading {
+            skeleton_rows(id)
+        } else {
+            Vec::new()
+        };
+    }
+    let grid = id.is_grid();
+    let mut rows: Vec<RowVm> = feed
+        .rows
+        .iter()
+        .map(|r: &Row| RowVm {
+            title: row_title(r.kind, grid).to_owned(),
+            shape: shape_of(r.kind),
+            cards: r.tiles.iter().map(tile_card).collect(),
+        })
+        .collect();
+    if grid {
+        if let Some(last) = feed.rows.last() {
+            let cols = grid_cols(last.kind);
+            let len = last.tiles.len();
+            match last.paging {
+                Paging::Loading(_) => {
+                    // Complete the last row, then one more row of skeletons.
+                    let fill = (cols - len % cols) % cols;
+                    push_grid_tail(&mut rows, cols, vec![skeleton(); fill + cols]);
+                }
+                Paging::Failed(_) => push_grid_tail(&mut rows, cols, vec![retry_card()]),
+                Paging::End | Paging::More(_) => {}
+            }
+        }
+    } else {
+        for (vm, row) in rows.iter_mut().zip(&feed.rows) {
+            match row.paging {
+                Paging::Loading(_) => vm.cards.extend(vec![skeleton(); SKELETON_TAIL]),
+                Paging::Failed(_) => vm.cards.push(retry_card()),
+                Paging::End | Paging::More(_) => {}
+            }
+        }
+    }
+    rows
+}
+
+/// Lightens a colour that would be hard to read on the dark background, keeping its hue.
+pub fn readable_name_colour(c: Rgb) -> Rgb {
+    let brightness =
+        (0.2126 * f32::from(c.r) + 0.7152 * f32::from(c.g) + 0.0722 * f32::from(c.b)) / 255.0;
+    if brightness >= MIN_NAME_BRIGHTNESS {
+        return c;
+    }
+    // Mix in white until the brightness reaches the floor.
+    let t = (MIN_NAME_BRIGHTNESS - brightness) / (1.0 - brightness);
+    let lift = |v: u8| {
+        (f32::from(v) + (255.0 - f32::from(v)) * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Rgb::new(lift(c.r), lift(c.g), lift(c.b))
+}
+
+fn chat_line(m: &ChatMessage) -> ChatLineVm {
+    let mut pieces = Vec::new();
+    for span in &m.spans {
+        match span {
+            ChatSpan::Text(text) => pieces.extend(text.split_whitespace().map(|word| PieceVm {
+                text: word.to_owned(),
+                ..PieceVm::default()
+            })),
+            ChatSpan::Emote { name, url } => pieces.push(PieceVm {
+                text: name.clone(),
+                url: url.clone(),
+                emote: true,
+            }),
+        }
+    }
+    ChatLineVm {
+        user: m.user.clone(),
+        tint: readable_name_colour(m.color.unwrap_or(DEFAULT_CHAT_NAME)),
+        kind: match m.kind {
+            ChatKind::Message => ChatLineKind::Message,
+            ChatKind::Action => ChatLineKind::Action,
+            ChatKind::Notice => ChatLineKind::Notice,
+        },
+        badges: m.badges.clone(),
+        pieces,
+    }
+}
+
+/// What the chat header says about the connection. Empty when everything is fine.
+fn chat_status_text(state: &AppState) -> &'static str {
+    match state.chat_status {
+        ChatStatus::Connecting => "Connecting…",
+        ChatStatus::Reconnecting => "Reconnecting…",
+        ChatStatus::Live if state.chat.is_empty() => "No messages yet",
+        ChatStatus::Live | ChatStatus::Idle => "",
+    }
+}
+
+/// Rail index of a root screen. `None` for overlays (Player, Login).
+fn rail_slot(screen: Screen) -> Option<i32> {
+    match screen {
+        Screen::Home => Some(0),
+        Screen::Following => Some(1),
+        // The category screen belongs to the Browse entry.
+        Screen::Browse | Screen::Category => Some(2),
+        Screen::Settings => Some(3),
+        Screen::Player | Screen::Login => None,
+    }
+}
+
+fn to_i32(v: usize) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+fn heading(state: &AppState, id: &FeedId) -> String {
+    match id {
+        FeedId::Home => "Live now".to_owned(),
+        FeedId::Following => "Following".to_owned(),
+        FeedId::Browse => "Categories".to_owned(),
+        FeedId::Category(_) => state
+            .category
+            .as_ref()
+            .map(|c| c.name.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// What an empty feed says. Following is empty when nobody the user follows is live and the
+/// account follows no one.
+fn empty_text(id: &FeedId) -> &'static str {
+    match id {
+        FeedId::Following => "You are not following anyone yet",
+        _ => "Nothing is live here right now",
+    }
+}
+
+/// The verification address as it is read out: no scheme, no query (the code is typed in
+/// separately, and the QR code carries the full link).
+fn display_url(uri: &str) -> String {
+    let rest = uri.split_once("://").map_or(uri, |(_, r)| r);
+    rest.split(['?', '#']).next().unwrap_or(rest).to_owned()
+}
+
+/// The QR code of `text` as dark/light modules, row by row, and its width. Empty if the text
+/// does not fit a QR code (it never does not, for a verification link).
+fn qr_modules(text: &str) -> (Vec<bool>, i32) {
+    match qrcode::QrCode::new(text.as_bytes()) {
+        Ok(code) => {
+            let width = code.width();
+            let dark = code
+                .to_colors()
+                .into_iter()
+                .map(|c| c == qrcode::Color::Dark)
+                .collect();
+            (dark, to_i32(width))
+        }
+        Err(err) => {
+            tracing::warn!(%err, "could not build the QR code");
+            (Vec::new(), 0)
+        }
+    }
+}
+
+/// The line under the code on the sign-in screen.
+fn login_status(state: &AppState) -> String {
+    match &state.login_problem {
+        None if state.login.is_some() => "Waiting for approval...".to_owned(),
+        None => "Getting a code from Twitch...".to_owned(),
+        Some(LoginProblem::Expired) => "That code expired.".to_owned(),
+        Some(LoginProblem::Denied) => "Sign-in was declined on your phone.".to_owned(),
+        Some(LoginProblem::Failed(message)) => format!("Could not sign in: {message}"),
+    }
+}
+
+pub fn view_model(state: &AppState) -> ViewModel {
+    let screen = match state.screen {
+        Screen::Player => ScreenId::Player,
+        Screen::Login => ScreenId::SignIn,
+        Screen::Browse | Screen::Category => ScreenId::Grid,
+        Screen::Settings => ScreenId::Settings,
+        // Following draws like Home: horizontal rows.
+        Screen::Home | Screen::Following => ScreenId::Home,
+    };
+    // Overlays highlight the root screen underneath them.
+    let rail_current = rail_slot(state.screen)
+        .or_else(|| state.back_stack.iter().rev().find_map(|s| rail_slot(*s)))
+        .unwrap_or(0);
+    let (device_code, verification_url, qr, qr_width) = match &state.login {
+        Some(code) => {
+            let (qr, width) = qr_modules(&code.verification_uri);
+            (
+                code.user_code.clone(),
+                display_url(&code.verification_uri),
+                qr,
+                width,
+            )
+        }
+        None => (String::new(), String::new(), Vec::new(), 0),
+    };
+    let login_status = login_status(state);
+
+    // The feed drawn is the current screen's, or the one under an overlay.
+    let id = state.visible_feed_id();
+    let feed = state.feed(&id);
+    let (rows, focus, error, loading) = match feed {
+        Some(f) => (feed_rows(&id, f), f.focus, f.error.clone(), f.loading),
+        None => (Vec::new(), Default::default(), None, false),
+    };
+    let failed_page =
+        feed.is_some_and(|f| f.rows.iter().any(|r| matches!(r.paging, Paging::Failed(_))));
+    let selects_category = feed
+        .and_then(Feed::focused_tile)
+        .is_some_and(|t| matches!(t, Tile::Category(_)));
+    let on_player = state.screen == Screen::Player;
+    let (playback, playback_error) = match &state.playback {
+        Playback::Idle | Playback::Loading => (PlaybackId::Loading, String::new()),
+        Playback::Playing => (PlaybackId::Playing, String::new()),
+        Playback::Offline => (PlaybackId::Offline, String::new()),
+        Playback::Failed(message) => (PlaybackId::Failed, message.clone()),
+    };
+    // On the Player screen A and X act on the stream, not on the cards underneath. On Settings,
+    // A is the account action.
+    let (select_label, can_retry) = if state.screen == Screen::Settings {
+        let label = match state.settings_focus {
+            SettingsRow::Account if state.is_signed_in() => "Sign out",
+            SettingsRow::Account => "Sign in",
+            SettingsRow::ChatLayout | SettingsRow::Quality => "Change",
+        };
+        (label, false)
+    } else if on_player {
+        match playback {
+            PlaybackId::Loading => ("", false),
+            PlaybackId::Playing if state.paused => ("Resume", false),
+            PlaybackId::Playing => ("Pause", false),
+            PlaybackId::Offline | PlaybackId::Failed => ("Retry", true),
+        }
+    } else {
+        (
+            if selects_category { "Open" } else { "Watch" },
+            error.is_some() || failed_page,
+        )
+    };
+
+    ViewModel {
+        screen,
+        sel_row: to_i32(focus.row),
+        sel_col: to_i32(focus.col),
+        rail_index: to_i32(state.rail.index.index()),
+        rail_focused: state.rail.focused,
+        rail_current,
+        chat_open: state.chat_open,
+        chat_overlay: state.settings.chat_layout == ChatLayout::Overlay,
+        chat_status: chat_status_text(state).to_owned(),
+        user_name: state
+            .user
+            .as_ref()
+            .map(|u| u.login.clone())
+            .unwrap_or_default(),
+        device_code,
+        verification_url,
+        login_status,
+        login_failed: state.login_problem.is_some(),
+        qr,
+        qr_width,
+        heading: heading(state, &id),
+        feed_empty: rows.is_empty() && error.is_none() && !loading,
+        empty_text: empty_text(&id).to_owned(),
+        can_retry,
+        feed_error: error.unwrap_or_default(),
+        select_label: select_label.to_owned(),
+        can_back: state.screen == Screen::Category,
+        settings_focus: to_i32(state.settings_focus.index()),
+        chat_layout_label: state.settings.chat_layout.label().to_owned(),
+        quality_label: state.settings.quality.label().to_owned(),
+        playback,
+        playback_error,
+        paused: state.paused,
+        hud_pulse: state.hud_pulse as i32,
+        rows,
+        chat: state
+            .chat
+            .iter()
+            .skip(state.chat.len().saturating_sub(CHAT_LINES_SHOWN))
+            .map(chat_line)
+            .collect(),
+        now_playing: state
+            .now_playing
+            .as_ref()
+            .map(stream_card)
+            .unwrap_or_default(),
+    }
+}
+
+/// A decoded thumbnail on its way to the window: plain RGBA8 pixels, so it is `Send`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Thumbnail {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl std::fmt::Debug for Thumbnail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Thumbnail({}x{})", self.width, self.height)
+    }
+}
+
+/// Decoded images by URL. Slint images are not `Send`, so this lives on the UI thread.
+#[derive(Default)]
+struct ImageMemory {
+    images: HashMap<String, Image>,
+    /// Insertion order, oldest first.
+    order: VecDeque<String>,
+}
+
+impl ImageMemory {
+    fn get(&self, url: &str) -> Option<Image> {
+        self.images.get(url).cloned()
+    }
+
+    fn insert(&mut self, url: &str, image: Image) {
+        if self.images.insert(url.to_owned(), image).is_none() {
+            self.order.push_back(url.to_owned());
+        }
+    }
+
+    /// Drops the oldest images that `in_use` does not need until at most `cap` are left. A
+    /// dropped image only matters if its card is rebuilt later, which then shows its tint.
+    fn trim(&mut self, cap: usize, in_use: impl Fn(&str) -> bool) {
+        let mut keep = VecDeque::new();
+        while self.images.len() > cap {
+            let Some(url) = self.order.pop_front() else {
+                break;
+            };
+            if in_use(&url) {
+                keep.push_back(url);
+            } else {
+                self.images.remove(&url);
+            }
+        }
+        // Skipped (in-use) entries stay the oldest ones.
+        keep.append(&mut self.order);
+        self.order = keep;
+    }
+}
+
+thread_local! {
+    static IMAGES: RefCell<ImageMemory> = RefCell::new(ImageMemory::default());
+}
+
+/// A view-model plus which list models changed since the previous one.
+///
+/// Built on the store thread (it is `Send`) and applied on the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Update {
+    pub vm: ViewModel,
+    pub rows_changed: bool,
+    pub chat_changed: bool,
+    /// The QR code changed, so its image is rebuilt.
+    pub qr_changed: bool,
+}
+
+impl Update {
+    /// The first update replaces everything.
+    pub fn full(vm: ViewModel) -> Self {
+        Self {
+            vm,
+            rows_changed: true,
+            chat_changed: true,
+            qr_changed: true,
+        }
+    }
+
+    /// Returns `None` if nothing visible changed.
+    pub fn diff(prev: &ViewModel, next: ViewModel) -> Option<Self> {
+        if *prev == next {
+            return None;
+        }
+        Some(Self {
+            rows_changed: prev.rows != next.rows,
+            chat_changed: prev.chat != next.chat,
+            qr_changed: prev.qr != next.qr,
+            vm: next,
+        })
+    }
+
+    /// Pushes the update into the window. Must run on the UI thread.
+    pub fn apply(self, ui: &MainWindow) {
+        let vm = self.vm;
+        IMAGES.with_borrow(|images| {
+            if self.rows_changed {
+                sync_rows(ui, &vm.rows, images);
+            }
+            ui.set_now_playing(to_stream_item(&vm.now_playing, images));
+        });
+        if self.chat_changed {
+            sync_chat(ui, &vm.chat);
+        }
+        ui.set_screen(vm.screen as i32);
+        ui.set_sel_row(vm.sel_row);
+        ui.set_sel_col(vm.sel_col);
+        ui.set_rail_index(vm.rail_index);
+        ui.set_rail_focused(vm.rail_focused);
+        ui.set_rail_current(vm.rail_current);
+        ui.set_chat_open(vm.chat_open);
+        ui.set_chat_overlay(vm.chat_overlay);
+        ui.set_chat_status(vm.chat_status.into());
+        ui.set_user_name(vm.user_name.into());
+        ui.set_device_code(vm.device_code.into());
+        ui.set_verification_url(vm.verification_url.into());
+        ui.set_login_status(vm.login_status.into());
+        ui.set_login_failed(vm.login_failed);
+        if self.qr_changed {
+            ui.set_qr(qr_image(&vm.qr, vm.qr_width));
+        }
+        ui.set_heading(vm.heading.into());
+        ui.set_feed_error(vm.feed_error.into());
+        ui.set_feed_empty(vm.feed_empty);
+        ui.set_empty_text(vm.empty_text.into());
+        ui.set_select_label(vm.select_label.into());
+        ui.set_can_retry(vm.can_retry);
+        ui.set_can_back(vm.can_back);
+        ui.set_settings_focus(vm.settings_focus);
+        ui.set_chat_layout_label(vm.chat_layout_label.into());
+        ui.set_quality_label(vm.quality_label.into());
+        ui.set_playback(vm.playback as i32);
+        ui.set_playback_error(vm.playback_error.into());
+        ui.set_paused(vm.paused);
+        ui.set_hud_pulse(vm.hud_pulse);
+    }
+}
+
+/// Hands a decoded thumbnail to the window: remembers it and patches every card that shows
+/// `url`. Must run on the UI thread.
+pub fn apply_thumbnail(ui: &MainWindow, url: &str, thumb: &Thumbnail) {
+    let (w, h) = (thumb.width, thumb.height);
+    if w == 0 || h == 0 || thumb.rgba.len() != w as usize * h as usize * 4 {
+        tracing::debug!(url, w, h, "ignoring a malformed thumbnail");
+        return;
+    }
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+    buffer.make_mut_bytes().copy_from_slice(&thumb.rgba);
+    let image = Image::from_rgba8(buffer);
+
+    let rows = ui.get_rows();
+    IMAGES.with_borrow_mut(|images| {
+        images.insert(url, image.clone());
+        if images.images.len() > IMAGE_MEMORY_CAP {
+            images.trim(IMAGE_MEMORY_CAP, |u| on_screen(&rows, u));
+        }
+    });
+    for row in rows.iter() {
+        let Some(model) = vec_model(&row.items) else {
+            continue;
+        };
+        for (i, card) in row.items.iter().enumerate() {
+            if card.thumb_url.as_str() == url {
+                model.set_row_data(
+                    i,
+                    StreamItem {
+                        thumbnail: image.clone(),
+                        ..card
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn on_screen(rows: &ModelRc<RowData>, url: &str) -> bool {
+    rows.iter()
+        .any(|row| row.items.iter().any(|c| c.thumb_url.as_str() == url))
+}
+
+/// The `VecModel` behind a `ModelRc`, if that is what it is. Models made here are.
+fn vec_model<T: Clone + 'static>(model: &ModelRc<T>) -> Option<&VecModel<T>> {
+    model.as_any().downcast_ref::<VecModel<T>>()
+}
+
+fn to_color(c: Rgb) -> Color {
+    Color::from_rgb_u8(c.r, c.g, c.b)
+}
+
+fn to_stream_item(c: &CardVm, images: &ImageMemory) -> StreamItem {
+    StreamItem {
+        channel: c.channel.as_str().into(),
+        title: c.title.as_str().into(),
+        category: c.category.as_str().into(),
+        viewers: c.viewers.as_str().into(),
+        tint: to_color(c.tint),
+        // A card rebuilt after its image was already fetched shows it straight away.
+        thumbnail: images.get(&c.thumb_url).unwrap_or_default(),
+        thumb_url: c.thumb_url.as_str().into(),
+        loading: c.loading,
+        retry: c.retry,
+        offline: c.offline,
+    }
+}
+
+/// True if the card in the window already shows `new` (the image aside, which only ever
+/// arrives later through [`apply_thumbnail`]).
+fn same_card(old: &StreamItem, new: &CardVm) -> bool {
+    old.channel.as_str() == new.channel
+        && old.title.as_str() == new.title
+        && old.category.as_str() == new.category
+        && old.viewers.as_str() == new.viewers
+        && old.thumb_url.as_str() == new.thumb_url
+        && old.tint == to_color(new.tint)
+        && old.loading == new.loading
+        && old.retry == new.retry
+        && old.offline == new.offline
+}
+
+/// Quiet zone around a QR code, in modules (the specification asks for four).
+const QR_QUIET_ZONE: usize = 4;
+
+/// The QR modules as a one-pixel-per-module image with its quiet zone. The window draws it with
+/// nearest-neighbour scaling, so the modules stay sharp at any size.
+fn qr_image(dark: &[bool], width: i32) -> Image {
+    let side = usize::try_from(width).unwrap_or(0);
+    if side == 0 || dark.len() != side * side {
+        return Image::default();
+    }
+    let full = side + 2 * QR_QUIET_ZONE;
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(full as u32, full as u32);
+    let pixels = buffer.make_mut_slice();
+    for p in pixels.iter_mut() {
+        *p = Rgba8Pixel::new(255, 255, 255, 255);
+    }
+    for (i, is_dark) in dark.iter().enumerate() {
+        if *is_dark {
+            let (x, y) = (i % side + QR_QUIET_ZONE, i / side + QR_QUIET_ZONE);
+            pixels[y * full + x] = Rgba8Pixel::new(0, 0, 0, 255);
+        }
+    }
+    Image::from_rgba8(buffer)
+}
+
+fn to_row_data(r: &RowVm, images: &ImageMemory) -> RowData {
+    let items: Vec<StreamItem> = r.cards.iter().map(|c| to_stream_item(c, images)).collect();
+    RowData {
+        title: r.title.as_str().into(),
+        items: ModelRc::new(VecModel::from(items)),
+        shape: r.shape as i32,
+    }
+}
+
+fn to_piece(text: &str, url: &str, emote: bool, images: &ImageMemory) -> ChatPiece {
+    ChatPiece {
+        text: text.into(),
+        // A line built after its images were fetched shows them straight away.
+        image: images.get(url).unwrap_or_default(),
+        url: url.into(),
+        emote,
+    }
+}
+
+fn to_chat_msg(m: &ChatLineVm, images: &ImageMemory) -> ChatMsg {
+    let badges: Vec<ChatPiece> = m
+        .badges
+        .iter()
+        .map(|url| to_piece("", url, false, images))
+        .collect();
+    let pieces: Vec<ChatPiece> = m
+        .pieces
+        .iter()
+        .map(|p| to_piece(&p.text, &p.url, p.emote, images))
+        .collect();
+    ChatMsg {
+        user: m.user.as_str().into(),
+        tint: to_color(m.tint),
+        kind: m.kind as i32,
+        badges: ModelRc::new(VecModel::from(badges)),
+        pieces: ModelRc::new(VecModel::from(pieces)),
+    }
+}
+
+/// How to turn the lines `shown` into `want` by dropping some at the front and adding some at
+/// the back, which is all a growing chat does: returns how many to drop and how many of `want`
+/// are then already there. If the lines changed any other way (a ban removed some from the
+/// middle), everything is dropped and rebuilt.
+pub(crate) fn slide_plan<T: PartialEq>(shown: &[T], want: &[T]) -> (usize, usize) {
+    for drop in 0..=shown.len() {
+        let kept = &shown[drop..];
+        if kept.len() <= want.len() && want[..kept.len()] == *kept {
+            return (drop, kept.len());
+        }
+    }
+    (shown.len(), 0)
+}
+
+/// What the window shows of the chat, kept to work out the next change.
+#[derive(Default)]
+struct ChatShown {
+    lines: Vec<ChatLineVm>,
+    images: ImageMemory,
+}
+
+thread_local! {
+    static CHAT: RefCell<ChatShown> = RefCell::new(ChatShown::default());
+}
+
+/// Brings the window's chat lines in line with `want`. New lines are pushed and old ones removed
+/// one by one, so a busy chat does not rebuild the lines that stay (and their images).
+fn sync_chat(ui: &MainWindow, want: &[ChatLineVm]) {
+    CHAT.with_borrow_mut(|chat| {
+        let current = ui.get_chat();
+        let model = vec_model(&current).filter(|m| m.row_count() == chat.lines.len());
+        let Some(model) = model else {
+            let all: Vec<ChatMsg> = want.iter().map(|l| to_chat_msg(l, &chat.images)).collect();
+            ui.set_chat(ModelRc::new(VecModel::from(all)));
+            chat.lines = want.to_vec();
+            return;
+        };
+        let (drop, keep) = slide_plan(&chat.lines, want);
+        for _ in 0..drop {
+            model.remove(0);
+        }
+        for line in &want[keep..] {
+            model.push(to_chat_msg(line, &chat.images));
+        }
+        chat.lines = want.to_vec();
+    });
+}
+
+/// Hands a decoded chat image (emote or badge) to the window: remembers it and patches every
+/// piece that shows `url`. Must run on the UI thread.
+pub fn apply_chat_image(ui: &MainWindow, url: &str, thumb: &Thumbnail) {
+    let (w, h) = (thumb.width, thumb.height);
+    if w == 0 || h == 0 || thumb.rgba.len() != w as usize * h as usize * 4 {
+        tracing::debug!(url, w, h, "ignoring a malformed chat image");
+        return;
+    }
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+    buffer.make_mut_bytes().copy_from_slice(&thumb.rgba);
+    let image = Image::from_rgba8(buffer);
+
+    let lines = ui.get_chat();
+    CHAT.with_borrow_mut(|chat| {
+        chat.images.insert(url, image.clone());
+        chat.images.trim(CHAT_IMAGE_MEMORY_CAP, |u| {
+            chat.lines
+                .iter()
+                .any(|l| l.badges.iter().any(|b| b == u) || l.pieces.iter().any(|p| p.url == u))
+        });
+    });
+    let patch = |pieces: &ModelRc<ChatPiece>| {
+        let Some(model) = vec_model(pieces) else {
+            return;
+        };
+        for (i, piece) in pieces.iter().enumerate() {
+            if piece.url.as_str() == url {
+                model.set_row_data(
+                    i,
+                    ChatPiece {
+                        image: image.clone(),
+                        ..piece
+                    },
+                );
+            }
+        }
+    };
+    for line in lines.iter() {
+        patch(&line.badges);
+        patch(&line.pieces);
+    }
+}
+
+/// Makes `model` hold exactly `want`, touching only the entries that differ: appended cards are
+/// pushed, dropped ones removed, changed ones replaced. Untouched cards keep their state, so
+/// loading a page or an image never restarts their animations.
+fn sync_cards(model: &VecModel<StreamItem>, want: &[CardVm], images: &ImageMemory) {
+    for (i, card) in want.iter().enumerate() {
+        match model.row_data(i) {
+            Some(old) if same_card(&old, card) => {}
+            Some(_) => model.set_row_data(i, to_stream_item(card, images)),
+            None => model.push(to_stream_item(card, images)),
+        }
+    }
+    while model.row_count() > want.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+/// Brings the window's `rows` model in line with `want`, in place where it can.
+fn sync_rows(ui: &MainWindow, want: &[RowVm], images: &ImageMemory) {
+    let current = ui.get_rows();
+    let Some(model) = vec_model(&current) else {
+        let rows: Vec<RowData> = want.iter().map(|r| to_row_data(r, images)).collect();
+        ui.set_rows(ModelRc::new(VecModel::from(rows)));
+        return;
+    };
+    for (i, row) in want.iter().enumerate() {
+        match model.row_data(i) {
+            Some(old)
+                if old.title.as_str() == row.title
+                    && old.shape == row.shape as i32
+                    && vec_model(&old.items).is_some() =>
+            {
+                if let Some(cards) = vec_model(&old.items) {
+                    sync_cards(cards, &row.cards, images);
+                }
+            }
+            Some(_) => model.set_row_data(i, to_row_data(row, images)),
+            None => model.push(to_row_data(row, images)),
+        }
+    }
+    while model.row_count() > want.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use htpc_core::{
+        grid_rows, reduce, Category, Channel, DeviceCode, Event, Intent, PageOutcome, RailEntry,
+        User,
+    };
+
+    fn stream(channel: &str, viewers: u64, thumb: Option<&str>) -> Tile {
+        Tile::Stream(Stream {
+            channel: channel.into(),
+            title: format!("{channel} title"),
+            category: "VALORANT".into(),
+            viewers,
+            tint: Rgb::from_hex(0x7a2e2e),
+            thumbnail: thumb.map(Into::into),
+        })
+    }
+
+    fn category(id: &str, name: &str) -> Tile {
+        Tile::Category(Category {
+            id: id.into(),
+            name: name.into(),
+            tint: Rgb::from_hex(0x6b5a2d),
+            thumbnail: Some(format!("https://cdn/{id}.jpg")),
+        })
+    }
+
+    fn streams(n: usize) -> Vec<Tile> {
+        (0..n).map(|i| stream(&format!("s{i}"), 1, None)).collect()
+    }
+
+    fn home_rows() -> Vec<Row> {
+        vec![
+            Row::new(
+                RowKind::Featured,
+                vec![stream(
+                    "grandmaster_k",
+                    48_123,
+                    Some("https://cdn/hero.jpg"),
+                )],
+            ),
+            Row::new(RowKind::TopLive, vec![stream("tidewatch", 900, None)]),
+            Row::new(RowKind::Categories, vec![category("26936", "Music")]),
+        ]
+    }
+
+    fn with_rows(rows: Vec<Row>) -> AppState {
+        let (s, _) = htpc_core::init();
+        let feed = FeedId::Home;
+        reduce(&s, Event::FeedLoaded { feed, rows }).0
+    }
+
+    fn loaded() -> AppState {
+        with_rows(home_rows())
+    }
+
+    #[test]
+    fn viewer_formatting() {
+        assert_eq!(format_viewers(0), "0");
+        assert_eq!(format_viewers(860), "860");
+        assert_eq!(format_viewers(999), "999");
+        assert_eq!(format_viewers(1_000), "1.0K");
+        assert_eq!(format_viewers(1_949), "1.9K");
+        assert_eq!(format_viewers(4_200), "4.2K");
+        assert_eq!(format_viewers(48_123), "48.1K");
+        assert_eq!(format_viewers(999_949), "999.9K");
+        assert_eq!(format_viewers(999_950), "1.0M");
+        assert_eq!(format_viewers(1_250_000), "1.3M");
+    }
+
+    #[test]
+    fn home_has_a_hero_then_titled_rows() {
+        let vm = view_model(&loaded());
+        assert_eq!(vm.screen, ScreenId::Home);
+        assert_eq!(vm.heading, "Live now");
+        let shapes: Vec<_> = vm.rows.iter().map(|r| r.shape).collect();
+        assert_eq!(shapes, [Shape::Hero, Shape::Landscape, Shape::Portrait]);
+        let titles: Vec<_> = vm.rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, ["", "Top Live", "Categories"]);
+        let hero = &vm.rows[0].cards[0];
+        assert_eq!(hero.viewers, "48.1K");
+        assert_eq!(hero.thumb_url, "https://cdn/hero.jpg");
+        assert_eq!(hero.tint, Rgb::new(0x7a, 0x2e, 0x2e));
+        // Category cards have empty title/category/viewers, which hides the live line.
+        let cat = &vm.rows[2].cards[0];
+        assert_eq!(cat.channel, "Music");
+        assert_eq!((cat.title.as_str(), cat.viewers.as_str()), ("", ""));
+        assert_eq!(cat.thumb_url, "https://cdn/26936.jpg");
+        assert!(!vm.can_retry && !vm.feed_empty && vm.feed_error.is_empty());
+    }
+
+    #[test]
+    fn a_loading_feed_shows_skeleton_cards() {
+        let (s, _) = htpc_core::init();
+        let vm = view_model(&s);
+        assert_eq!(vm.rows.len(), 2);
+        assert_eq!(vm.rows[0].shape, Shape::Hero);
+        assert!(vm.rows.iter().all(|r| r.cards.iter().all(|c| c.loading)));
+        assert!(!vm.feed_empty, "loading is not empty");
+    }
+
+    #[test]
+    fn a_failed_feed_shows_the_error_and_a_retry_hint() {
+        let (s, _) = htpc_core::init();
+        let failed = Event::FeedFailed {
+            feed: FeedId::Home,
+            message: "offline".into(),
+        };
+        let vm = view_model(&reduce(&s, failed).0);
+        assert!(vm.rows.is_empty(), "no skeletons once it failed");
+        assert_eq!(vm.feed_error, "offline");
+        assert!(vm.can_retry && !vm.feed_empty);
+    }
+
+    #[test]
+    fn a_feed_with_nothing_live_is_empty_not_failed() {
+        let vm = view_model(&with_rows(Vec::new()));
+        assert!(vm.feed_empty && vm.feed_error.is_empty() && !vm.can_retry);
+    }
+
+    fn paged_row(n: usize) -> Row {
+        Row::new(RowKind::TopLive, streams(n)).with_paging(Paging::More("c".into()))
+    }
+
+    fn press(mut s: AppState, intent: Intent, times: usize) -> AppState {
+        for _ in 0..times {
+            s = reduce(&s, intent).0;
+        }
+        s
+    }
+
+    #[test]
+    fn a_loading_page_adds_skeletons_to_the_end_of_the_row() {
+        // 8 tiles: the next page starts once focus reaches col 4 (col + 1 + 3 >= 8).
+        let s = with_rows(vec![paged_row(8)]);
+        let early = view_model(&press(s.clone(), Intent::Right, 3));
+        assert_eq!(early.rows[0].cards.len(), 8, "not near the end yet");
+
+        let vm = view_model(&press(s, Intent::Right, 4));
+        let cards = &vm.rows[0].cards;
+        assert_eq!(cards.len(), 8 + SKELETON_TAIL);
+        assert!(cards[8..].iter().all(|c| c.loading));
+        assert!(cards[..8].iter().all(|c| !c.loading));
+    }
+
+    #[test]
+    fn a_failed_page_adds_a_retry_card_and_the_x_hint() {
+        let s = press(with_rows(vec![paged_row(4)]), Intent::Right, 1);
+        let failed = Event::MoreLoaded {
+            feed: FeedId::Home,
+            kind: RowKind::TopLive,
+            cursor: "c".into(),
+            outcome: PageOutcome::Failed,
+        };
+        let vm = view_model(&reduce(&s, failed).0);
+        let last = vm.rows[0].cards.last().unwrap();
+        assert!(last.retry && !last.loading);
+        assert!(vm.can_retry);
+    }
+
+    /// The Browse screen with `n` categories loaded.
+    fn browse(n: usize, paging: Paging) -> AppState {
+        let (s, _) = htpc_core::init();
+        let (s, _) = reduce(&s, Intent::RailPick(RailEntry::Browse));
+        let tiles: Vec<Tile> = (0..n).map(|i| category(&format!("g{i}"), "G")).collect();
+        let rows = grid_rows(RowKind::Categories, tiles, paging);
+        let feed = FeedId::Browse;
+        reduce(&s, Event::FeedLoaded { feed, rows }).0
+    }
+
+    #[test]
+    fn browse_is_a_portrait_grid_with_a_heading() {
+        // Skeleton grid while the directory loads.
+        let (s, _) = htpc_core::init();
+        let (s, _) = reduce(&s, Intent::RailPick(RailEntry::Browse));
+        let vm = view_model(&s);
+        assert_eq!(vm.screen, ScreenId::Grid);
+        assert_eq!(vm.heading, "Categories");
+        assert!(vm.rows.iter().all(|r| r.shape == Shape::Portrait));
+        assert!(vm.rows.iter().all(|r| r.cards.iter().all(|c| c.loading)));
+        assert_eq!(vm.rail_current, 2);
+        assert!(!vm.can_back, "Browse is a root screen");
+
+        let vm = view_model(&browse(12, Paging::End));
+        let lens: Vec<_> = vm.rows.iter().map(|r| r.cards.len()).collect();
+        assert_eq!(lens, [5, 5, 2]);
+        assert!(vm.rows.iter().all(|r| r.title.is_empty()));
+        assert_eq!(vm.select_label, "Open");
+    }
+
+    #[test]
+    fn a_loading_grid_page_fills_the_row_then_adds_a_row_of_skeletons() {
+        let s = browse(12, Paging::More("n".into()));
+        // 3 rows: the trigger is row + 1 >= 2, so one Down starts the page.
+        let vm = view_model(&press(s, Intent::Down, 1));
+        let lens: Vec<_> = vm.rows.iter().map(|r| r.cards.len()).collect();
+        // The last row (2 of 5) is completed with 3 skeletons, then a full skeleton row follows.
+        assert_eq!(lens, [5, 5, 5, 5]);
+        assert!(vm.rows[2].cards[2..].iter().all(|c| c.loading));
+        assert!(vm.rows[3].cards.iter().all(|c| c.loading));
+    }
+
+    #[test]
+    fn the_category_screen_shows_its_streams_and_offers_back() {
+        let (s, _) = reduce(&browse(1, Paging::End), Intent::Select);
+        let vm = view_model(&s);
+        assert_eq!(vm.screen, ScreenId::Grid);
+        assert_eq!(vm.heading, "G");
+        assert!(vm.can_back);
+        assert_eq!(vm.rail_current, 2, "the category belongs to Browse");
+
+        let rows = grid_rows(RowKind::CategoryStreams, streams(4), Paging::End);
+        let feed = FeedId::Category("g0".into());
+        let vm = view_model(&reduce(&s, Event::FeedLoaded { feed, rows }).0);
+        let lens: Vec<_> = vm.rows.iter().map(|r| r.cards.len()).collect();
+        assert_eq!(lens, [3, 1]);
+        assert!(vm.rows.iter().all(|r| r.shape == Shape::Landscape));
+        assert_eq!(vm.select_label, "Watch");
+    }
+
+    #[test]
+    fn player_and_login_screens() {
+        let (s, _) = reduce(&loaded(), Intent::Select);
+        let vm = view_model(&s);
+        assert_eq!(vm.screen, ScreenId::Player);
+        assert_eq!(vm.now_playing.channel, "grandmaster_k");
+        assert_eq!(vm.rail_current, 0, "overlay highlights Home underneath");
+        // The cards under the player stay in the model.
+        assert_eq!(vm.rows.len(), 3);
+
+        let (s, _) = reduce(&loaded(), Intent::RailPick(RailEntry::Account));
+        let code = DeviceCode {
+            user_code: "KQRT-7ZMP".into(),
+            verification_uri: "twitch.tv/activate".into(),
+        };
+        let (s, _) = reduce(&s, Event::DeviceCodeIssued(code));
+        let vm = view_model(&s);
+        assert_eq!(vm.screen, ScreenId::SignIn);
+        assert_eq!(vm.device_code, "KQRT-7ZMP");
+        assert_eq!(vm.verification_url, "twitch.tv/activate");
+    }
+
+    #[test]
+    fn user_and_chat_colours() {
+        let mut s = loaded();
+        s.user = Some(User {
+            login: "nightowl_dev".into(),
+        });
+        let line = |user: &str, color| ChatMessage {
+            color,
+            ..ChatMessage::plain(user, "x")
+        };
+        s.chat = vec![line("a", None), line("b", Some(Rgb::new(250, 120, 40)))].into();
+        let vm = view_model(&s);
+        assert_eq!(vm.user_name, "nightowl_dev");
+        assert_eq!(vm.chat[0].tint, DEFAULT_CHAT_NAME);
+        assert_eq!(vm.chat[1].tint, Rgb::new(250, 120, 40));
+    }
+
+    // ---- chat --------------------------------------------------------------------------
+
+    use htpc_core::{ChatBuffer, Moderation, CHAT_CAPACITY};
+
+    #[test]
+    fn dark_name_colours_are_lightened_and_bright_ones_left_alone() {
+        let bright = Rgb::new(30, 144, 255);
+        assert_eq!(readable_name_colour(bright), bright);
+        let lime = DEFAULT_CHAT_NAME;
+        assert_eq!(readable_name_colour(lime), lime);
+
+        let brightness = |c: Rgb| {
+            (0.2126 * f32::from(c.r) + 0.7152 * f32::from(c.g) + 0.0722 * f32::from(c.b)) / 255.0
+        };
+        for dark in [Rgb::new(0, 0, 0), Rgb::new(0, 0, 255), Rgb::new(40, 10, 60)] {
+            let lifted = readable_name_colour(dark);
+            assert!(
+                brightness(lifted) >= MIN_NAME_BRIGHTNESS - 0.01,
+                "{dark:?} -> {lifted:?}"
+            );
+            assert!(brightness(lifted) > brightness(dark));
+        }
+        // Blue stays blue-ish: the hue is kept.
+        let blue = readable_name_colour(Rgb::new(0, 0, 255));
+        assert!(blue.b > blue.r && blue.b > blue.g);
+    }
+
+    fn watching(lines: Vec<ChatMessage>) -> AppState {
+        let (mut s, _) = reduce(&loaded(), Intent::Select);
+        s.chat = ChatBuffer::from(lines);
+        s
+    }
+
+    #[test]
+    fn a_line_becomes_badges_words_and_emotes() {
+        let line = ChatMessage {
+            badges: vec!["https://cdn/mod.png".into()],
+            spans: vec![
+                ChatSpan::Text("nice  play".into()),
+                ChatSpan::Emote {
+                    name: "Kappa".into(),
+                    url: "https://cdn/kappa.png".into(),
+                },
+                ChatSpan::Text("gg".into()),
+            ],
+            kind: ChatKind::Action,
+            ..ChatMessage::plain("Marie", "")
+        };
+        let vm = view_model(&watching(vec![line]));
+        let l = &vm.chat[0];
+        assert_eq!((l.user.as_str(), l.kind), ("Marie", ChatLineKind::Action));
+        assert_eq!(l.badges, ["https://cdn/mod.png"]);
+        let words: Vec<_> = l
+            .pieces
+            .iter()
+            .map(|p| (p.text.as_str(), p.emote))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("nice", false),
+                ("play", false),
+                ("Kappa", true),
+                ("gg", false)
+            ]
+        );
+        assert_eq!(l.pieces[2].url, "https://cdn/kappa.png");
+        assert!(l.pieces[0].url.is_empty());
+    }
+
+    #[test]
+    fn notices_and_messages_are_told_apart() {
+        let vm = view_model(&watching(vec![
+            ChatMessage::notice("slow mode is on"),
+            ChatMessage::plain("a", "hi"),
+        ]));
+        assert_eq!(vm.chat[0].kind, ChatLineKind::Notice);
+        assert_eq!(vm.chat[1].kind, ChatLineKind::Message);
+    }
+
+    #[test]
+    fn only_the_newest_lines_reach_the_window() {
+        let lines = (0..CHAT_CAPACITY)
+            .map(|i| ChatMessage::plain(&format!("u{i}"), "x"))
+            .collect();
+        let vm = view_model(&watching(lines));
+        assert_eq!(vm.chat.len(), CHAT_LINES_SHOWN);
+        assert_eq!(
+            vm.chat.last().unwrap().user,
+            format!("u{}", CHAT_CAPACITY - 1)
+        );
+        assert_eq!(
+            vm.chat[0].user,
+            format!("u{}", CHAT_CAPACITY - CHAT_LINES_SHOWN)
+        );
+    }
+
+    #[test]
+    fn the_status_line_follows_the_connection() {
+        let status = |s: &AppState| view_model(s).chat_status;
+        let (s, _) = reduce(&loaded(), Intent::Select);
+        assert_eq!(status(&s), "Connecting…");
+
+        let event = |status| Event::ChatStatus {
+            channel: "grandmaster_k".into(),
+            status,
+        };
+        let (live, _) = reduce(&s, event(ChatStatus::Live));
+        assert_eq!(status(&live), "No messages yet");
+        let (back, _) = reduce(&live, event(ChatStatus::Reconnecting));
+        assert_eq!(status(&back), "Reconnecting…");
+
+        let line = Event::ChatMessages {
+            channel: "grandmaster_k".into(),
+            messages: vec![ChatMessage::plain("a", "hi")],
+        };
+        let (talking, _) = reduce(&live, line);
+        assert_eq!(status(&talking), "", "nothing to say once lines flow");
+    }
+
+    #[test]
+    fn the_layout_setting_chooses_side_panel_or_overlay() {
+        let mut s = watching(Vec::new());
+        assert!(!view_model(&s).chat_overlay);
+        s.settings.chat_layout = ChatLayout::Overlay;
+        assert!(view_model(&s).chat_overlay);
+    }
+
+    #[test]
+    fn a_ban_changes_the_chat_in_the_diff() {
+        let mut a = ChatMessage::plain("Troll", "bad");
+        a.id = "1".into();
+        let s = watching(vec![a, ChatMessage::plain("friend", "hi")]);
+        let before = view_model(&s);
+        let ban = Event::ChatModerated {
+            channel: "grandmaster_k".into(),
+            action: Moderation::ClearUser("troll".into()),
+        };
+        let (s, _) = reduce(&s, ban);
+        let u = Update::diff(&before, view_model(&s)).expect("chat changed");
+        assert!(u.chat_changed && !u.rows_changed);
+        assert_eq!(u.vm.chat.len(), 1);
+    }
+
+    #[test]
+    fn a_growing_chat_slides_a_ban_rebuilds() {
+        let letters = |s: &str| s.chars().collect::<Vec<_>>();
+        // Appending: nothing dropped, all old lines kept.
+        assert_eq!(slide_plan(&letters("ab"), &letters("abc")), (0, 2));
+        // The window is full: old lines fall off the front.
+        assert_eq!(slide_plan(&letters("abc"), &letters("bcd")), (1, 2));
+        assert_eq!(slide_plan(&letters("abc"), &letters("cde")), (2, 1));
+        // Unchanged.
+        assert_eq!(slide_plan(&letters("abc"), &letters("abc")), (0, 3));
+        // From nothing.
+        assert_eq!(slide_plan(&[], &letters("ab")), (0, 0));
+        // A line removed from the middle is not a slide: drop everything, add everything.
+        assert_eq!(slide_plan(&letters("abcd"), &letters("acd")), (4, 0));
+        // Everything replaced.
+        assert_eq!(slide_plan(&letters("ab"), &letters("xy")), (2, 0));
+        // Everything gone.
+        assert_eq!(slide_plan(&letters("ab"), &[]), (2, 0));
+    }
+
+    #[test]
+    fn diff_only_flags_changed_models() {
+        let a = view_model(&loaded());
+        assert_eq!(Update::diff(&a, a.clone()), None);
+
+        let (s, _) = reduce(&loaded(), Intent::Down);
+        let u = Update::diff(&a, view_model(&s)).expect("focus changed");
+        assert!(!u.rows_changed, "focus moves must not touch the cards");
+        assert!(!u.chat_changed);
+
+        let u = Update::diff(&ViewModel::default(), a).expect("rows loaded");
+        assert!(u.rows_changed);
+        assert!(!u.chat_changed);
+    }
+
+    #[test]
+    fn image_memory_evicts_the_oldest_unused_images_first() {
+        let mut m = ImageMemory::default();
+        for i in 0..IMAGE_MEMORY_CAP + 3 {
+            m.insert(&format!("u{i}"), Image::default());
+        }
+        // u0 is still on screen, so u1..u3 go instead.
+        m.trim(IMAGE_MEMORY_CAP, |u| u == "u0");
+        assert_eq!(m.images.len(), IMAGE_MEMORY_CAP);
+        assert!(m.get("u0").is_some());
+        assert!(m.get("u1").is_none() && m.get("u3").is_none());
+        assert!(m.get("u4").is_some());
+    }
+
+    // ---- sign-in, Settings, Following --------------------------------------------------
+
+    const ACTIVATE: &str = "https://www.twitch.tv/activate?device-code=ABCDEFGH";
+
+    fn on_login() -> AppState {
+        reduce(&loaded(), Intent::RailPick(RailEntry::Account)).0
+    }
+
+    fn issue(s: &AppState, uri: &str) -> AppState {
+        let code = DeviceCode {
+            user_code: "ABCD-EFGH".into(),
+            verification_uri: uri.into(),
+        };
+        reduce(s, Event::DeviceCodeIssued(code)).0
+    }
+
+    #[test]
+    fn the_sign_in_screen_tells_the_stages_apart() {
+        let vm = view_model(&on_login());
+        assert_eq!(vm.login_status, "Getting a code from Twitch...");
+        assert!(!vm.login_failed && vm.qr.is_empty());
+
+        let s = issue(&on_login(), ACTIVATE);
+        let vm = view_model(&s);
+        assert_eq!(vm.login_status, "Waiting for approval...");
+        assert_eq!(vm.device_code, "ABCD-EFGH");
+        assert!(!vm.login_failed);
+
+        let say = |problem| view_model(&reduce(&s, Event::LoginFailed(problem)).0);
+        let vm = say(LoginProblem::Expired);
+        assert_eq!(vm.login_status, "That code expired.");
+        assert!(vm.login_failed && vm.device_code.is_empty() && vm.qr.is_empty());
+        let denied = say(LoginProblem::Denied);
+        assert_eq!(denied.login_status, "Sign-in was declined on your phone.");
+        let failed = say(LoginProblem::Failed("no network".into()));
+        assert_eq!(failed.login_status, "Could not sign in: no network");
+    }
+
+    #[test]
+    fn the_address_is_shown_plain_and_the_qr_carries_the_link() {
+        let vm = view_model(&issue(&on_login(), ACTIVATE));
+        assert_eq!(vm.verification_url, "www.twitch.tv/activate");
+        assert!(vm.qr_width >= 21, "a QR code is at least 21 modules wide");
+        assert_eq!(vm.qr.len(), (vm.qr_width * vm.qr_width) as usize);
+        assert!(vm.qr.iter().any(|d| *d) && vm.qr.iter().any(|d| !*d));
+        // The three finder patterns have a dark corner module.
+        let w = vm.qr_width as usize;
+        assert!(vm.qr[0] && vm.qr[w - 1] && vm.qr[w * (w - 1)]);
+    }
+
+    #[test]
+    fn display_url_drops_the_scheme_query_and_fragment() {
+        assert_eq!(display_url("https://a.test/go?x=1#y"), "a.test/go");
+        assert_eq!(display_url("twitch.tv/activate"), "twitch.tv/activate");
+    }
+
+    #[test]
+    fn the_qr_image_has_a_quiet_zone() {
+        let dark = [true, false, false, true];
+        let size = qr_image(&dark, 2).size();
+        assert_eq!((size.width, size.height), (2 + 8, 2 + 8));
+        assert_eq!(
+            qr_image(&dark, 3).size().width,
+            0,
+            "a bad size gives no image"
+        );
+        assert_eq!(qr_image(&[], 0).size().width, 0);
+    }
+
+    #[test]
+    fn a_new_qr_is_flagged_in_the_diff() {
+        let before = view_model(&on_login());
+        let waiting = issue(&on_login(), ACTIVATE);
+        let after = view_model(&waiting);
+        let u = Update::diff(&before, after.clone()).expect("code arrived");
+        assert!(u.qr_changed);
+        // A on a waiting login changes nothing, so nothing is sent.
+        let pressed = reduce(&waiting, Intent::Select).0;
+        assert!(Update::diff(&after, view_model(&pressed)).is_none());
+    }
+
+    fn signed_in(s: &AppState) -> AppState {
+        let user = User {
+            login: "nightowl_dev".into(),
+        };
+        reduce(s, Event::SignedIn(user)).0
+    }
+
+    #[test]
+    fn settings_offers_the_account_action() {
+        let (s, _) = reduce(&loaded(), Intent::RailPick(RailEntry::Settings));
+        let vm = view_model(&s);
+        assert_eq!(vm.screen, ScreenId::Settings);
+        assert_eq!(vm.rail_current, 3);
+        assert_eq!((vm.select_label.as_str(), vm.can_retry), ("Sign in", false));
+
+        let vm = view_model(&signed_in(&s));
+        assert_eq!(vm.select_label, "Sign out");
+        assert_eq!(vm.user_name, "nightowl_dev");
+    }
+
+    #[test]
+    fn settings_shows_the_choices_and_labels_a_by_the_focused_row() {
+        let (s, _) = reduce(&loaded(), Intent::RailPick(RailEntry::Settings));
+        let vm = view_model(&s);
+        assert_eq!(vm.settings_focus, 0);
+        assert_eq!(vm.chat_layout_label, "Side panel");
+        assert_eq!(vm.quality_label, "Best available");
+
+        let (s, _) = reduce(&s, Intent::Down);
+        let (s, _) = reduce(&s, Intent::Select);
+        let vm = view_model(&s);
+        assert_eq!(vm.settings_focus, 1);
+        assert_eq!(vm.chat_layout_label, "Over the video");
+        assert!(vm.chat_overlay);
+        assert_eq!(vm.select_label, "Change");
+    }
+
+    fn offline(name: &str) -> Tile {
+        Tile::Channel(Channel {
+            channel: name.into(),
+            name: name.into(),
+            tint: Rgb::new(9, 9, 9),
+        })
+    }
+
+    #[test]
+    fn following_shows_live_cards_then_dimmed_offline_ones() {
+        let s = signed_in(&loaded());
+        let (s, _) = reduce(&s, Intent::RailPick(RailEntry::Following));
+        // While it loads for the first time: skeletons, under the heading.
+        let vm = view_model(&s);
+        assert_eq!(vm.screen, ScreenId::Home);
+        assert_eq!(vm.heading, "Following");
+        assert_eq!(vm.rail_current, 1);
+        assert!(vm.rows.iter().all(|r| r.cards.iter().all(|c| c.loading)));
+
+        let rows = vec![
+            Row::new(RowKind::FollowedLive, vec![stream("live0", 1_500, None)]),
+            Row::new(RowKind::FollowedOffline, vec![offline("a"), offline("b")]),
+        ];
+        let feed = FeedId::Following;
+        let vm = view_model(&reduce(&s, Event::FeedLoaded { feed, rows }).0);
+        assert_eq!(vm.rows[1].title, "Offline");
+        assert!(!vm.rows[0].cards[0].offline);
+        assert_eq!(vm.rows[0].cards[0].viewers, "1.5K");
+        let all_dimmed = vm.rows[1]
+            .cards
+            .iter()
+            .all(|c| c.offline && c.viewers.is_empty());
+        assert!(all_dimmed);
+        assert_eq!(vm.rows[1].cards[0].channel, "a");
+        assert_eq!(vm.select_label, "Watch");
+    }
+
+    #[test]
+    fn an_empty_following_tab_says_so() {
+        let s = signed_in(&loaded());
+        let (s, _) = reduce(&s, Intent::RailPick(RailEntry::Following));
+        let feed = FeedId::Following;
+        let rows = Vec::new();
+        let vm = view_model(&reduce(&s, Event::FeedLoaded { feed, rows }).0);
+        assert!(vm.feed_empty);
+        assert_eq!(vm.empty_text, "You are not following anyone yet");
+        // Home keeps its own wording.
+        let home = view_model(&loaded());
+        assert_eq!(home.empty_text, "Nothing is live here right now");
+    }
+}

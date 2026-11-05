@@ -1,0 +1,6 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: "render(&view_model(&reduce(&s, failed).0))"
+---
+screen=Home heading="Live now" focus=(0, 0) rail_current=0
+select="Watch" retry=true back=false empty=false error="network error: timed out"

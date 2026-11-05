@@ -1,0 +1,9 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+screen=Player playback=Loading error="" paused=false select="" retry=false
+screen=Player playback=Playing error="" paused=false select="Pause" retry=false
+screen=Player playback=Playing error="" paused=true select="Resume" retry=false
+screen=Player playback=Offline error="" paused=false select="Retry" retry=true
+screen=Player playback=Failed error="Streamlink is not installed" paused=false select="Retry" retry=true

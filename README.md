@@ -1,0 +1,152 @@
+# LiveDeck: an unofficial Twitch client for Steam Deck, SteamOS and Windows, made for a TV and a controller
+
+LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: browse live streams and categories, watch with read-only chat, and sign in to see who you follow. It is built for the couch and for SteamOS Game Mode on the **Steam Deck**, and it also runs on **Windows** (and Linux) with a controller or keyboard. Written in Rust with [Slint](https://slint.dev), [libmpv](https://mpv.io) and [Streamlink](https://streamlink.github.io).
+
+> **This is not an official Twitch or Valve product, and it is not affiliated with or endorsed by either.** Twitch and Steam are trademarks of their owners.
+>
+> **Use it at your own risk.** It finds streams through unofficial, undocumented Twitch endpoints. They can break without notice, and using them may conflict with the [Twitch Terms of Service](https://www.twitch.tv/p/legal/terms-of-service/). The software comes with no warranty (see [LICENSE](LICENSE)). You are responsible for how you use it.
+>
+> **Why it exists:** I made this for myself, because I wanted to watch Twitch on my TV from the couch without a mouse and keyboard, and the existing options did not fit. I am sharing it in case it is useful to someone else. It is a hobby project: expect rough edges, and things get fixed when I have time. Contributions are very welcome (see [Contributing](#contributing)).
+
+**What works**
+
+- Home with a featured stream, Top Live and Categories; a Browse screen for all categories; a screen per category
+- Watching live streams (video through libmpv, hardware decoding where available)
+- Read-only chat with coloured names, badges and emotes, as a side panel or an overlay on the video
+- Sign in with a code and a QR code (no password typed on the TV), then a Followed row and a Following tab
+- Settings for chat layout and video quality, saved between runs
+- Everything controllable with a gamepad (D-pad, A/B/X/Y, Start)
+
+**What does not**
+
+- No chat sending (chat is read-only), no VODs or clips, no 7TV/BTTV/FFZ emotes yet
+- Signed out, each row shows only its first page (about 30 items), because Twitch's anonymous API allows no more. Sign in for full paging
+- It does not block or skip ads
+- Linux/Steam Deck builds are new and **not yet tested on a real Deck**
+
+## Install
+
+Download the latest build from the **Releases** page of this repository.
+
+### Windows
+
+1. Download `LiveDeck-vX.Y.Z-windows-x64.zip` and unpack it anywhere.
+2. Run `livedeck.exe`. That is all: video (libmpv) and Streamlink are in the folder, nothing else needs installing.
+
+The program is not code-signed, so Windows SmartScreen may warn about an unknown publisher. Choose *More info*, then *Run anyway*. To remove it, delete the folder (settings stay in `%APPDATA%\livedeck`).
+
+### Steam Deck / Linux (Flatpak, experimental)
+
+```bash
+flatpak install --user LiveDeck-vX.Y.Z-linux-x86_64.flatpak
+flatpak run io.github.livedeck.LiveDeck
+```
+
+To use it in Game Mode, switch to Desktop Mode, then in Steam choose *Add a Non-Steam Game* and pick **LiveDeck**. Leave the controller layout on the default **Gamepad** template (see [packaging/steam-input](packaging/steam-input/README.md)). The Flatpak is experimental: if it does not build or run for you, please open an issue with the output.
+
+### Build from source
+
+Needs [Rust](https://rustup.rs) (stable). Without video:
+
+```powershell
+cargo run -p livedeck --release
+```
+
+With video you also need libmpv and Streamlink:
+
+- **Windows:** download the `mpv-dev-x86_64-*` package from [shinchiro/mpv-winbuild-cmake releases](https://github.com/shinchiro/mpv-winbuild-cmake/releases), unpack it, and run `packaging/windows/make-import-lib.ps1 -Dir <folder>` from a Developer PowerShell (it creates the `mpv.lib` that MSVC needs). Install Streamlink (`pip install streamlink`, or point `HTPC_STREAMLINK` at a copy). Then:
+
+  ```powershell
+  $env:MPV_LIB_DIR = "<folder with libmpv-2.dll and mpv.lib>"
+  $env:PATH = "$env:MPV_LIB_DIR;$env:PATH"
+  cargo run -p livedeck --release --features mpv
+  ```
+
+- **Linux:** install libmpv 2.x development files (`libmpv-dev` / `mpv-libs`), `libudev-dev`, `libfontconfig1-dev`, `libxkbcommon-dev` and Streamlink, then `cargo run -p livedeck --release --features mpv`.
+
+To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
+
+## Use
+
+| Input | Action |
+|---|---|
+| D-pad / left stick / arrow keys | Move focus |
+| A / Enter | Select, watch, change a setting |
+| B / Esc / Backspace | Back (also opens the left menu from Settings) |
+| X / `r` | Retry a failed load |
+| Y / `y` | Show or hide chat |
+| Start / Menu key | Open or close the left menu |
+
+- **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
+- **Settings:** chat layout (side panel or over the video) and video quality (applies to the next stream you open).
+- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `image_cache_max_mb` and an optional `client_id`.
+- **Try it offline:** `livedeck --mock` runs with fixture data and no network.
+- **Logs:** set `RUST_LOG=livedeck=debug`. `livedeck --help` lists every option and environment variable.
+
+### Using your own Twitch application (forks)
+
+Signing in needs a Twitch application's client ID. This project's public ID is built in (`DEFAULT_CLIENT_ID` in `crates/app/src/main.rs`); a client ID is public, not a secret, and the app has no client secret. If you fork or repackage the app, register your own at <https://dev.twitch.tv/console> (Client Type **Public**, any OAuth redirect URL such as `http://localhost:3000`, the Device Code flow never uses it), then set `TWITCH_CLIENT_ID`, or `client_id` in `config.toml`, or replace the constant. Never commit tokens.
+
+## Contributing
+
+Bug reports, testing on real hardware (especially a Steam Deck), fixes and features are all welcome. Please open an issue first for anything large so we do not duplicate work.
+
+**Good places to start**
+
+- Test the Flatpak on a Steam Deck / under Gamescope and report what breaks or fix it (`packaging/flatpak`)
+- Resume from sleep, 4K and ultrawide behaviour
+- 7TV / BTTV / FFZ emotes, VODs and clips, chat sending with the on-screen keyboard
+- Translations, accessibility, controller glyphs for other pads
+
+**Setup**
+
+```powershell
+git clone <this repository>
+cd livedeck
+cargo run -p livedeck -- --mock      # no account, no network needed
+```
+
+**Before you open a pull request** run all of these; CI runs the same:
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check        # optional locally, needs cargo-deny (see deny.toml)
+```
+
+**How the code is organised**
+
+| Crate | Role |
+|---|---|
+| `crates/core` (`htpc-core`) | Pure state: `AppState`, `Intent`, `Event`, `Command` and the `reduce` function. No UI, network or IO, fully unit-tested |
+| `crates/ui` (`htpc-ui`) | The Slint files (a pure view) and the view-model that turns `AppState` into Slint models |
+| `crates/input` | Keyboard and gamepad (`gilrs`) to `Intent` |
+| `crates/twitch` (`htpc-twitch-api`) | Helix client, anonymous GQL client, device-code login |
+| `crates/chat` | Anonymous IRC-over-WebSocket chat, emotes, badges |
+| `crates/resolver` | Stream URL lookup through Streamlink |
+| `crates/player` | libmpv rendering into the Slint window (feature `mpv`) |
+| `crates/storage` | Config, token storage (keyring or private file), image cache |
+| `crates/app` | The `livedeck` binary: wiring, store loop, command execution |
+
+Data flows one way: input becomes an `Intent`, `reduce` returns the new state and a list of `Command`s, the app runs the commands off the UI thread and feeds results back as `Event`s. Navigation logic belongs in `reduce`, not in the `.slint` files. Network, chat, player and resolver sit behind traits and have fakes, so tests need no network. Colours, sizes and durations live in `crates/ui/ui/theme.slint`. Platform-specific code goes behind `#[cfg]`, as development happens on Windows and the target is Linux.
+
+By contributing you agree your work is released under the project's licence (GPL-3.0-only).
+
+## Frequently asked questions
+
+**Is this the official Twitch app for Steam Deck?** No. It is an independent hobby project.
+
+**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with read-only permission to see your follows. Stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
+
+**Does it block ads?** No, and it does not try to.
+
+**Why Streamlink and libmpv?** Twitch's official API does not give video URLs. Streamlink finds the stream, libmpv plays it. Both are bundled in the releases. Stream lookup sits behind a `StreamResolver` trait so it can be replaced.
+
+**Why does signed-out browsing show so few streams?** The anonymous web API only returns a first page. Signing in switches to the official API, which pages properly.
+
+## Licence
+
+GPL-3.0-only, see [LICENSE](LICENSE). Release packages bundle other software under its own licences, listed in [packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md). The interface font is Atkinson Hyperlegible (SIL OFL 1.1).
+
+<!-- Keywords: Twitch client, Twitch for Steam Deck, SteamOS Game Mode Twitch app, controller Twitch app, gamepad Twitch, couch Twitch, HTPC Twitch, unofficial Twitch client, Rust, Slint, mpv, Streamlink, open source -->

@@ -1,0 +1,254 @@
+// Atkinson Hyperlegible (SIL OFL 1.1, assets/fonts/): designed for legibility at a distance.
+// Importing a font file registers it, so it works without being installed on the system.
+import "../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf";
+import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
+import { Theme } from "theme.slint";
+import { StreamItem, RowData, ChatMsg, ChatPiece } from "types.slint";
+import { Hint } from "components.slint";
+import { HomeContent } from "home.slint";
+import { GridContent } from "grid.slint";
+import { Rail } from "rail.slint";
+import { PlayerScreen } from "player.slint";
+import { SignInScreen } from "signin.slint";
+import { SettingsScreen } from "settings.slint";
+
+export { StreamItem, RowData, ChatMsg, ChatPiece }
+
+// Hint-bar actions (mouse fallback). Rust maps them to core Intents.
+export enum UiAction { select, back, toggle-chat, menu, retry }
+
+// Pure view of `htpc_core::AppState`. Rust (crates/ui/src/view_model.rs) sets every property.
+// Navigation logic lives in `htpc_core::reduce`. This file only renders and animates.
+export component MainWindow inherits Window {
+    title: "LiveDeck";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    background: Theme.bg;
+    default-font-family: Theme.font;
+
+    in property <[RowData]> rows;
+    in property <[ChatMsg]> chat;
+    in property <string> user-name: "";
+    in property <string> device-code: "";
+    in property <string> verification-url: "";
+    // Under the code on the sign-in screen: waiting, or why the login ended. `login-failed` turns
+    // A into "New code".
+    in property <string> login-status: "";
+    in property <bool> login-failed: false;
+    // The QR code of the verification link (one pixel per module, drawn pixelated).
+    in property <image> qr;
+    // What to say about an empty feed.
+    in property <string> empty-text: "";
+
+    // Heading of the feed screens, and what to say when a feed failed or is empty.
+    in property <string> heading: "";
+    in property <string> feed-error: "";
+    in property <bool> feed-empty: false;
+    // What A does on the focused card ("Watch" / "Open"), and whether X / B have something to do.
+    in property <string> select-label: "Watch";
+    in property <bool> can-retry: false;
+    in property <bool> can-back: false;
+
+    // Settings screen: the focused row, and the current value of each choice.
+    in property <int> settings-focus: 0;
+    in property <string> chat-layout-label: "";
+    in property <string> quality-label: "";
+    // The app version for the about text (set by the app from its Cargo version).
+    in property <string> version: "";
+
+    // 0 = home / following, 1 = player, 2 = sign in, 3 = grid: browse / category, 4 = settings
+    // (ScreenId in view_model.rs)
+    in property <int> screen: 0;
+    in property <int> sel-row: 0;
+    in property <int> sel-col: 0;
+    // Rail cursor: 0..3 nav entries, 4 = account (RailEntry order in htpc-core).
+    in property <int> rail-index: 0;
+    in property <bool> rail-focused: false;
+    // Rail entry shown as the current destination.
+    in property <int> rail-current: 0;
+    in property <bool> chat-open: false;
+    // Chat as an overlay on the video instead of a side panel, and its connection state.
+    in property <bool> chat-overlay: false;
+    in property <string> chat-status: "";
+    in property <StreamItem> now-playing;
+
+    // Player screen. `video` is the latest mpv frame, set by the player crate on the UI thread.
+    in-out property <image> video;
+    // 0 loading, 1 playing, 2 offline, 3 failed (PlaybackId in view_model.rs).
+    in property <int> playback: 0;
+    in property <string> playback-error: "";
+    in property <bool> paused: false;
+    // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
+    in property <int> hud-pulse: 0;
+    // The area mpv renders into (logical px). Rust multiplies by the scale factor. Not animated
+    // with the chat slide, so the texture is allocated once per layout change.
+    out property <length> video-w: root.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
+    out property <length> video-h: root.height;
+    property <bool> hud-visible: true;
+
+    changed hud-pulse => {
+        root.hud-visible = true;
+        hud-timer.restart();
+    }
+    changed screen => {
+        root.hud-visible = true;
+        hud-timer.restart();
+    }
+    hud-timer := Timer {
+        interval: 4s;
+        running: root.screen == 1;
+        triggered => { root.hud-visible = false; }
+    }
+
+    // Raw key text (Slint key codes). Returns true if Rust handled it.
+    callback key(string) -> bool;
+    // Mouse fallbacks.
+    callback card-clicked(int, int);
+    callback rail-clicked(int);
+    callback action(UiAction);
+
+    // Order must match `htpc_core::RailEntry`. The account entry is appended by Rail.
+    property <[string]> rail-items: ["Home", "Following", "Browse", "Settings"];
+
+    // Controller first. Keyboard stand-in: arrows, Enter = A, Esc/Backspace = B, Y = chat.
+    // Mouse is a fallback only: clicks act, hover never moves controller focus.
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            // Leave shortcuts such as Alt+F4 to the system.
+            if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) {
+                return reject;
+            }
+            if (root.key(e.text)) {
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    if root.screen == 0 : HomeContent {
+        x: Theme.rail-collapsed;
+        width: parent.width - Theme.rail-collapsed;
+        height: parent.height - Theme.hints-h;
+        rows: root.rows;
+        sel-row: root.sel-row;
+        sel-col: root.sel-col;
+        active: !root.rail-focused;
+        heading: root.heading;
+        picked(r, c) => { root.card-clicked(r, c); }
+    }
+
+    if root.screen == 3 : GridContent {
+        x: Theme.rail-collapsed;
+        width: parent.width - Theme.rail-collapsed;
+        height: parent.height - Theme.hints-h;
+        rows: root.rows;
+        sel-row: root.sel-row;
+        sel-col: root.sel-col;
+        active: !root.rail-focused;
+        heading: root.heading;
+        picked(r, c) => { root.card-clicked(r, c); }
+    }
+
+    // A feed that failed to load, or loaded nothing. Cards already on screen stay visible above it.
+    if (root.screen == 0 || root.screen == 3) && (root.feed-error != "" || root.feed-empty) : Rectangle {
+        x: Theme.rail-collapsed;
+        y: parent.height - Theme.hints-h - 96px;
+        width: parent.width - Theme.rail-collapsed;
+        height: 96px;
+        background: Theme.surface;
+
+        VerticalLayout {
+            alignment: center;
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 4px;
+            Text {
+                text: root.feed-error != "" ? "Could not load" : root.empty-text;
+                color: Theme.text;
+                font-size: Theme.fs-body;
+                font-weight: 800;
+            }
+            Text {
+                visible: root.feed-error != "";
+                text: root.feed-error + "  ·  Press X to retry";
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+    }
+
+    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 : Rail {
+        x: 0px;
+        height: parent.height - Theme.hints-h;
+        items: root.rail-items;
+        selected: root.rail-index;
+        current: root.rail-current;
+        expanded: root.rail-focused;
+        user-name: root.user-name;
+        activated(i) => { root.rail-clicked(i); }
+    }
+
+    if root.screen == 2 : SignInScreen {
+        x: Theme.rail-collapsed;
+        width: parent.width - Theme.rail-collapsed;
+        height: parent.height;
+        code: root.device-code;
+        url: root.verification-url;
+        status: root.login-status;
+        failed: root.login-failed;
+        qr: root.qr;
+    }
+
+    if root.screen == 4 : SettingsScreen {
+        x: Theme.rail-collapsed;
+        width: parent.width - Theme.rail-collapsed;
+        height: parent.height;
+        user-name: root.user-name;
+        chat-layout: root.chat-layout-label;
+        quality: root.quality-label;
+        version: root.version;
+        focus-row: root.rail-focused ? -1 : root.settings-focus;
+    }
+
+    if root.screen == 1 : PlayerScreen {
+        width: parent.width;
+        height: parent.height;
+        stream: root.now-playing;
+        chat: root.chat;
+        chat-open: root.chat-open;
+        chat-overlay: root.chat-overlay;
+        chat-status: root.chat-status;
+        video: root.video;
+        playback: root.playback;
+        playback-error: root.playback-error;
+        paused: root.paused;
+        hud-visible: root.hud-visible;
+    }
+
+    Rectangle {
+        y: parent.height - Theme.hints-h;
+        height: Theme.hints-h;
+        width: parent.width;
+        background: #0e0e10f0;
+
+        HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 36px;
+            alignment: end;
+
+            if root.screen == 0 || root.screen == 3 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
+            if (root.screen == 0 || root.screen == 3) && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 0 || root.screen == 3 : Hint { glyph: "◀"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 1 && root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 1 : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            if root.screen == 1 || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: "Back"; clicked => { root.action(UiAction.back); } }
+            if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }
+            if root.screen == 4 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.screen == 4 : Hint { glyph: "◀"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+        }
+    }
+}

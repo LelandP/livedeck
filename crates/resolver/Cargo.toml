@@ -1,0 +1,15 @@
+[package]
+name = "htpc-resolver"
+description = "Resolves a channel to an HLS playlist URL behind the StreamResolver trait (Streamlink sidecar, injectable process runner, fakes)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

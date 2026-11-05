@@ -1,0 +1,112 @@
+import { Theme } from "theme.slint";
+
+// One focusable row: a title with a line of help on the left and the current value on the right.
+// A choice shows arrows around its value, because Left and Right step through the values.
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> help;
+    in property <string> value;
+    in property <bool> focused;
+    in property <bool> choice: false;
+
+    height: 96px;
+    max-width: 720px;
+    background: Theme.surface;
+    border-radius: 8px;
+    border-width: 4px;
+    border-color: root.focused ? Theme.accent-light : transparent;
+    animate border-color { duration: Theme.t-fast; }
+
+    HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        spacing: 24px;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.fs-title;
+                font-weight: 800;
+                overflow: elide;
+            }
+            Text {
+                text: root.help;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+
+        Text {
+            text: root.choice ? "◀  " + root.value + "  ▶" : root.value;
+            color: root.focused ? Theme.accent-light : Theme.text;
+            font-size: Theme.fs-body;
+            font-weight: 700;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+// Settings: account, chat layout, stream quality and the about text. The focused row is chosen in
+// Rust (`SettingsRow` in htpc-core); this file only draws it.
+export component SettingsScreen inherits Rectangle {
+    // Empty while signed out.
+    in property <string> user-name;
+    in property <string> chat-layout;
+    in property <string> quality;
+    in property <string> version;
+    // 0 account, 1 chat layout, 2 quality (SettingsRow order). -1 while the rail has focus.
+    in property <int> focus-row;
+
+    VerticalLayout {
+        padding-left: Theme.safe-x - 24px;
+        padding-right: Theme.safe-x;
+        padding-top: 36px;
+        padding-bottom: Theme.hints-h;
+        spacing: 20px;
+        alignment: start;
+
+        Text {
+            text: "Settings";
+            color: Theme.text;
+            font-size: Theme.fs-display;
+            font-weight: 900;
+        }
+
+        SettingRow {
+            title: root.user-name == "" ? "Not signed in" : root.user-name;
+            help: root.user-name == "" ? "Sign in to see who you follow" : "Signed in to Twitch";
+            value: root.user-name == "" ? "Sign in" : "Sign out";
+            focused: root.focus-row == 0;
+        }
+        SettingRow {
+            title: "Chat";
+            help: "Where chat appears while you watch";
+            value: root.chat-layout;
+            choice: true;
+            focused: root.focus-row == 1;
+        }
+        SettingRow {
+            title: "Video quality";
+            help: "Applies to the next stream you open";
+            value: root.quality;
+            choice: true;
+            focused: root.focus-row == 2;
+        }
+
+        Text {
+            text: "LiveDeck " + root.version + "  ·  Unofficial. Not affiliated with Twitch or Valve.";
+            color: Theme.muted;
+            font-size: Theme.fs-small;
+        }
+        Text {
+            text: "Streams are resolved with Streamlink and may break or conflict with Twitch's terms.";
+            color: Theme.muted;
+            font-size: Theme.fs-small;
+        }
+    }
+}

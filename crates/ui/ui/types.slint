@@ -1,0 +1,45 @@
+export struct StreamItem {
+    channel: string,
+    title: string,
+    category: string,
+    viewers: string,
+    // Placeholder shown until the thumbnail has loaded (and when there is none).
+    tint: color,
+    thumbnail: image,
+    // Cache key of the thumbnail. Rust uses it to patch the image into the card in place.
+    thumb-url: string,
+    // A skeleton card: a pulsing placeholder for data that has not arrived yet.
+    loading: bool,
+    // The "press X to retry" card at the end of a row whose next page failed.
+    retry: bool,
+    // A followed channel that is not live: dimmed, labelled "Offline".
+    offline: bool,
+}
+
+export struct RowData {
+    title: string,
+    items: [StreamItem],
+    // Card shape of the row: 0 landscape, 1 portrait (box art), 2 hero (one wide card).
+    shape: int,
+}
+
+// One word of a chat line, an emote or a badge. Slint `Text` is single-style, so a line is a row
+// of these (see ChatLine) and the images are patched in as they download, like card thumbnails.
+export struct ChatPiece {
+    // A word, or the name of an emote (shown until its image has arrived). Empty for badges.
+    text: string,
+    image: image,
+    // Cache key of the image. Rust uses it to patch the image in place. Empty for plain words.
+    url: string,
+    emote: bool,
+}
+
+export struct ChatMsg {
+    user: string,
+    // Name colour (and the whole line's colour for /me).
+    tint: color,
+    // 0 message ("name: text"), 1 action (/me: all in the chatter's colour), 2 notice (no name).
+    kind: int,
+    badges: [ChatPiece],
+    pieces: [ChatPiece],
+}

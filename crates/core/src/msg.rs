@@ -1,0 +1,172 @@
+//! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
+
+use crate::domain::{
+    ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, Row, RowKind, Tile, User,
+};
+use crate::settings::{Quality, Settings};
+use crate::state::RailEntry;
+
+/// What the user wants, independent of the input device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Intent {
+    Up,
+    Down,
+    Left,
+    Right,
+    /// A button / Enter.
+    Select,
+    /// B button / Escape / Backspace.
+    Back,
+    /// Y button / `y`.
+    ToggleChat,
+    /// Start button: toggles the rail on root screens.
+    Menu,
+    /// X button / `r`: retry a failed load on the current screen.
+    Retry,
+    /// Mouse fallback: a card was clicked. Moves focus there and selects it.
+    Pick {
+        row: usize,
+        col: usize,
+    },
+    /// Mouse fallback: a rail entry was clicked.
+    RailPick(RailEntry),
+}
+
+/// Side effects requested by the reducer. The app runs them off the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// Fetch the first page of every row of a feed (for `FeedId::Following`, the live channels
+    /// first and the offline ones after them). Answered with `Event::FeedLoaded` or
+    /// `Event::FeedFailed`.
+    LoadFeed { feed: FeedId },
+    /// Fetch the page after `cursor` for one row. Answered with `Event::MoreLoaded`.
+    LoadMore {
+        feed: FeedId,
+        kind: RowKind,
+        cursor: String,
+    },
+    /// Download and decode these thumbnails and hand them to the window. There is no `Event`:
+    /// images never enter `AppState`, a card just shows its image once it has arrived.
+    FetchThumbnails { urls: Vec<String> },
+    /// Resolve the channel's playlist and play it. Answered with `Event::StreamOffline` or
+    /// `Event::PlaybackFailed` if that fails, and later with the player's own events
+    /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`).
+    Play { channel: String, quality: Quality },
+    /// Pause or resume the player.
+    SetPaused(bool),
+    /// Stop the player and drop the stream.
+    StopPlayback,
+    /// Start receiving chat for a channel, leaving any other one. The client stays connected
+    /// (and reconnects on its own) until `LeaveChat`. Answered over time with
+    /// `Event::ChatStatus`, `Event::ChatMessages` and `Event::ChatModerated`.
+    JoinChat { channel: String },
+    /// Stop receiving chat.
+    LeaveChat,
+    /// Download the badge and emote images of new chat lines and hand them to the window. Like
+    /// `FetchThumbnails`, there is no `Event`. The app skips URLs it has already fetched.
+    FetchChatImages { urls: Vec<String> },
+    /// Start a device-code login. Answered with `Event::DeviceCodeIssued`, and later with
+    /// `Event::SignedIn` or `Event::LoginFailed` once the user has (or has not) approved it.
+    StartLogin,
+    /// Abandon a pending login (stop polling).
+    CancelLogin,
+    /// Forget the stored tokens and go back to anonymous browsing. Answered with
+    /// `Event::SignedOut`, after which feeds are reloaded.
+    SignOut,
+    /// Write these settings to the config file. There is no `Event`: the state already holds them.
+    SaveSettings(Settings),
+}
+
+/// The result of fetching one more page of a row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageOutcome {
+    /// The next tiles and, if there is one, the cursor after them.
+    Page {
+        tiles: Vec<Tile>,
+        next: Option<String>,
+    },
+    /// The source has nothing more to give. Anonymous GQL answers `IntegrityRequired` to every
+    /// later page, which the provider reports as this.
+    End,
+    /// The request failed (the provider logs why). The row can be retried with `Intent::Retry`.
+    Failed,
+}
+
+/// Results of commands, fed back into the reducer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    FeedLoaded {
+        feed: FeedId,
+        rows: Vec<Row>,
+    },
+    /// `LoadFeed` failed completely. Rows already on screen are kept next to the error.
+    FeedFailed {
+        feed: FeedId,
+        message: String,
+    },
+    /// The answer to a `LoadMore`. `cursor` is the one that was requested: the reducer ignores
+    /// the answer unless that page is still the one the row waits for.
+    MoreLoaded {
+        feed: FeedId,
+        kind: RowKind,
+        cursor: String,
+        outcome: PageOutcome,
+    },
+    /// New chat lines, oldest first. Ignored unless `channel` is the one being watched.
+    ChatMessages {
+        channel: String,
+        messages: Vec<ChatMessage>,
+    },
+    /// A moderator removed lines (cleared chat, timeout or ban, deleted message).
+    ChatModerated {
+        channel: String,
+        action: Moderation,
+    },
+    /// The chat connection changed state (connecting, live, reconnecting after a drop).
+    ChatStatus {
+        channel: String,
+        status: ChatStatus,
+    },
+    /// The resolver found no live stream for `channel`.
+    StreamOffline {
+        channel: String,
+    },
+    /// The resolver failed for another reason (Streamlink missing, timeout, ...).
+    PlaybackFailed {
+        channel: String,
+        message: String,
+    },
+    /// The player shows the first frame.
+    PlaybackStarted,
+    /// The stream ended by itself: the channel went offline or the connection dropped.
+    PlaybackEnded,
+    /// The player could not play the stream.
+    PlaybackError(String),
+    DeviceCodeIssued(DeviceCode),
+    /// The login finished and the credentials are in place. Feeds are reloaded for the account.
+    SignedIn(User),
+    /// The login did not finish. The sign-in screen says why and offers another try.
+    LoginFailed(LoginProblem),
+    /// The session is over and the credentials are gone: the user signed out, or Twitch refused
+    /// to refresh the tokens. Feeds are reloaded without the account.
+    SignedOut,
+}
+
+/// Anything the reducer accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Msg {
+    Intent(Intent),
+    Event(Event),
+}
+
+impl From<Intent> for Msg {
+    fn from(intent: Intent) -> Self {
+        Msg::Intent(intent)
+    }
+}
+
+impl From<Event> for Msg {
+    fn from(event: Event) -> Self {
+        Msg::Event(event)
+    }
+}

@@ -1,0 +1,10 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: "render(&view_model(&reduce(&s, failed).0))"
+---
+screen=Home heading="Live now" focus=(2, 0) rail_current=0
+select="Watch" retry=true back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img]
+row 1 Landscape "Followed · Live": [nightowl_dev | VALORANT | 4.2K viewers | img] [marrow | VALORANT | 1.9K viewers]
+row 2 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img] [retry]
+row 3 Portrait "Categories": [Just Chatting | img] [VALORANT | img]

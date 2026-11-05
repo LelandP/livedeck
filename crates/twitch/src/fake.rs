@@ -1,0 +1,166 @@
+//! `FakeApi`: an in-memory [`TwitchApi`] for tests and `--mock`.
+//!
+//! It pages through its lists like Helix does: the cursor is the index of the next item as a
+//! string, and the last page has no cursor.
+
+use crate::{
+    Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi, UserInfo,
+};
+
+#[derive(Debug, Clone, Default)]
+pub struct FakeApi {
+    pub top: Vec<StreamInfo>,
+    /// The live streams of followed channels (`followed_streams`).
+    pub followed: Vec<StreamInfo>,
+    /// Every followed channel, live or not (`followed_channels`).
+    pub follows: Vec<FollowedChannel>,
+    pub games: Vec<Game>,
+    pub users: Vec<UserInfo>,
+    /// The token owner returned by `user(None)`. `None` behaves as signed out.
+    pub me: Option<UserInfo>,
+}
+
+impl FakeApi {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Cuts one page out of `items`. Unknown cursors are an error, like Helix's 400.
+fn page_of<T: Clone>(items: &[T], req: &PageRequest) -> Result<Page<T>> {
+    let start = match &req.after {
+        None => 0,
+        Some(c) => c
+            .parse::<usize>()
+            .ok()
+            .filter(|&i| i <= items.len())
+            .ok_or_else(|| Error::Api {
+                status: 400,
+                message: format!("invalid cursor {c:?}"),
+            })?,
+    };
+    let end = (start + usize::from(req.first)).min(items.len());
+    Ok(Page {
+        items: items[start..end].to_vec(),
+        cursor: (end < items.len()).then(|| end.to_string()),
+    })
+}
+
+impl TwitchApi for FakeApi {
+    async fn top_streams(&self, page: PageRequest) -> Result<Page<StreamInfo>> {
+        page_of(&self.top, &page)
+    }
+
+    async fn followed_streams(&self, user_id: &str, page: PageRequest) -> Result<Page<StreamInfo>> {
+        match &self.me {
+            Some(me) if me.id == user_id => page_of(&self.followed, &page),
+            Some(_) => Err(Error::Api {
+                status: 400,
+                message: "user_id must match the token owner".into(),
+            }),
+            None => Err(Error::NotSignedIn),
+        }
+    }
+
+    async fn followed_channels(
+        &self,
+        user_id: &str,
+        page: PageRequest,
+    ) -> Result<Page<FollowedChannel>> {
+        match &self.me {
+            Some(me) if me.id == user_id => page_of(&self.follows, &page),
+            Some(_) => Err(Error::Api {
+                status: 400,
+                message: "user_id must match the token owner".into(),
+            }),
+            None => Err(Error::NotSignedIn),
+        }
+    }
+
+    async fn top_categories(&self, page: PageRequest) -> Result<Page<Game>> {
+        page_of(&self.games, &page)
+    }
+
+    async fn streams_by_category(
+        &self,
+        game_id: &str,
+        page: PageRequest,
+    ) -> Result<Page<StreamInfo>> {
+        let all: Vec<_> = self
+            .top
+            .iter()
+            .chain(&self.followed)
+            .filter(|s| s.game_id == game_id)
+            .cloned()
+            .collect();
+        page_of(&all, &page)
+    }
+
+    async fn user(&self, login: Option<&str>) -> Result<Option<UserInfo>> {
+        match login {
+            None => self.me.clone().map(Some).ok_or(Error::NotSignedIn),
+            Some(login) => Ok(self
+                .users
+                .iter()
+                .chain(&self.me)
+                .find(|u| u.login.eq_ignore_ascii_case(login))
+                .cloned()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stream(login: &str, game_id: &str) -> StreamInfo {
+        StreamInfo {
+            user_id: format!("id-{login}"),
+            user_login: login.into(),
+            user_name: login.into(),
+            game_id: game_id.into(),
+            game_name: format!("game {game_id}"),
+            title: String::new(),
+            viewer_count: 1,
+            thumbnail_url: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn pages_like_helix() {
+        let api = FakeApi {
+            top: (0..5).map(|i| stream(&format!("s{i}"), "1")).collect(),
+            ..FakeApi::new()
+        };
+        let p1 = api.top_streams(PageRequest::first(2)).await.unwrap();
+        assert_eq!(p1.items.len(), 2);
+        assert_eq!(p1.cursor.as_deref(), Some("2"));
+        let p3 = api.top_streams(PageRequest::after(2, "4")).await.unwrap();
+        assert_eq!(p3.items[0].user_login, "s4");
+        assert_eq!(p3.cursor, None);
+        assert!(api.top_streams(PageRequest::after(2, "x")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn followed_needs_the_signed_in_user() {
+        let api = FakeApi::new();
+        let err = api.followed_streams("1", PageRequest::default()).await;
+        assert!(matches!(err, Err(Error::NotSignedIn)));
+        assert!(matches!(api.user(None).await, Err(Error::NotSignedIn)));
+        assert_eq!(api.user(Some("nobody")).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn filters_by_category() {
+        let api = FakeApi {
+            top: vec![stream("a", "1"), stream("b", "2"), stream("c", "1")],
+            ..FakeApi::new()
+        };
+        let page = api
+            .streams_by_category("1", PageRequest::default())
+            .await
+            .unwrap();
+        let logins: Vec<_> = page.items.iter().map(|s| s.user_login.as_str()).collect();
+        assert_eq!(logins, ["a", "c"]);
+    }
+}

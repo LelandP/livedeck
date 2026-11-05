@@ -1,0 +1,22 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+open=false overlay=false status="Connecting…"
+open=false overlay=false status="No messages yet"
+open=false overlay=false status=""
+Message #1e90ff badges=2 ModMarie: nice play <Kappa>
+Message #717187 badges=0 Troll: buy followers
+Action #ff69b4 badges=0 Waver: waves at chat
+Notice #d6ff3a badges=0 : This room is now in slow mode.
+Message #d6ff3a badges=0 plain_pat: no colour set
+open=false overlay=false status=""
+Message #1e90ff badges=2 ModMarie: nice play <Kappa>
+Action #ff69b4 badges=0 Waver: waves at chat
+Notice #d6ff3a badges=0 : This room is now in slow mode.
+Message #d6ff3a badges=0 plain_pat: no colour set
+open=true overlay=true status="Reconnecting…"
+Message #1e90ff badges=2 ModMarie: nice play <Kappa>
+Action #ff69b4 badges=0 Waver: waves at chat
+Notice #d6ff3a badges=0 : This room is now in slow mode.
+Message #d6ff3a badges=0 plain_pat: no colour set

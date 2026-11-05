@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LiveDeck
+GenericName=Twitch client
+Comment=Couch-first, controller-only Twitch client (unofficial)
+Exec=livedeck
+Icon=io.github.livedeck.LiveDeck
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=twitch;stream;live;chat;
+StartupNotify=false

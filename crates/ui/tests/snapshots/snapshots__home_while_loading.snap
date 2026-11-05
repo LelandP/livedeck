@@ -1,0 +1,8 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: render(&view_model(&s))
+---
+screen=Home heading="Live now" focus=(0, 0) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Hero "": [skeleton]
+row 1 Landscape "": [skeleton] [skeleton] [skeleton] [skeleton] [skeleton]
