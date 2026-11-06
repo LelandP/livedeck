@@ -196,6 +196,8 @@ pub struct ViewModel {
     pub quality_label: String,
     /// "On" or "Off".
     pub live_notifications_label: String,
+    /// "On" or "Off".
+    pub background_play_label: String,
     /// The newest "is live" popups, at most `TOASTS_SHOWN`, newest first.
     pub toasts: Vec<ToastVm>,
     /// How many more there are than `toasts` shows ("+2 more"). 0 for none.
@@ -237,6 +239,14 @@ pub struct ViewModel {
     pub subscribe_qr_width: i32,
     /// The card offers "A: Open in browser" (not in Game Mode).
     pub subscribe_can_open: bool,
+    /// The raid card is open over the stream: A goes now, B stays.
+    pub raid_open: bool,
+    /// "<from> is raiding <to>". Empty while the card is closed.
+    pub raid_title: String,
+    /// "with 1,234 viewers". Empty while the card is closed, or when nobody came along.
+    pub raid_viewers: String,
+    /// Whole seconds left before following.
+    pub raid_seconds: i32,
     /// The Search screen's text as typed.
     pub search_query: String,
     /// The focused key, as an index into `htpc_core::keyboard::layout()`.
@@ -386,6 +396,28 @@ pub fn format_viewers(viewers: u64) -> String {
     }
     let tenths_m = (viewers + 50_000) / 100_000;
     format!("{}.{}M", tenths_m / 10, tenths_m % 10)
+}
+
+/// A count with thousands separators: `1,234`, `48,100`.
+pub fn format_count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The raid card's second line. Empty when nobody came along.
+fn raid_viewers(viewers: u64) -> String {
+    match viewers {
+        0 => String::new(),
+        1 => "with 1 viewer".to_owned(),
+        n => format!("with {} viewers", format_count(n)),
+    }
 }
 
 fn row_title(kind: RowKind, grid: bool) -> &'static str {
@@ -593,6 +625,15 @@ fn chat_line(m: &ChatMessage) -> ChatLineVm {
     }
 }
 
+/// How a Settings switch shows its value.
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "On"
+    } else {
+        "Off"
+    }
+}
+
 /// What the chat header says about the connection. Empty when everything is fine.
 fn chat_status_text(state: &AppState) -> &'static str {
     match state.chat_status {
@@ -772,6 +813,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         None => (String::new(), Vec::new(), 0),
     };
     let subscribe_open = subscribe_page.is_some();
+    let raid = state.raid.as_ref().filter(|_| on_player);
 
     // The feed drawn is the current screen's, or the one under an overlay.
     let id = state.visible_feed_id();
@@ -815,14 +857,18 @@ pub fn view_model(state: &AppState) -> ViewModel {
         let label = match state.settings_focus {
             SettingsRow::Account if state.is_signed_in() => "Sign out",
             SettingsRow::Account => "Sign in",
-            SettingsRow::ChatLayout | SettingsRow::Quality | SettingsRow::LiveNotifications => {
-                "Change"
-            }
+            SettingsRow::ChatLayout
+            | SettingsRow::Quality
+            | SettingsRow::LiveNotifications
+            | SettingsRow::BackgroundPlay => "Change",
         };
         (label, false)
     } else if search_on_keys {
         // X is backspace on the keyboard, not retry.
         (key_label(state.search.keys.key()), false)
+    } else if raid.is_some() {
+        // The card takes only A and B.
+        ("Go now", false)
     } else if subscribe_open {
         // Only B, in Game Mode.
         let label = if state.can_open_browser {
@@ -882,12 +928,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
         settings_focus: to_i32(state.settings_focus.index()),
         chat_layout_label: state.settings.chat_layout.label().to_owned(),
         quality_label: state.settings.quality.label().to_owned(),
-        live_notifications_label: if state.settings.live_notifications {
-            "On"
-        } else {
-            "Off"
-        }
-        .to_owned(),
+        live_notifications_label: on_off(state.settings.live_notifications).to_owned(),
+        background_play_label: on_off(state.settings.background_play).to_owned(),
         toasts: state.toasts.iter().take(TOASTS_SHOWN).map(toast).collect(),
         toast_more: to_i32(state.toasts.len().saturating_sub(TOASTS_SHOWN)),
         playback,
@@ -908,6 +950,12 @@ pub fn view_model(state: &AppState) -> ViewModel {
         subscribe_qr,
         subscribe_qr_width,
         subscribe_can_open: subscribe_open && state.can_open_browser,
+        raid_open: raid.is_some(),
+        raid_title: raid
+            .map(|r| format!("{} is raiding {}", r.from, r.to_name))
+            .unwrap_or_default(),
+        raid_viewers: raid.map(|r| raid_viewers(r.viewers)).unwrap_or_default(),
+        raid_seconds: raid.map_or(0, |r| i32::from(r.seconds_left)),
         search_query: state.search.query.clone(),
         search_key_focus: to_i32(state.search.keys.index()),
         search_on_keys,
@@ -1073,6 +1121,7 @@ impl Update {
         ui.set_chat_layout_label(vm.chat_layout_label.into());
         ui.set_quality_label(vm.quality_label.into());
         ui.set_live_notifications_label(vm.live_notifications_label.into());
+        ui.set_background_play_label(vm.background_play_label.into());
         ui.set_playback(vm.playback as i32);
         ui.set_playback_error(vm.playback_error.into());
         ui.set_playback_details(vm.playback_details.into());
@@ -1097,6 +1146,10 @@ impl Update {
         ui.set_subscribe_open(vm.subscribe_open);
         ui.set_subscribe_url(vm.subscribe_url.into());
         ui.set_subscribe_can_open(vm.subscribe_can_open);
+        ui.set_raid_open(vm.raid_open);
+        ui.set_raid_title(vm.raid_title.into());
+        ui.set_raid_viewers(vm.raid_viewers.into());
+        ui.set_raid_seconds(vm.raid_seconds);
         // The keys never change, so they are handed over once (recreating them would restart
         // their focus animations on every update).
         if ui.get_search_keys().row_count() == 0 {
@@ -1466,6 +1519,7 @@ mod tests {
     fn stream(channel: &str, viewers: u64, thumb: Option<&str>) -> Tile {
         Tile::Stream(Stream {
             channel: channel.into(),
+            user_id: String::new(),
             title: format!("{channel} title"),
             category: "VALORANT".into(),
             viewers,
@@ -2062,6 +2116,7 @@ mod tests {
         assert_eq!(vm.chat_layout_label, "Side panel");
         assert_eq!(vm.quality_label, "Best available");
         assert_eq!(vm.live_notifications_label, "On");
+        assert_eq!(vm.background_play_label, "Off");
 
         let (s, _) = reduce(&s, Intent::Down);
         let (s, _) = reduce(&s, Intent::Select);

@@ -402,6 +402,41 @@ impl<A: TwitchApi> ApiProvider<A> {
             .collect()
     }
 
+    /// What Twitch knows of one channel: its live stream, or for a channel that is not live just
+    /// its user id. `None` (logged) if neither can be had.
+    async fn stream_info(&self, channel: &str) -> Option<Event> {
+        match self.api.streams_by_login(&[channel.to_owned()]).await {
+            Ok(found) => {
+                if let Some(s) = found
+                    .iter()
+                    .find(|s| s.user_login.eq_ignore_ascii_case(channel))
+                {
+                    return Some(Event::StreamInfo(stream_of(s, refresh_bucket())));
+                }
+            }
+            Err(err) => {
+                tracing::debug!(%err, channel, "could not look up the stream");
+                return None;
+            }
+        }
+        match self.api.user(Some(channel)).await {
+            Ok(Some(user)) => Some(Event::StreamInfo(Stream {
+                channel: user.login.clone(),
+                user_id: user.id,
+                title: String::new(),
+                category: String::new(),
+                viewers: 0,
+                tint: tint_for(&user.login),
+                thumbnail: None,
+            })),
+            Ok(None) => None,
+            Err(err) => {
+                tracing::debug!(%err, channel, "could not look up the channel");
+                None
+            }
+        }
+    }
+
     /// One more page of a row. `IntegrityRequired` is the anonymous GQL API's answer to every
     /// page after the first, so it ends the row instead of failing it.
     async fn load_more(&self, feed: FeedId, kind: RowKind, cursor: String) -> Event {
@@ -493,11 +528,18 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                     Err(message) => vec![Event::SearchFailed { id, message }],
                 }
             }
+            Command::FetchStreamInfo { channel } => {
+                self.stream_info(&channel).await.into_iter().collect()
+            }
             // Playback commands run in `playback.rs`, chat in `chat.rs`, the login ones in
-            // `session.rs`, the sleep timer in `sleep.rs`, and thumbnails and chat images are
-            // delivered through `Provider::thumbnail`, so none of them produces events here. The
-            // store runs `Quit`.
-            Command::Play { .. }
+            // `session.rs`, the sleep timer in `sleep.rs`, raids in `raids.rs`, and thumbnails
+            // and chat images are delivered through `Provider::thumbnail`, so none of them
+            // produces events here. The store runs `Quit`.
+            Command::WatchRaids { .. }
+            | Command::StopRaids
+            | Command::DisconnectRaids
+            | Command::StartRaidCountdown { .. }
+            | Command::Play { .. }
             | Command::SetPaused(_)
             | Command::StopPlayback
             | Command::SetPlayerOption(_)
@@ -591,6 +633,7 @@ fn stream(s: &StreamInfo, bucket: u64) -> Tile {
 fn stream_of(s: &StreamInfo, bucket: u64) -> Stream {
     Stream {
         channel: s.user_login.clone(),
+        user_id: s.user_id.clone(),
         title: s.title.clone(),
         category: s.game_name.clone(),
         viewers: s.viewer_count,
@@ -605,6 +648,7 @@ fn stream_of(s: &StreamInfo, bucket: u64) -> Stream {
 fn channel_stream(c: &ChannelResult) -> Tile {
     Tile::Stream(Stream {
         channel: c.broadcaster_login.clone(),
+        user_id: c.id.clone(),
         title: c.title.clone(),
         category: c.game_name.clone(),
         viewers: 0,
@@ -1322,5 +1366,51 @@ mod tests {
         *viewer.lock().unwrap() = None;
         let again = rows_of(provider.load_feed(FeedId::Home).await);
         assert!(!kinds(&again).contains(&RowKind::FollowedLive));
+    }
+
+    fn fetch_info(channel: &str) -> Command {
+        Command::FetchStreamInfo {
+            channel: channel.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_info_has_the_live_stream_and_its_user_id() {
+        let mut api = FakeApi::new();
+        let mut live = api_with_top(1).top.remove(0);
+        live.user_login = "next_up".into();
+        live.user_id = "200".into();
+        live.title = "Just got raided".into();
+        live.game_name = "Art".into();
+        api.top = vec![live];
+        let events = ApiProvider::new(api).execute(fetch_info("Next_Up")).await;
+        let [Event::StreamInfo(s)] = events.as_slice() else {
+            panic!("one StreamInfo expected, got {events:?}");
+        };
+        assert_eq!((s.channel.as_str(), s.user_id.as_str()), ("next_up", "200"));
+        assert_eq!(
+            (s.title.as_str(), s.category.as_str()),
+            ("Just got raided", "Art")
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_info_of_an_offline_channel_still_has_its_user_id() {
+        let mut api = FakeApi::new();
+        api.users = vec![htpc_twitch_api::UserInfo {
+            id: "555".into(),
+            login: "sleepy".into(),
+            display_name: "Sleepy".into(),
+            profile_image_url: String::new(),
+        }];
+        let provider = ApiProvider::new(api);
+        let events = provider.execute(fetch_info("sleepy")).await;
+        let [Event::StreamInfo(s)] = events.as_slice() else {
+            panic!("one StreamInfo expected, got {events:?}");
+        };
+        assert_eq!(s.user_id, "555");
+        assert!(s.title.is_empty() && s.viewers == 0);
+        // Nobody by that name: nothing to report.
+        assert!(provider.execute(fetch_info("nobody")).await.is_empty());
     }
 }

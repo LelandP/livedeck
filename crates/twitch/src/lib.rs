@@ -5,11 +5,13 @@
 //! - [`GqlClient`]: anonymous browsing for logged-out users over Twitch's internal, unofficial GQL
 //!   API. First pages only.
 //! - [`FakeApi`]: canned in-memory data, for tests and `--mock`.
+//! - [`EventSub`]: Twitch's push events over a WebSocket (raids of the channel on screen).
 //!
 //! This crate does not depend on `htpc-core`. The app maps the Helix types to domain types.
 
 mod auth;
 mod error;
+mod eventsub;
 mod fake;
 mod fake_auth;
 mod gql;
@@ -27,6 +29,10 @@ pub use auth::{
     DEVICE_GRANT_TYPE, SCOPE_READ_FOLLOWS,
 };
 pub use error::{Error, Result};
+pub use eventsub::{
+    EventSub, EventSubConfig, EventSubEvent, FakeEventSub, FakeEventSubCall, Raid, RaidWatch,
+    Socket, SocketConnector, SocketFuture, TokenSource, WsConnector, DEFAULT_EVENTSUB_URL, RAID,
+};
 pub use fake::FakeApi;
 pub use fake_auth::{FakeAuth, FakeAuthCall};
 pub use gql::{GqlClient, GQL_MAX_PAGE_SIZE, GQL_URL, WEB_CLIENT_ID};

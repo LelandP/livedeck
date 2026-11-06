@@ -23,7 +23,7 @@ pub use msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption, StreamKind
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
 pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{
-    subscribe_url, AppState, CategoryFeed, Feed, Focus, Playback, PlayerMenuRow, RailEntry,
-    RailState, Screen, SearchState, SessionOptions, SettingsRow, SleepTimer, Toast,
-    SEARCH_MIN_CHARS, SLEEP_STEPS, TOASTS_KEPT, TOASTS_SHOWN,
+    subscribe_url, AppState, CategoryFeed, Feed, Focus, Playback, PlayerMenuRow, RaidOffer,
+    RailEntry, RailState, Screen, SearchState, SessionOptions, SettingsRow, SleepTimer, Toast,
+    RAID_SECONDS, SEARCH_MIN_CHARS, SLEEP_STEPS, TOASTS_KEPT, TOASTS_SHOWN,
 };

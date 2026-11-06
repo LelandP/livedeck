@@ -57,6 +57,7 @@ export component MainWindow inherits Window {
     in property <string> chat-layout-label: "";
     in property <string> quality-label: "";
     in property <string> live-notifications-label: "";
+    in property <string> background-play-label: "";
     // "<channel> is live" popups, newest first (at most three), and how many more there are.
     in property <[ToastItem]> toasts;
     in property <int> toast-more: 0;
@@ -120,6 +121,12 @@ export component MainWindow inherits Window {
     in property <image> subscribe-qr;
     in property <string> subscribe-url: "";
     in property <bool> subscribe-can-open: false;
+    // The raid card over the stream (the channel on screen raided another one): A goes now, B
+    // stays, and it follows by itself when the countdown ends.
+    in property <bool> raid-open: false;
+    in property <string> raid-title: "";
+    in property <string> raid-viewers: "";
+    in property <int> raid-seconds: 0;
     // The area mpv renders into (logical px). Rust multiplies by the scale factor. Not animated
     // with the chat slide, so the texture is allocated once per layout change.
     out property <length> video-w: root.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
@@ -271,6 +278,7 @@ export component MainWindow inherits Window {
         chat-layout: root.chat-layout-label;
         quality: root.quality-label;
         live-notifications: root.live-notifications-label;
+        background-play: root.background-play-label;
         version: root.version;
         focus-row: root.rail-focused ? -1 : root.settings-focus;
     }
@@ -313,6 +321,10 @@ export component MainWindow inherits Window {
         subscribe-qr: root.subscribe-qr;
         subscribe-url: root.subscribe-url;
         subscribe-can-open: root.subscribe-can-open;
+        raid-open: root.raid-open;
+        raid-title: root.raid-title;
+        raid-viewers: root.raid-viewers;
+        raid-seconds: root.raid-seconds;
     }
 
     // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
@@ -417,7 +429,7 @@ export component MainWindow inherits Window {
         background: #0e0e10f0;
         // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
         // comes back on any button. Loading, paused and error screens keep it.
-        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning ? 0.0 : 1.0;
+        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open ? 0.0 : 1.0;
         animate opacity { duration: Theme.t-med; }
 
         // During the sleep warning every button does the same thing.
@@ -428,8 +440,18 @@ export component MainWindow inherits Window {
             Hint { glyph: "A"; label: "Any button: keep watching"; clicked => { root.action(UiAction.select); } }
         }
 
+        // The raid card takes only A and B.
+        if root.raid-open && !root.sleep-warning : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 36px;
+            alignment: end;
+            Hint { glyph: "A"; label: "Go now"; clicked => { root.action(UiAction.select); } }
+            Hint { glyph: "B"; label: "Stay"; clicked => { root.action(UiAction.back); } }
+        }
+
         // Empty while the quit prompt is open: the prompt shows its own buttons.
-        if !root.exit-prompt && !root.sleep-warning : HorizontalLayout {
+        if !root.exit-prompt && !root.sleep-warning && !root.raid-open : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 36px;

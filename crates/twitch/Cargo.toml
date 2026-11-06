@@ -7,6 +7,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+async-tungstenite.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -18,3 +20,8 @@ tracing.workspace = true
 tokio.workspace = true
 wiremock.workspace = true
 serde_json.workspace = true
+# Only for the `gql_probe` and `eventsub_probe` examples: argument parsing, the stored token and
+# the probe's log.
+pico-args.workspace = true
+htpc-storage.workspace = true
+tracing-subscriber.workspace = true

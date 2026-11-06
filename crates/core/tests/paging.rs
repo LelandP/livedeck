@@ -6,6 +6,7 @@ use htpc_core::*;
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
         channel: channel.into(),
+        user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
         viewers: 10,
@@ -17,6 +18,7 @@ fn stream(channel: &str) -> Tile {
 fn stream_with_image(channel: &str) -> Tile {
     Tile::Stream(Stream {
         channel: channel.into(),
+        user_id: String::new(),
         title: String::new(),
         category: String::new(),
         viewers: 10,

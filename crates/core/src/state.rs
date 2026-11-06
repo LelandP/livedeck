@@ -93,14 +93,17 @@ pub enum SettingsRow {
     Quality,
     /// On or off: a popup when a followed channel goes live.
     LiveNotifications,
+    /// On or off: keep playing while another app has focus.
+    BackgroundPlay,
 }
 
 impl SettingsRow {
-    pub const ALL: [SettingsRow; 4] = [
+    pub const ALL: [SettingsRow; 5] = [
         SettingsRow::Account,
         SettingsRow::ChatLayout,
         SettingsRow::Quality,
         SettingsRow::LiveNotifications,
+        SettingsRow::BackgroundPlay,
     ];
 
     pub fn index(self) -> usize {
@@ -210,6 +213,26 @@ impl SleepTimer {
         let at = all.iter().position(|m| *m == minutes).unwrap_or(0) as isize;
         all[(at + if forward { 1 } else { -1 }).rem_euclid(len) as usize]
     }
+}
+
+/// Seconds the raid card counts down before following the raid.
+pub const RAID_SECONDS: u8 = 10;
+
+/// The channel on screen raided another one: the card offering to follow it, while it counts down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RaidOffer {
+    /// Goes up with every offer, so ticks of an older countdown are ignored.
+    pub id: u32,
+    /// The channel that raided (the one on screen when it came).
+    pub from: String,
+    /// Login of the raided channel.
+    pub to_login: String,
+    /// The raided channel's name as the streamer writes it.
+    pub to_name: String,
+    /// How many viewers came along.
+    pub viewers: u64,
+    /// Whole seconds left before following.
+    pub seconds_left: u8,
 }
 
 /// A "<channel> is live" popup. It only informs: no button acts on it, and the app removes it
@@ -406,6 +429,11 @@ pub struct AppState {
     /// first frame replaces it, and any failure just schedules the next recheck.
     pub rechecking: bool,
     pub paused: bool,
+    /// Another app has focus (the window lost it). Starts false: the window opens in front.
+    pub in_background: bool,
+    /// The stream was paused because the app went to the background (`Settings::background_play`
+    /// off), so it resumes when the app comes back. A pause by the user is never undone.
+    pub background_paused: bool,
     /// The player menu is open on this row (Start on the Player screen). It takes the D-pad.
     pub player_menu: Option<PlayerMenuRow>,
     /// The player menu's choices for this run of the app.
@@ -444,6 +472,11 @@ pub struct AppState {
     pub toasts: Vec<Toast>,
     /// The id of the last toast, kept so ids never repeat.
     pub last_toast_id: u32,
+    /// The raid card over the stream, while it is open. Signed in only. It takes A and B and
+    /// ignores the other buttons.
+    pub raid: Option<RaidOffer>,
+    /// The id of the last raid offer, kept so ids never repeat.
+    pub last_raid_id: u32,
 }
 
 /// The Twitch page to subscribe to `channel`. The channel is a Twitch login (letters, digits and

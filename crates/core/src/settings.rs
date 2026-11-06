@@ -274,6 +274,9 @@ pub struct Settings {
     pub quality: Quality,
     /// A popup when a followed channel goes live (signed in only). Off stops the polling.
     pub live_notifications: bool,
+    /// The stream keeps playing while another app has focus. Off pauses it until the app is
+    /// back in front.
+    pub background_play: bool,
 }
 
 impl Default for Settings {
@@ -282,6 +285,7 @@ impl Default for Settings {
             chat_layout: ChatLayout::default(),
             quality: Quality::default(),
             live_notifications: true,
+            background_play: false,
         }
     }
 }
@@ -328,6 +332,11 @@ mod tests {
     #[test]
     fn live_notifications_are_on_by_default() {
         assert!(Settings::default().live_notifications);
+    }
+
+    #[test]
+    fn background_play_is_off_by_default() {
+        assert!(!Settings::default().background_play);
     }
 
     #[test]

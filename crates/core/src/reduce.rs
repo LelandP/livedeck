@@ -9,8 +9,8 @@ use crate::domain::{grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RowKind,
 use crate::keyboard::{self, Key};
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 use crate::state::{
-    subscribe_url, AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen,
-    SearchState, SettingsRow, SleepTimer, Toast, TOASTS_KEPT,
+    subscribe_url, AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RaidOffer, RailEntry,
+    Screen, SearchState, SettingsRow, SleepTimer, Toast, RAID_SECONDS, TOASTS_KEPT,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -160,6 +160,10 @@ fn change_setting(s: &mut AppState, row: SettingsRow, forward: bool, cmds: &mut 
                 });
             }
         }
+        // On or off. It is only read when the window loses focus, so nothing to apply now.
+        SettingsRow::BackgroundPlay => {
+            s.settings.background_play = !s.settings.background_play;
+        }
     }
     cmds.push(Command::SaveSettings(s.settings));
 }
@@ -214,6 +218,10 @@ fn open_following(s: &mut AppState, cmds: &mut Vec<Command>) {
 }
 
 fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    if s.raid.is_some() {
+        raid_intent(s, intent, cmds);
+        return;
+    }
     if s.subscribe_card {
         subscribe_card_intent(s, intent, cmds);
         return;
@@ -352,6 +360,160 @@ fn subscribe_card_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Comman
     pulse_hud(s);
 }
 
+/// Input while the raid card is open. A follows the raid at once, B stays on this channel. Every
+/// other button is ignored, so a random press does not count as a choice.
+fn raid_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    match intent {
+        Intent::Select => follow_raid(s, cmds),
+        // The countdown may still tick: its id no longer matches anything.
+        Intent::Back => s.raid = None,
+        _ => {}
+    }
+}
+
+/// The channel on screen raided another one. Signed in, it opens the raid card (closing the menu
+/// and the subscribe card) and starts its countdown. A repeat for the raid already on the card,
+/// and anything about another channel, is ignored.
+fn raided(
+    s: &mut AppState,
+    from: String,
+    to_login: String,
+    to_name: String,
+    viewers: u64,
+    cmds: &mut Vec<Command>,
+) {
+    let on_screen = s.is_signed_in()
+        && s.screen == Screen::Player
+        && s.now_playing
+            .as_ref()
+            .is_some_and(|p| p.channel.eq_ignore_ascii_case(&from));
+    if !on_screen || to_login.is_empty() || to_login.eq_ignore_ascii_case(&from) {
+        return;
+    }
+    if s.raid
+        .as_ref()
+        .is_some_and(|r| r.to_login.eq_ignore_ascii_case(&to_login))
+    {
+        return;
+    }
+    s.last_raid_id = s.last_raid_id.wrapping_add(1);
+    let id = s.last_raid_id;
+    s.player_menu = None;
+    s.subscribe_card = false;
+    s.raid = Some(RaidOffer {
+        id,
+        from,
+        to_name: if to_name.is_empty() {
+            to_login.clone()
+        } else {
+            to_name
+        },
+        to_login,
+        viewers,
+        seconds_left: RAID_SECONDS,
+    });
+    cmds.push(Command::StartRaidCountdown {
+        id,
+        seconds: RAID_SECONDS,
+    });
+}
+
+/// Goes to the raided channel. The Player screen stays (it is replaced, not stacked, so B returns
+/// to the browse screens). Chat moves along, and the player menu's choices, the sleep timer and
+/// audio only carry over: following a raid feels like the same session. Title and category are
+/// empty until `Event::StreamInfo` brings them, with the user id for the next raid.
+fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
+    let Some(offer) = s.raid.take() else {
+        return;
+    };
+    if s.screen != Screen::Player {
+        return;
+    }
+    let tint = s.now_playing.as_ref().map(|p| p.tint).unwrap_or_default();
+    let stream = Stream {
+        channel: offer.to_login.clone(),
+        user_id: String::new(),
+        title: String::new(),
+        category: String::new(),
+        viewers: 0,
+        tint,
+        thumbnail: None,
+    };
+    s.player_menu = None;
+    s.subscribe_card = false;
+    s.chat.clear();
+    s.chat_status = ChatStatus::Connecting;
+    // The old channel's subscription. The new one follows once its user id is known.
+    if s.is_signed_in() {
+        cmds.push(Command::StopRaids);
+    }
+    cmds.push(Command::JoinChat {
+        channel: stream.channel.clone(),
+    });
+    s.now_playing = Some(stream);
+    start_playback(s, cmds);
+    cmds.push(Command::FetchStreamInfo {
+        channel: offer.to_login,
+    });
+}
+
+/// Signed in, asks for raids of the stream on screen: by its user id, or after looking it up when
+/// the card it came from did not have one.
+fn watch_raids(s: &AppState, cmds: &mut Vec<Command>) {
+    if !s.is_signed_in() || s.screen != Screen::Player {
+        return;
+    }
+    let Some(stream) = &s.now_playing else {
+        return;
+    };
+    if stream.user_id.is_empty() {
+        cmds.push(Command::FetchStreamInfo {
+            channel: stream.channel.clone(),
+        });
+    } else {
+        cmds.push(Command::WatchRaids {
+            broadcaster_id: stream.user_id.clone(),
+        });
+    }
+}
+
+/// Fills in what Twitch knows of the stream on screen. A user id that was missing starts the raid
+/// watch.
+fn stream_info(s: &mut AppState, info: Stream, cmds: &mut Vec<Command>) {
+    if s.screen != Screen::Player {
+        return;
+    }
+    let Some(p) = s
+        .now_playing
+        .as_mut()
+        .filter(|p| p.channel.eq_ignore_ascii_case(&info.channel))
+    else {
+        return;
+    };
+    let had_id = !p.user_id.is_empty();
+    if !info.user_id.is_empty() {
+        p.user_id = info.user_id;
+    }
+    if !info.title.is_empty() {
+        p.title = info.title;
+    }
+    if !info.category.is_empty() {
+        p.category = info.category;
+    }
+    if info.viewers > 0 {
+        p.viewers = info.viewers;
+    }
+    if p.thumbnail.is_none() {
+        if let Some(url) = info.thumbnail {
+            p.thumbnail = Some(url.clone());
+            cmds.push(Command::FetchThumbnails { urls: vec![url] });
+        }
+    }
+    if !had_id && !p.user_id.is_empty() {
+        watch_raids(s, cmds);
+    }
+}
+
 /// Sets a fresh sleep timer of `minutes` (replacing any running one) and asks the app to run it.
 fn start_sleep(s: &mut AppState, minutes: u16, cmds: &mut Vec<Command>) {
     s.last_sleep_id = s.last_sleep_id.wrapping_add(1);
@@ -382,6 +544,7 @@ fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.playback = Playback::Loading;
     s.rechecking = false;
     s.paused = false;
+    s.background_paused = false;
     // The numbers of the last stream mean nothing for this one.
     s.stats = None;
     pulse_hud(s);
@@ -393,6 +556,7 @@ fn go_offline(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.playback = Playback::Offline;
     s.rechecking = false;
     s.paused = false;
+    s.background_paused = false;
     s.offline_recheck = s.offline_recheck.wrapping_add(1);
     cmds.push(Command::ScheduleOfflineRecheck {
         id: s.offline_recheck,
@@ -425,8 +589,44 @@ fn push_play(s: &AppState, cmds: &mut Vec<Command>) {
 
 fn toggle_pause(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.paused = !s.paused;
+    // From here the pause (or the playing) is the user's choice, not the background's.
+    s.background_paused = false;
     pulse_hud(s);
     cmds.push(Command::SetPaused(s.paused));
+}
+
+/// The window gained or lost focus. Without background play, a stream playing when the user
+/// switches away is paused, and resumes when they come back, unless they paused or left it.
+fn window_focus(s: &mut AppState, focused: bool, cmds: &mut Vec<Command>) {
+    s.in_background = !focused;
+    if !focused {
+        pause_in_background(s, cmds);
+        return;
+    }
+    if std::mem::take(&mut s.background_paused)
+        && s.screen == Screen::Player
+        && s.playback == Playback::Playing
+        && s.paused
+    {
+        s.paused = false;
+        pulse_hud(s);
+        cmds.push(Command::SetPaused(false));
+    }
+}
+
+/// Pauses the playing stream if the app is in the background and the setting says not to play
+/// there. Also run when a stream starts, since one can finish loading after the user left.
+fn pause_in_background(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.in_background
+        && !s.settings.background_play
+        && s.screen == Screen::Player
+        && s.playback == Playback::Playing
+        && !s.paused
+    {
+        s.paused = true;
+        s.background_paused = true;
+        cmds.push(Command::SetPaused(true));
+    }
 }
 
 /// The current feed is separate rows (Home, Following), where each row keeps its own column.
@@ -718,6 +918,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.playback = Playback::Playing;
                 s.rechecking = false;
                 pulse_hud(s);
+                pause_in_background(s, cmds);
             }
         }
         Event::PlaybackEnded => {
@@ -730,10 +931,12 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             if s.screen == Screen::Player && active {
                 s.playback = Playback::Failed(message);
                 s.paused = false;
+                s.background_paused = false;
             } else if s.screen == Screen::Player {
                 recheck_failed(s, cmds);
             }
         }
+        Event::WindowFocus(focused) => window_focus(s, focused, cmds),
         Event::OfflineRecheckDue(id) => {
             let due = id == s.offline_recheck && !s.rechecking;
             if due && s.screen == Screen::Player && s.playback == Playback::Offline {
@@ -769,6 +972,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             if s.wants_live_watch() {
                 cmds.push(Command::StartLiveWatch);
             }
+            // A stream already on screen is watched for raids from now on.
+            watch_raids(s, cmds);
             if s.screen == Screen::Login {
                 // Polling already finished, so no CancelLogin is needed.
                 s.login = None;
@@ -786,6 +991,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             // Live notifications are about the account's follows.
             s.toasts.clear();
             cmds.push(Command::StopLiveWatch);
+            // Raids need the account's token.
+            s.raid = None;
+            cmds.push(Command::DisconnectRaids);
             // The results came from the account. The id carries on, so a late answer to an
             // old search can never pass for a new one.
             s.search = SearchState {
@@ -827,6 +1035,23 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.search.feed.error = Some(message);
             }
         }
+        Event::Raided {
+            from_login,
+            to_login,
+            to_name,
+            viewers,
+        } => raided(s, from_login, to_login, to_name, viewers, cmds),
+        Event::RaidTick { id, left } => {
+            if let Some(offer) = s.raid.as_mut().filter(|r| r.id == id) {
+                offer.seconds_left = left;
+            }
+        }
+        Event::RaidCountdownDone { id } => {
+            if s.raid.as_ref().is_some_and(|r| r.id == id) {
+                follow_raid(s, cmds);
+            }
+        }
+        Event::StreamInfo(info) => stream_info(s, info, cmds),
         Event::WentLive(streams) => went_live(s, streams, cmds),
         Event::ToastExpired(id) => s.toasts.retain(|t| t.id != id),
         Event::SleepTimerTick { id, left_min } => {
@@ -1054,6 +1279,7 @@ fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
         Some(Tile::Channel(channel)) => {
             let stream = Stream {
                 channel: channel.channel,
+                user_id: String::new(),
                 title: String::new(),
                 category: String::new(),
                 viewers: 0,
@@ -1091,6 +1317,7 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.audio_only = false;
     push_screen(s, Screen::Player);
     start_playback(s, cmds);
+    watch_raids(s, cmds);
 }
 
 /// Where a rail entry leads. Following and Search while signed out go to Login (and on to the
@@ -1158,17 +1385,22 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
             s.playback = Playback::Idle;
             s.rechecking = false;
             s.paused = false;
+            s.background_paused = false;
             s.chat.clear();
             s.chat_status = ChatStatus::Idle;
             // The menu's choices stay for the next stream. Its numbers do not.
             s.player_menu = None;
             s.subscribe_card = false;
+            s.raid = None;
             s.stats = None;
             cmds.push(Command::StopPlayback);
             if s.session.stats {
                 cmds.push(Command::SetStats(false));
             }
             cmds.push(Command::LeaveChat);
+            if s.is_signed_in() {
+                cmds.push(Command::StopRaids);
+            }
         }
         Screen::Login => leave_login(s, cmds),
         Screen::Category => s.category = None,

@@ -17,7 +17,7 @@ use htpc_core::{Command, DeviceCode, Event, LoginProblem, User};
 use htpc_storage::{TokenStore, Tokens};
 use htpc_twitch_api::{
     AuthApi, Credentials, DeviceGrant, Error, FakeAuth, HttpAuth, Identity, PollOutcome, Refresher,
-    TokenGrant, SCOPE_READ_FOLLOWS,
+    TokenGrant, TokenSource, SCOPE_READ_FOLLOWS,
 };
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -519,6 +519,15 @@ impl Session {
             Command::SignOut => self.sign_out().await,
             _ => {}
         }
+    }
+}
+
+impl TokenSource for Session {
+    fn credentials(&self) -> Option<Credentials> {
+        lock(&self.inner).tokens.as_ref().map(|t| Credentials {
+            client_id: self.client_id.clone(),
+            access_token: t.access_token.clone(),
+        })
     }
 }
 

@@ -13,6 +13,7 @@ use htpc_ui::{view_model, CardVm, ViewModel};
 fn stream(channel: &str, viewers: u64, image: bool) -> Tile {
     Tile::Stream(Stream {
         channel: channel.into(),
+        user_id: String::new(),
         title: format!("{channel} title"),
         category: "VALORANT".into(),
         viewers,
@@ -396,6 +397,55 @@ fn sleep_timer_countdown_and_warning() {
     let id = s.sleep.unwrap().id;
     let s = reduce(&s, Event::SleepTimerWarning { id }).0;
     out += &sleep_lines(&view_model(&s));
+    insta::assert_snapshot!(out);
+}
+
+fn raid_lines(vm: &ViewModel) -> String {
+    format!(
+        "screen={:?} channel={:?} playback={:?} raid_open={} title={:?} viewers={:?} seconds={} select={:?} retry={}\n",
+        vm.screen,
+        vm.now_playing.channel,
+        vm.playback,
+        vm.raid_open,
+        vm.raid_title,
+        vm.raid_viewers,
+        vm.raid_seconds,
+        vm.select_label,
+        vm.can_retry
+    )
+}
+
+#[test]
+fn raid_card_counts_down_then_follows() {
+    let user = htpc_core::User {
+        login: "viewer".into(),
+    };
+    let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let (s, _) = reduce(&s, Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let raid = |viewers| Event::Raided {
+        from_login: "grandmaster_k".into(),
+        to_login: "next_up".into(),
+        to_name: "Next_Up".into(),
+        viewers,
+    };
+    let mut out = String::from("-- playing\n");
+    out += &raid_lines(&view_model(&s));
+    let s = reduce(&s, raid(48_100)).0;
+    out += "-- raided\n";
+    out += &raid_lines(&view_model(&s));
+    let id = s.raid.as_ref().unwrap().id;
+    let s = reduce(&s, Event::RaidTick { id, left: 3 }).0;
+    out += "-- three seconds left\n";
+    out += &raid_lines(&view_model(&s));
+    out += "-- one viewer, none\n";
+    for viewers in [1, 0] {
+        let (stay, _) = reduce(&s, Intent::Back);
+        out += &raid_lines(&view_model(&reduce(&stay, raid(viewers)).0));
+    }
+    let s = reduce(&s, Event::RaidCountdownDone { id }).0;
+    out += "-- followed\n";
+    out += &raid_lines(&view_model(&s));
     insta::assert_snapshot!(out);
 }
 

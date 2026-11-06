@@ -7,6 +7,7 @@ fn home() -> AppState {
     let (s, _) = init();
     let tile = Tile::Stream(Stream {
         channel: "chan_1".into(),
+        user_id: String::new(),
         title: "title".into(),
         category: "Cat".into(),
         viewers: 1_000,

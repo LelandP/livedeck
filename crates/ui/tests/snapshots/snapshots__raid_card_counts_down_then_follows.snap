@@ -1,0 +1,15 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- playing
+screen=Player channel="grandmaster_k" playback=Playing raid_open=false title="" viewers="" seconds=0 select="Pause" retry=false
+-- raided
+screen=Player channel="grandmaster_k" playback=Playing raid_open=true title="grandmaster_k is raiding Next_Up" viewers="with 48,100 viewers" seconds=10 select="Go now" retry=false
+-- three seconds left
+screen=Player channel="grandmaster_k" playback=Playing raid_open=true title="grandmaster_k is raiding Next_Up" viewers="with 48,100 viewers" seconds=3 select="Go now" retry=false
+-- one viewer, none
+screen=Player channel="grandmaster_k" playback=Playing raid_open=true title="grandmaster_k is raiding Next_Up" viewers="with 1 viewer" seconds=10 select="Go now" retry=false
+screen=Player channel="grandmaster_k" playback=Playing raid_open=true title="grandmaster_k is raiding Next_Up" viewers="" seconds=10 select="Go now" retry=false
+-- followed
+screen=Player channel="next_up" playback=Loading raid_open=false title="" viewers="" seconds=0 select="" retry=false

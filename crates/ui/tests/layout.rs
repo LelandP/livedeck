@@ -37,6 +37,7 @@ fn install_headless_platform() {
 fn watching_a_busy_chat(layout: ChatLayout) -> AppState {
     let stream = Tile::Stream(Stream {
         channel: "chan".into(),
+        user_id: String::new(),
         title: "title".into(),
         category: "cat".into(),
         viewers: 10,
@@ -407,6 +408,52 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the hints bar hides during the sleep warning"
     );
 
+    // The raid card: drawn bottom centre above the HUD text (its border is `Theme.accent-light`),
+    // the hints bar stays on screen after the HUD fades, and the countdown bar (`Theme.accent`)
+    // empties over the 10 s.
+    let mut raided = watching_a_busy_chat(ChatLayout::Side);
+    raided.chat_open = false;
+    raided.playback = htpc_core::Playback::Playing;
+    raided.raid = Some(htpc_core::RaidOffer {
+        id: 1,
+        from: "chan".into(),
+        to_login: "next_up".into(),
+        to_name: "Next_Up".into(),
+        viewers: 1_234,
+        seconds_left: 10,
+    });
+    raided.hud_pulse += 1;
+    Update::full(view_model(&raided)).apply(&ui);
+    render(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10));
+    let image = render(&ui);
+    let card_area = (360..920, 300..610);
+    assert!(
+        count(&image, card_area.0.clone(), card_area.1.clone(), accent) > 0,
+        "the raid card is not drawn"
+    );
+    let bar = |p: &Rgba8Pixel| (100..150).contains(&p.r) && (75..120).contains(&p.g) && p.b > 230;
+    let full = count(&image, card_area.0.clone(), card_area.1.clone(), bar);
+    assert!(full > 1_000, "the countdown bar is not drawn full: {full}");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5_000));
+    let image = render(&ui);
+    let half = count(&image, card_area.0.clone(), card_area.1.clone(), bar);
+    assert!(
+        half < full * 3 / 4 && half > full / 4,
+        "the bar does not empty steadily: {half} of {full} after 5 s"
+    );
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the hints bar fades while the raid card is open"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5_500));
+    let image = render(&ui);
+    assert_eq!(
+        count(&image, card_area.0, card_area.1, bar),
+        0,
+        "the bar is not empty after 10 s"
+    );
+
     // Search: the keyboard lays out under the text field with its focused key (`Theme.accent`, a
     // strong violet) top left, and the first result row is fully in view under it. With the
     // results focused, the keyboard slides away and the rows move up.
@@ -421,6 +468,7 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
             .map(|i| {
                 Tile::Stream(Stream {
                     channel: format!("c{i}"),
+                    user_id: String::new(),
                     title: "t".into(),
                     category: "cat".into(),
                     viewers: 5,
@@ -476,6 +524,7 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     let went_live: Vec<Stream> = (0..4)
         .map(|i| Stream {
             channel: format!("live{i}"),
+            user_id: String::new(),
             title: "a title".into(),
             category: "cat".into(),
             viewers: 1,

@@ -4,6 +4,7 @@
 //! chat_layout = "side"        # side | overlay
 //! quality = "best"            # best | 1080p | 720p | 480p | worst
 //! live_notifications = true   # a popup when a followed channel goes live
+//! background_play = false     # keep playing while another app has focus
 //! image_cache_max_mb = 256
 //! # client_id = "..."         # public Twitch client ID (TWITCH_CLIENT_ID overrides it)
 //! ```
@@ -69,6 +70,7 @@ struct ConfigFile {
     chat_layout: Option<String>,
     quality: Option<String>,
     live_notifications: Option<bool>,
+    background_play: Option<bool>,
     image_cache_max_mb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_id: Option<String>,
@@ -95,6 +97,9 @@ impl From<ConfigFile> for Config {
                 live_notifications: f
                     .live_notifications
                     .unwrap_or(Settings::default().live_notifications),
+                background_play: f
+                    .background_play
+                    .unwrap_or(Settings::default().background_play),
             },
             client_id: f
                 .client_id
@@ -114,6 +119,7 @@ impl From<&Config> for ConfigFile {
             chat_layout: Some(c.settings.chat_layout.as_str().to_owned()),
             quality: Some(c.settings.quality.as_str().to_owned()),
             live_notifications: Some(c.settings.live_notifications),
+            background_play: Some(c.settings.background_play),
             image_cache_max_mb: Some(c.image_cache_max_mb),
             client_id: c.client_id.clone(),
         }

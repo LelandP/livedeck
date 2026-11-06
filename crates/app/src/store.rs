@@ -22,6 +22,7 @@ use crate::chat::Chat;
 use crate::live_watch::LiveWatch;
 use crate::playback::Playback;
 use crate::provider::Provider;
+use crate::raids::Raids;
 use crate::search::Searcher;
 use crate::session::Session;
 use crate::sleep::Sleep;
@@ -98,6 +99,9 @@ pub struct Store<P, R, S> {
     awake: bool,
     /// Runs the sleep timer and suspends. `None` in tests that do not care.
     sleep: Option<Sleep>,
+    /// Watches the channel on screen for raids and counts the raid card down. `None` in tests
+    /// that do not care.
+    raids: Option<Raids>,
     shown: Option<ViewModel>,
     provider: Arc<P>,
     playback: Arc<Playback<R>>,
@@ -135,6 +139,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             keep_awake: None,
             awake: false,
             sleep: None,
+            raids: None,
             shown: None,
             provider: Arc::new(provider),
             playback: Arc::new(playback),
@@ -164,6 +169,12 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     /// Runs the sleep timer commands with `sleep`.
     pub fn with_sleep(mut self, sleep: Sleep) -> Self {
         self.sleep = Some(sleep);
+        self
+    }
+
+    /// Runs the raid commands with `raids`.
+    pub fn with_raids(mut self, raids: Raids) -> Self {
+        self.raids = Some(raids);
         self
     }
 
@@ -297,6 +308,13 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 match &self.sleep {
                     Some(sleep) => sleep.execute(cmd),
                     None => tracing::debug!(?cmd, "no sleep timer here"),
+                }
+                continue;
+            }
+            if Raids::handles(&cmd) {
+                match &self.raids {
+                    Some(raids) => raids.execute(cmd),
+                    None => tracing::debug!(?cmd, "no raid watch here"),
                 }
                 continue;
             }

@@ -52,6 +52,9 @@ twitch-irc = { version = "6.1.3", default-features = false, features = ["transpo
 gilrs = "0.11.2"
 # Already in the tree through twitch-irc and reqwest. The chat crate drives the IRC transport with it.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+# Already in the tree through twitch-irc (same version and TLS roots). The Twitch crate's EventSub
+# client reads its WebSocket with it.
+async-tungstenite = { version = "0.35.0", features = ["tokio-rustls-webpki-roots"] }
 qrcode = { version = "0.14.1", default-features = false }
 # Linux only: D-Bus, to keep the screen awake during a stream. Already in the tree through Slint and
 # keyring (same version), and used through its blocking API, so the runtime it uses is unchanged.

@@ -20,7 +20,9 @@ htpc-storage.workspace = true
 htpc-resolver.workspace = true
 htpc-player.workspace = true
 htpc-chat.workspace = true
-slint.workspace = true
+# `unstable-winit-030` for the window's focus events (pausing when another app is in front).
+# It pins the exact Slint version through the workspace's `slint = "1.18.1"`.
+slint = { workspace = true, features = ["unstable-winit-030"] }
 tokio.workspace = true
 pico-args.workspace = true
 anyhow.workspace = true

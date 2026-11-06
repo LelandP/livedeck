@@ -16,6 +16,7 @@ mod mock;
 mod playback;
 mod power;
 mod provider;
+mod raids;
 mod search;
 mod session;
 mod sleep;
@@ -40,6 +41,7 @@ use crate::chat::Chat;
 use crate::playback::Playback;
 use crate::power::Suspend;
 use crate::provider::{ApiProvider, Provider};
+use crate::raids::Raids;
 use crate::session::{AppAuth, Apply, Notify, Session, Viewer, NO_CLIENT_ID};
 use crate::sleep::Sleep;
 use crate::store::{SaveSettings, Store};
@@ -84,8 +86,13 @@ CHAT:
   works signed out. Y shows or hides it. chat_layout in config.toml is `side` (a panel the
   video shrinks for) or `overlay` (lines over the video).
 
+RAIDS:
+  Signed in, the channel on screen is watched for raids over Twitch EventSub
+  (eventsub.wss.twitch.tv). A raid opens a 10-second countdown to follow it.
+
 CONFIG:
-  config.toml (chat_layout, quality, live_notifications, image_cache_max_mb, client_id) is
+  config.toml (chat_layout, quality, live_notifications, background_play, image_cache_max_mb,
+  client_id) is
   created with defaults on the first run in the platform config folder
   (Linux: ~/.config/livedeck, Windows: %APPDATA%\\livedeck\\config).
 
@@ -422,6 +429,22 @@ struct Wiring {
     fullscreen: bool,
     /// What the sleep timer suspends with. Only logs in `--mock`.
     power: Arc<dyn Suspend>,
+    /// Opens the EventSub connection that watches for raids. A fake that never raids in `--mock`.
+    raid_connect: raids::Connect,
+}
+
+/// The real raid watch: EventSub with the session's token.
+fn eventsub_connect(session: &Arc<Session>) -> raids::Connect {
+    let session = Arc::clone(session);
+    Arc::new(
+        move |events| match htpc_twitch_api::EventSub::start(Arc::clone(&session), events) {
+            Ok(sub) => Some(Box::new(sub) as Box<dyn htpc_twitch_api::RaidWatch>),
+            Err(err) => {
+                tracing::warn!(%err, "raids cannot be followed");
+                None
+            }
+        },
+    )
 }
 
 /// How often the session checks whether the access token is about to run out. It also notices a
@@ -444,6 +467,7 @@ fn run_app<P: Provider, R: StreamResolver>(
         save_settings,
         fullscreen,
         power,
+        raid_connect,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -465,6 +489,7 @@ fn run_app<P: Provider, R: StreamResolver>(
         ui.window().set_fullscreen(true);
     }
     wire_ui(&ui, &tx);
+    wire_focus(&ui, &tx);
     let player = make_player(&ui, &tx);
 
     let gamepad_tx = tx.clone();
@@ -497,8 +522,10 @@ fn run_app<P: Provider, R: StreamResolver>(
     let sleep = Sleep::new(Arc::clone(&player), power, tx.clone());
     let playback = Playback::new(resolver, player);
     let chat = Chat::new(chat, tx.clone());
-    let mut store =
-        Store::new(state, provider, playback, chat, session, ui.as_weak(), tx).with_sleep(sleep);
+    let raids = Raids::new(raid_connect, tx.clone());
+    let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx)
+        .with_sleep(sleep)
+        .with_raids(raids);
     if let Some(save) = save_settings {
         store = store.with_settings_saver(save);
     }
@@ -552,6 +579,22 @@ fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
             UiAction::Retry => Intent::Retry,
         };
         send(&t, intent);
+    });
+}
+
+/// Tells the store when the window gains or loses focus (the user switched apps), so it can pause
+/// the stream in the background. Slint still handles every event as usual. Without the winit
+/// backend nothing is reported, and the stream simply keeps playing.
+fn wire_focus(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
+    use slint::winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor};
+
+    let tx = tx.clone();
+    ui.window().on_winit_window_event(move |_, event| {
+        if let WindowEvent::Focused(focused) = event {
+            tracing::debug!(focused, "window focus changed");
+            let _ = tx.send(Event::WindowFocus(*focused).into());
+        }
+        EventResult::Propagate
     });
 }
 
@@ -643,6 +686,11 @@ fn main() -> Result<()> {
             fullscreen,
             // Nor put the developer's machine to sleep.
             power: Arc::new(power::LogOnly),
+            // Nothing raids offline.
+            raid_connect: Arc::new(|_| {
+                Some(Box::new(htpc_twitch_api::FakeEventSub::new())
+                    as Box<dyn htpc_twitch_api::RaidWatch>)
+            }),
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -677,6 +725,7 @@ fn main() -> Result<()> {
     let provider = ApiProvider::new(api)
         .with_images(images)
         .with_account(viewer);
+    let raid_connect = eventsub_connect(&session);
     let wiring = Wiring {
         session,
         tx,
@@ -685,6 +734,7 @@ fn main() -> Result<()> {
         save_settings,
         fullscreen,
         power: Arc::new(power::SystemSuspend),
+        raid_connect,
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

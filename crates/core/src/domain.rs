@@ -24,6 +24,9 @@ impl Rgb {
 pub struct Stream {
     /// Channel login, used to join chat and to resolve the playlist.
     pub channel: String,
+    /// The broadcaster's Twitch user id, which EventSub conditions (raids) use. Empty when the
+    /// source did not say (a card made from a login only); `Command::FetchStreamInfo` fills it.
+    pub user_id: String,
     pub title: String,
     pub category: String,
     /// Raw viewer count. Formatting ("4.2K") is done by the view-model.

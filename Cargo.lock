@@ -2146,12 +2146,17 @@ dependencies = [
 name = "htpc-twitch-api"
 version = "0.3.0"
 dependencies = [
+ "async-tungstenite",
+ "futures-util",
+ "htpc-storage",
+ "pico-args",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -5192,6 +5197,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",

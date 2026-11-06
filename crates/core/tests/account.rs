@@ -6,6 +6,7 @@ use htpc_core::*;
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
         channel: channel.into(),
+        user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
         viewers: 1_000,
@@ -100,6 +101,7 @@ fn a_on_settings_signs_out_and_the_event_reloads_home() {
         cmds,
         vec![
             Command::StopLiveWatch,
+            Command::DisconnectRaids,
             Command::LoadFeed { feed: FeedId::Home }
         ]
     );
@@ -128,6 +130,7 @@ fn signing_out_on_the_following_tab_goes_home() {
         cmds,
         vec![
             Command::StopLiveWatch,
+            Command::DisconnectRaids,
             Command::LoadFeed { feed: FeedId::Home }
         ]
     );
@@ -171,9 +174,9 @@ fn on_settings() -> htpc_core::AppState {
 fn down_and_up_move_between_the_settings_rows_and_stop_at_the_ends() {
     let (s, _) = run(on_settings(), &[Intent::Down]);
     assert_eq!(s.settings_focus, SettingsRow::ChatLayout);
-    let (s, _) = run(s, &[Intent::Down, Intent::Down, Intent::Down]);
-    assert_eq!(s.settings_focus, SettingsRow::LiveNotifications);
-    let (s, _) = run(s, &[Intent::Up, Intent::Up, Intent::Up]);
+    let (s, _) = run(s, &[Intent::Down; 4]);
+    assert_eq!(s.settings_focus, SettingsRow::BackgroundPlay);
+    let (s, _) = run(s, &[Intent::Up; 5]);
     assert_eq!(s.settings_focus, SettingsRow::Account);
 }
 

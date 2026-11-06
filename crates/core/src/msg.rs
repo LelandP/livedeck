@@ -118,6 +118,20 @@ pub enum Command {
     /// The stream on screen is offline: send `Event::OfflineRecheckDue(id)` in a few seconds, so
     /// the reducer can look again (a streamer restarting after Twitch's 24 h limit is back soon).
     ScheduleOfflineRecheck { id: u32 },
+    /// Watch the channel with this Twitch user id for raids, replacing the channel watched so far.
+    /// Signed in only. The EventSub connection opens on the first one and stays open until
+    /// `DisconnectRaids`. Answered over time with `Event::Raided`.
+    WatchRaids { broadcaster_id: String },
+    /// Watch no channel for raids (the player was left). The connection stays for the next one.
+    StopRaids,
+    /// Close the EventSub connection (signed out).
+    DisconnectRaids,
+    /// Count the raid offer `id` down from `seconds`: `Event::RaidTick` every second, then
+    /// `Event::RaidCountdownDone`. Replaces any running countdown.
+    StartRaidCountdown { id: u32, seconds: u8 },
+    /// Look up the live stream of `channel` (title, category, viewers) and its user id. Answered
+    /// with `Event::StreamInfo`, or nothing if the lookup fails.
+    FetchStreamInfo { channel: String },
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }
@@ -245,6 +259,30 @@ pub enum Event {
     /// Time to look again whether the offline stream is back. Ignored unless `id` is the latest
     /// recheck and the offline screen is still up.
     OfflineRecheckDue(u32),
+    /// The window gained (`true`) or lost (`false`) focus: the user switched to or from another
+    /// app. Without `Settings::background_play`, losing it pauses the stream and regaining it
+    /// resumes.
+    WindowFocus(bool),
+    /// `from_login` raided `to_login`, taking `viewers` along. Ignored unless `from_login` is the
+    /// channel on screen and the user is signed in.
+    Raided {
+        from_login: String,
+        to_login: String,
+        to_name: String,
+        viewers: u64,
+    },
+    /// The raid countdown `id` has `left` whole seconds to go.
+    RaidTick {
+        id: u32,
+        left: u8,
+    },
+    /// The raid countdown `id` ran out: follow the raid.
+    RaidCountdownDone {
+        id: u32,
+    },
+    /// The answer to `FetchStreamInfo`: what Twitch knows of the channel. A channel that is not
+    /// live has an empty title and category. Ignored unless it is the channel on screen.
+    StreamInfo(Stream),
 }
 
 /// Anything the reducer accepts.

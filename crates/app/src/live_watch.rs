@@ -157,6 +157,7 @@ mod tests {
     fn stream(channel: &str) -> Stream {
         Stream {
             channel: channel.into(),
+            user_id: String::new(),
             title: String::new(),
             category: String::new(),
             viewers: 1,

@@ -27,6 +27,7 @@ fn round_trip_survives_a_restart() {
             chat_layout: ChatLayout::Overlay,
             quality: Quality::P720,
             live_notifications: false,
+            background_play: true,
         },
         client_id: Some("abc123".to_owned()),
         image_cache_max_mb: 64,
@@ -40,12 +41,15 @@ fn round_trip_survives_a_restart() {
     assert!(text.contains("chat_layout = \"overlay\""), "{text}");
     assert!(text.contains("quality = \"720p\""), "{text}");
     assert!(text.contains("live_notifications = false"), "{text}");
+    assert!(text.contains("background_play = true"), "{text}");
 }
 
 #[test]
 fn an_older_file_without_live_notifications_turns_them_on() {
     let config = Config::from_toml("chat_layout = \"side\"\nquality = \"best\"\n").unwrap();
     assert!(config.settings.live_notifications);
+    // Background play is a newer setting still: older files get its default, off.
+    assert!(!config.settings.background_play);
     let off = Config::from_toml("live_notifications = false\n").unwrap();
     assert!(!off.settings.live_notifications);
 }

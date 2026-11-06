@@ -179,6 +179,12 @@ export component PlayerScreen inherits Rectangle {
     in property <image> subscribe-qr;
     in property <string> subscribe-url: "";
     in property <bool> subscribe-can-open: false;
+    // The raid card: "<from> is raiding <to>", "with 1,234 viewers", and the seconds left before
+    // following. The hints bar has its buttons (A Go now · B Stay).
+    in property <bool> raid-open: false;
+    in property <string> raid-title: "";
+    in property <string> raid-viewers: "";
+    in property <int> raid-seconds: 0;
     // The index of the Subscribe row, the only action row (PlayerMenuRow::Subscribe).
     property <int> subscribe-row: 7;
     property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer", "Subscribe to " + root.stream.channel];
@@ -428,6 +434,68 @@ export component PlayerScreen inherits Rectangle {
                     color: Theme.muted;
                     font-size: Theme.fs-small;
                     overflow: elide;
+                }
+            }
+        }
+
+        // Raid card: bottom centre, just above the HUD text, over the stream that plays on (or the
+        // offline screen). The bar empties over the 10 s countdown (RAID_SECONDS in htpc-core) in
+        // one animation, started when the card is created.
+        if root.raid-open : Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - 190px - self.height;
+            width: min(560px, parent.width - 32px);
+            height: raid-layout.preferred-height;
+            border-radius: 12px;
+            border-width: 2px;
+            border-color: Theme.accent-light;
+            background: #18181bf0;
+            TouchArea { }
+
+            raid-layout := VerticalLayout {
+                padding: 24px;
+                spacing: 8px;
+                Text {
+                    text: root.raid-title;
+                    color: Theme.text;
+                    font-size: Theme.fs-title;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                if root.raid-viewers != "" : Text {
+                    text: root.raid-viewers;
+                    color: Theme.muted;
+                    font-size: Theme.fs-body;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Going there in " + root.raid-seconds + "…";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-body;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    height: 6px;
+                    border-radius: 3px;
+                    background: #ffffff1f;
+                    bar := Rectangle {
+                        property <bool> started: false;
+                        x: 0px;
+                        height: parent.height;
+                        width: self.started ? 0px : parent.width;
+                        border-radius: 3px;
+                        background: Theme.accent;
+                        animate width { duration: 10s; easing: linear; }
+                    }
+                    // A change made while the card is created (`init`) lands before the first
+                    // frame and would not animate, so the bar starts on the next tick.
+                    Timer {
+                        interval: 1ms;
+                        running: !bar.started;
+                        triggered => { bar.started = true; }
+                    }
                 }
             }
         }

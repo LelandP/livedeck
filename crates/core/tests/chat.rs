@@ -5,6 +5,7 @@ use htpc_core::*;
 fn live_stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
         channel: channel.into(),
+        user_id: String::new(),
         title: "t".into(),
         category: "c".into(),
         viewers: 1,
