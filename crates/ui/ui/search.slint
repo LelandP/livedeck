@@ -24,7 +24,9 @@ component QueryLine inherits Rectangle {
     HorizontalLayout {
         padding-left: 20px;
         padding-right: 20px;
-        spacing: 4px;
+        // None: the glyphs' own side bearing already leaves a hair of room, and any more reads
+        // as a typed space.
+        spacing: 0px;
         alignment: start;
 
         // Before the placeholder while empty, after the text otherwise.
