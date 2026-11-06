@@ -37,19 +37,34 @@ impl MpvPlayer {
     ) -> Result<(Self, VideoOutput), String> {
         use_c_numeric_locale();
         let mpv = Mpv::with_initializer(|init| {
-            init.set_option("vo", "libmpv")?;
+            // Required: without these there is no video at all.
+            init.set_option("vo", "libmpv")
+                .inspect_err(|e| tracing::error!(%e, "mpv rejected vo=libmpv"))?;
             // Keep the core alive between streams (and after one ends).
-            init.set_option("idle", "yes")?;
+            init.set_option("idle", "yes")
+                .inspect_err(|e| tracing::error!(%e, "mpv rejected idle=yes"))?;
+
+            // Everything else is best effort. Which options exist depends on how libmpv was built
+            // (the Flatpak's has no Lua, so no `ytdl`), and a missing one must not stop the video.
+            let optional = |name: &str, result: libmpv2::Result<()>| {
+                if let Err(e) = result {
+                    tracing::warn!(option = name, %e, "mpv option not applied");
+                }
+            };
             // Live streaming: small buffers, no waiting to refill the cache.
-            init.set_option("profile", "low-latency")?;
+            optional("profile", init.set_option("profile", "low-latency"));
             // Hardware decode where mpv considers it safe (VAAPI on the Deck, D3D11VA on Windows).
-            init.set_option("hwdec", "auto-safe")?;
+            optional("hwdec", init.set_option("hwdec", "auto-safe"));
             // Without this, mpv_render_context_render() blocks until the frame's display time,
             // which would stall the Slint UI thread.
-            init.set_option("video-timing-offset", 0.0)?;
-            init.set_option("ytdl", false)?;
+            optional(
+                "video-timing-offset",
+                init.set_option("video-timing-offset", 0.0),
+            );
+            // Streamlink already resolved the playlist. Only exists in builds with Lua.
+            optional("ytdl", init.set_option("ytdl", false));
             if let Ok(path) = std::env::var("HTPC_MPV_LOG") {
-                init.set_option("log-file", path.as_str())?;
+                optional("log-file", init.set_option("log-file", path.as_str()));
             }
             Ok(())
         })
