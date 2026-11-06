@@ -2,13 +2,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::{Player, PlayerEvent};
+use crate::{LoadOptions, Player, PlayerEvent, PlayerOption};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerCall {
-    Load(String),
+    Load(String, LoadOptions),
     SetPaused(bool),
     Stop,
+    SetOption(PlayerOption),
+    SetStats(bool),
 }
 
 type Listener = Box<dyn Fn(PlayerEvent) + Send + Sync>;
@@ -47,8 +49,8 @@ impl FakePlayer {
 }
 
 impl Player for FakePlayer {
-    fn load(&self, url: &str) {
-        self.record(PlayerCall::Load(url.to_owned()));
+    fn load(&self, url: &str, options: LoadOptions) {
+        self.record(PlayerCall::Load(url.to_owned(), options));
     }
 
     fn set_paused(&self, paused: bool) {
@@ -57,6 +59,14 @@ impl Player for FakePlayer {
 
     fn stop(&self) {
         self.record(PlayerCall::Stop);
+    }
+
+    fn set_option(&self, option: PlayerOption) {
+        self.record(PlayerCall::SetOption(option));
+    }
+
+    fn set_stats(&self, on: bool) {
+        self.record(PlayerCall::SetStats(on));
     }
 }
 
@@ -90,13 +100,17 @@ impl UnavailablePlayer {
 }
 
 impl Player for UnavailablePlayer {
-    fn load(&self, _url: &str) {
+    fn load(&self, _url: &str, _options: LoadOptions) {
         (self.report)(PlayerEvent::Failed(self.reason.to_string()));
     }
 
     fn set_paused(&self, _paused: bool) {}
 
     fn stop(&self) {}
+
+    fn set_option(&self, _option: PlayerOption) {}
+
+    fn set_stats(&self, _on: bool) {}
 }
 
 #[cfg(test)]
@@ -110,16 +124,20 @@ mod tests {
         let sink = Arc::clone(&seen);
         player.on_event(move |e| sink.lock().unwrap().push(e));
 
-        player.load("https://x/y.m3u8");
+        player.load("https://x/y.m3u8", LoadOptions::default());
         player.set_paused(true);
+        player.set_option(PlayerOption::Hwdec(false));
+        player.set_stats(true);
         player.stop();
         player.emit(PlayerEvent::Playing);
 
         assert_eq!(
             player.calls(),
             [
-                PlayerCall::Load("https://x/y.m3u8".into()),
+                PlayerCall::Load("https://x/y.m3u8".into(), LoadOptions::default()),
                 PlayerCall::SetPaused(true),
+                PlayerCall::SetOption(PlayerOption::Hwdec(false)),
+                PlayerCall::SetStats(true),
                 PlayerCall::Stop
             ]
         );
@@ -131,8 +149,10 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
         let player = UnavailablePlayer::new(move |e| sink.lock().unwrap().push(e));
-        player.load("u");
+        player.load("u", LoadOptions::default());
         player.set_paused(true);
+        player.set_option(PlayerOption::Zoom(crate::Zoom::Fill));
+        player.set_stats(true);
         player.stop();
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
@@ -145,7 +165,7 @@ mod tests {
         let sink = Arc::clone(&seen);
         let player =
             UnavailablePlayer::with_reason(move |e| sink.lock().unwrap().push(e), "no GPU");
-        player.load("u");
+        player.load("u", LoadOptions::default());
         assert_eq!(
             *seen.lock().unwrap(),
             [PlayerEvent::Failed("no GPU".into())]

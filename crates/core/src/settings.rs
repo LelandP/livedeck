@@ -99,6 +99,111 @@ impl Quality {
     }
 }
 
+/// Whether the player may decode video on the GPU. A player-menu option (not saved yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hwdec {
+    /// Hardware decoding where the player considers it safe (mpv `auto-safe`).
+    #[default]
+    Auto,
+    /// Decode on the CPU.
+    Off,
+}
+
+impl Hwdec {
+    pub const ALL: [Hwdec; 2] = [Hwdec::Auto, Hwdec::Off];
+
+    /// Stable name, for a config file later.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Hwdec::Auto => "auto",
+            Hwdec::Off => "off",
+        }
+    }
+
+    /// The next (or, with `forward == false`, the previous) value, wrapping around.
+    pub fn cycled(self, forward: bool) -> Self {
+        cycle(&Self::ALL, self, if forward { 1 } else { -1 })
+    }
+
+    /// Text for the player menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            Hwdec::Auto => "Auto",
+            Hwdec::Off => "Off",
+        }
+    }
+}
+
+/// How far behind live the player sits. Changing it reloads the stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Latency {
+    /// Small buffers: close to live, but a slow network stalls sooner.
+    #[default]
+    Low,
+    /// Bigger buffers: a few seconds further behind, fewer stalls.
+    Normal,
+}
+
+impl Latency {
+    pub const ALL: [Latency; 2] = [Latency::Low, Latency::Normal];
+
+    /// Stable name, for a config file later.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Latency::Low => "low",
+            Latency::Normal => "normal",
+        }
+    }
+
+    /// The next (or, with `forward == false`, the previous) value, wrapping around.
+    pub fn cycled(self, forward: bool) -> Self {
+        cycle(&Self::ALL, self, if forward { 1 } else { -1 })
+    }
+
+    /// Text for the player menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            Latency::Low => "Low",
+            Latency::Normal => "Normal (fewer stalls)",
+        }
+    }
+}
+
+/// How the picture fills a screen of another shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Zoom {
+    /// The whole picture, with black bars where the shapes differ.
+    #[default]
+    Fit,
+    /// No bars: the picture is cropped to fill the screen (16:9 on the Deck's 16:10).
+    Fill,
+}
+
+impl Zoom {
+    pub const ALL: [Zoom; 2] = [Zoom::Fit, Zoom::Fill];
+
+    /// Stable name, for a config file later.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Zoom::Fit => "fit",
+            Zoom::Fill => "fill",
+        }
+    }
+
+    /// The next (or, with `forward == false`, the previous) value, wrapping around.
+    pub fn cycled(self, forward: bool) -> Self {
+        cycle(&Self::ALL, self, if forward { 1 } else { -1 })
+    }
+
+    /// Text for the player menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            Zoom::Fit => "Fit",
+            Zoom::Fill => "Fill (crop)",
+        }
+    }
+}
+
 /// A value that is not one of the known setting names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownSetting(pub String);
@@ -138,6 +243,30 @@ impl FromStr for Quality {
     }
 }
 
+impl FromStr for Hwdec {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for Latency {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for Zoom {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
 /// Settings that affect behaviour. Part of `AppState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Settings {
@@ -156,6 +285,18 @@ mod tests {
         }
         for v in Quality::ALL {
             assert_eq!(v.as_str().parse::<Quality>(), Ok(v));
+        }
+        for v in Hwdec::ALL {
+            assert_eq!(v.as_str().parse::<Hwdec>(), Ok(v));
+            assert_eq!(v.cycled(true).cycled(false), v);
+        }
+        for v in Latency::ALL {
+            assert_eq!(v.as_str().parse::<Latency>(), Ok(v));
+            assert_eq!(v.cycled(true).cycled(false), v);
+        }
+        for v in Zoom::ALL {
+            assert_eq!(v.as_str().parse::<Zoom>(), Ok(v));
+            assert_eq!(v.cycled(true).cycled(false), v);
         }
     }
 

@@ -5,8 +5,8 @@
 
 use htpc_core::{
     grid_rows, init, reduce, AppState, Category, ChatKind, ChatLayout, ChatMessage, ChatSpan,
-    ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, RailEntry, Rgb, Row,
-    RowKind, Stream, Tile,
+    ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, PlayerStats, RailEntry,
+    Rgb, Row, RowKind, Stream, Tile,
 };
 use htpc_ui::{view_model, CardVm, ViewModel};
 
@@ -235,6 +235,58 @@ fn player_loading_playing_paused_offline_and_failed() {
     )
     .0;
     out += &player_line(&view_model(&failed));
+    insta::assert_snapshot!(out);
+}
+
+fn menu_lines(vm: &ViewModel) -> String {
+    let mut out = format!(
+        "menu_open={} focus={} select={:?} values={:?}\n",
+        vm.player_menu_open, vm.player_menu_focus, vm.select_label, vm.player_menu_values
+    );
+    if !vm.stats_text.is_empty() {
+        for line in vm.stats_text.lines() {
+            out += &format!("  stats| {line}\n");
+        }
+    }
+    out
+}
+
+#[test]
+fn player_menu_and_stats_box() {
+    let (s, _) = reduce(&home_loaded(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let mut out = menu_lines(&view_model(&s));
+    // Start, then down to Zoom and fill the screen.
+    let s = send(&s, &[Intent::Menu]);
+    out += &menu_lines(&view_model(&s));
+    let s = send(
+        &s,
+        &[Intent::Down, Intent::Down, Intent::Down, Intent::Right],
+    );
+    out += &menu_lines(&view_model(&s));
+    // Stats on: waiting for the first report, then the numbers.
+    let s = send(&s, &[Intent::Down, Intent::Right]);
+    out += &menu_lines(&view_model(&s));
+    let report = PlayerStats {
+        width: Some(1920),
+        height: Some(1080),
+        fps_milli: Some(59_940),
+        codec: Some("h264".into()),
+        hwdec: Some("vaapi".into()),
+        video_bitrate: Some(6_240_000),
+        audio_bitrate: Some(160_000),
+        buffer_ms: Some(1_450),
+        dropped_frames: Some(3),
+        decoder_dropped_frames: Some(0),
+    };
+    let s = reduce(&s, Event::PlayerStats(report)).0;
+    out += &menu_lines(&view_model(&s));
+    // B closes the menu, and the stats box stays.
+    let s = send(&s, &[Intent::Back]);
+    out += &menu_lines(&view_model(&s));
+    // A report that knows nothing yet (software decoding, nothing measured).
+    let s = reduce(&s, Event::PlayerStats(PlayerStats::default())).0;
+    out += &menu_lines(&view_model(&s));
     insta::assert_snapshot!(out);
 }
 

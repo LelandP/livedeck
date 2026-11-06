@@ -12,6 +12,7 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 - Home with a featured stream, Top Live and Categories; a Browse screen for all categories; a screen per category
 - Watching live streams (video through libmpv, hardware decoding where available)
+- A player menu (Start while watching) for quality, hardware decoding, latency and zoom, plus a stats box with resolution, codec, bitrate, buffer and dropped frames
 - Read-only chat with coloured names, badges and emotes, as a side panel or an overlay on the video
 - Sign in with a code and a QR code (no password typed on the TV), then a Followed row and a Following tab
 - Settings for chat layout and video quality, saved between runs
@@ -28,7 +29,6 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Video playback options:** switch whatever libmpv lets us (quality, hardware decoding, scaling, audio and so on), perhaps in a "nerds view" with live stats
 - [ ] **Audio-only mode:** drop the video and keep the sound, to save bandwidth and battery
 - [ ] **Sleep timer:** stop playback after a set time (for example 30, 60 or 90 minutes)
 - [ ] **Subscribe button:** opens the channel's Twitch subscribe page in a browser. In Game Mode a browser may be awkward, so a QR code to scan with a phone (like the sign-in screen) may be the better fit
@@ -94,10 +94,11 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
 | B / Esc / Backspace | Back (also opens the left menu from Settings) |
 | X / `r` | Retry a failed load |
 | Y / `y` | Show or hide chat |
-| Start / Menu key | Open or close the left menu |
+| Start / Menu key | Open or close the left menu (while watching: the player menu) |
 
 - **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
 - **Settings:** chat layout (side panel or over the video) and video quality (applies to the next stream you open).
+- **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
 - **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `image_cache_max_mb` and an optional `client_id`.
 - **Try it offline:** `livedeck --mock` runs with fixture data and no network.
 - **Logs:** set `RUST_LOG=livedeck=debug`. `livedeck --help` lists every option and environment variable.

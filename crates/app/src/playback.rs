@@ -3,11 +3,12 @@
 
 use std::sync::Arc;
 
-use htpc_core::{Command, Event, Quality};
-use htpc_player::{Player, PlayerEvent};
+use htpc_core::{Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, Quality, Zoom};
+use htpc_player::{LoadOptions, Player, PlayerEvent};
 use htpc_resolver::{ResolveError, StreamResolver};
 
-/// Runs `Play`, `SetPaused` and `StopPlayback`. Returns the events to send back, if any.
+/// Runs `Play`, `SetPaused`, `StopPlayback`, `SetPlayerOption` and `SetStats`. Returns the events
+/// to send back, if any.
 pub struct Playback<R> {
     resolver: R,
     player: Arc<dyn Player>,
@@ -22,13 +23,21 @@ impl<R: StreamResolver> Playback<R> {
     pub fn handles(cmd: &Command) -> bool {
         matches!(
             cmd,
-            Command::Play { .. } | Command::SetPaused(_) | Command::StopPlayback
+            Command::Play { .. }
+                | Command::SetPaused(_)
+                | Command::StopPlayback
+                | Command::SetPlayerOption(_)
+                | Command::SetStats(_)
         )
     }
 
     pub async fn execute(&self, cmd: Command) -> Vec<Event> {
         match cmd {
-            Command::Play { channel, quality } => self.play(channel, quality).await,
+            Command::Play {
+                channel,
+                quality,
+                latency,
+            } => self.play(channel, quality, latency).await,
             Command::SetPaused(paused) => {
                 self.player.set_paused(paused);
                 Vec::new()
@@ -37,15 +46,27 @@ impl<R: StreamResolver> Playback<R> {
                 self.player.stop();
                 Vec::new()
             }
+            Command::SetPlayerOption(option) => {
+                self.player.set_option(player_option(option));
+                Vec::new()
+            }
+            Command::SetStats(on) => {
+                self.player.set_stats(on);
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
 
-    async fn play(&self, channel: String, quality: Quality) -> Vec<Event> {
+    async fn play(&self, channel: String, quality: Quality, latency: Latency) -> Vec<Event> {
         match self.resolver.resolve(&channel, quality.as_str()).await {
             Ok(url) => {
                 tracing::info!(%channel, "playlist resolved, starting the player");
-                self.player.load(&url.0);
+                let latency = match latency {
+                    Latency::Low => htpc_player::Latency::Low,
+                    Latency::Normal => htpc_player::Latency::Normal,
+                };
+                self.player.load(&url.0, LoadOptions { latency });
                 Vec::new()
             }
             Err(ResolveError::Offline) => vec![Event::StreamOffline { channel }],
@@ -73,6 +94,15 @@ fn user_message(err: &ResolveError) -> String {
     }
 }
 
+/// The player crate's form of a core player option.
+fn player_option(option: PlayerOption) -> htpc_player::PlayerOption {
+    match option {
+        PlayerOption::Hwdec(hwdec) => htpc_player::PlayerOption::Hwdec(hwdec == Hwdec::Auto),
+        PlayerOption::Zoom(Zoom::Fit) => htpc_player::PlayerOption::Zoom(htpc_player::Zoom::Fit),
+        PlayerOption::Zoom(Zoom::Fill) => htpc_player::PlayerOption::Zoom(htpc_player::Zoom::Fill),
+    }
+}
+
 /// Maps a player report to the event the reducer understands. `Paused` changes nothing in the
 /// state (the reducer already toggled it), so it has no event.
 pub fn player_event(event: PlayerEvent) -> Option<Event> {
@@ -81,6 +111,22 @@ pub fn player_event(event: PlayerEvent) -> Option<Event> {
         PlayerEvent::Ended => Some(Event::PlaybackEnded),
         PlayerEvent::Failed(message) => Some(Event::PlaybackError(message)),
         PlayerEvent::Paused(_) => None,
+        PlayerEvent::Stats(stats) => Some(Event::PlayerStats(core_stats(stats))),
+    }
+}
+
+fn core_stats(s: htpc_player::PlayerStats) -> PlayerStats {
+    PlayerStats {
+        width: s.width,
+        height: s.height,
+        fps_milli: s.fps_milli,
+        codec: s.codec,
+        hwdec: s.hwdec,
+        video_bitrate: s.video_bitrate,
+        audio_bitrate: s.audio_bitrate,
+        buffer_ms: s.buffer_ms,
+        dropped_frames: s.dropped_frames,
+        decoder_dropped_frames: s.decoder_dropped_frames,
     }
 }
 
@@ -94,6 +140,7 @@ mod tests {
         Command::Play {
             channel: channel.into(),
             quality: Quality::P720,
+            latency: Latency::Low,
         }
     }
 
@@ -108,7 +155,53 @@ mod tests {
         assert!(pb.execute(play("chan")).await.is_empty());
         assert_eq!(
             player.calls(),
-            [PlayerCall::Load("https://x/a.m3u8".into())]
+            [PlayerCall::Load(
+                "https://x/a.m3u8".into(),
+                LoadOptions::default()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_latency_goes_with_the_load() {
+        let (pb, player) = playback(FakeResolver::playing("u"));
+        let cmd = Command::Play {
+            channel: "chan".into(),
+            quality: Quality::Best,
+            latency: Latency::Normal,
+        };
+        pb.execute(cmd).await;
+        assert_eq!(
+            player.calls(),
+            [PlayerCall::Load(
+                "u".into(),
+                LoadOptions {
+                    latency: htpc_player::Latency::Normal
+                }
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn options_and_stats_reach_the_player() {
+        let (pb, player) = playback(FakeResolver::playing("u"));
+        for cmd in [
+            Command::SetPlayerOption(PlayerOption::Hwdec(Hwdec::Off)),
+            Command::SetPlayerOption(PlayerOption::Hwdec(Hwdec::Auto)),
+            Command::SetPlayerOption(PlayerOption::Zoom(Zoom::Fill)),
+            Command::SetStats(true),
+        ] {
+            assert!(Playback::<FakeResolver>::handles(&cmd));
+            assert!(pb.execute(cmd).await.is_empty());
+        }
+        assert_eq!(
+            player.calls(),
+            [
+                PlayerCall::SetOption(htpc_player::PlayerOption::Hwdec(false)),
+                PlayerCall::SetOption(htpc_player::PlayerOption::Hwdec(true)),
+                PlayerCall::SetOption(htpc_player::PlayerOption::Zoom(htpc_player::Zoom::Fill)),
+                PlayerCall::SetStats(true),
+            ]
         );
     }
 
@@ -159,6 +252,19 @@ mod tests {
             Some(Event::PlaybackError("x".into()))
         );
         assert_eq!(player_event(PlayerEvent::Paused(true)), None);
+        let stats = htpc_player::PlayerStats {
+            width: Some(1280),
+            hwdec: Some("vaapi".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            player_event(PlayerEvent::Stats(stats)),
+            Some(Event::PlayerStats(PlayerStats {
+                width: Some(1280),
+                hwdec: Some("vaapi".into()),
+                ..Default::default()
+            }))
+        );
     }
 
     #[test]

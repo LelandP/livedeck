@@ -14,11 +14,13 @@ pub mod state;
 pub use chat::{ChatBuffer, CHAT_CAPACITY};
 pub use domain::{
     grid_cols, grid_rows, Category, Channel, ChatKind, ChatMessage, ChatSpan, ChatStatus,
-    DeviceCode, FeedId, LoginProblem, Moderation, Paging, Rgb, Row, RowKind, Stream, Tile, User,
+    DeviceCode, FeedId, LoginProblem, Moderation, Paging, PlayerStats, Rgb, Row, RowKind, Stream,
+    Tile, User,
 };
-pub use msg::{Command, Event, Intent, Msg, PageOutcome};
+pub use msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
-pub use settings::{ChatLayout, Quality, Settings, UnknownSetting};
+pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{
-    AppState, CategoryFeed, Feed, Focus, Playback, RailEntry, RailState, Screen, SettingsRow,
+    AppState, CategoryFeed, Feed, Focus, Playback, PlayerMenuRow, RailEntry, RailState, Screen,
+    SessionOptions, SettingsRow,
 };

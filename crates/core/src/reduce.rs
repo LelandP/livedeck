@@ -6,8 +6,10 @@
 use std::collections::HashSet;
 
 use crate::domain::{grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RowKind, Stream, Tile};
-use crate::msg::{Command, Event, Intent, Msg, PageOutcome};
-use crate::state::{AppState, CategoryFeed, Feed, Playback, RailEntry, Screen, SettingsRow};
+use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
+use crate::state::{
+    AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen, SettingsRow,
+};
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
 pub const PREFETCH_DISTANCE: usize = 3;
@@ -106,7 +108,11 @@ fn change_setting(s: &mut AppState, row: SettingsRow, forward: bool, cmds: &mut 
         SettingsRow::ChatLayout => {
             s.settings.chat_layout = s.settings.chat_layout.cycled(forward);
         }
-        SettingsRow::Quality => s.settings.quality = s.settings.quality.cycled(forward),
+        SettingsRow::Quality => {
+            s.settings.quality = s.settings.quality.cycled(forward);
+            // The saved quality is where every stream starts again, also in this session.
+            s.session.quality = None;
+        }
     }
     cmds.push(Command::SaveSettings(s.settings));
 }
@@ -161,7 +167,16 @@ fn open_following(s: &mut AppState, cmds: &mut Vec<Command>) {
 }
 
 fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    if let Some(row) = s.player_menu {
+        player_menu_intent(s, row, intent, cmds);
+        return;
+    }
     match intent {
+        // Start opens the player menu on its first row.
+        Intent::Menu => {
+            s.player_menu = Some(PlayerMenuRow::default());
+            pulse_hud(s);
+        }
         Intent::ToggleChat => {
             s.chat_open = !s.chat_open;
             pulse_hud(s);
@@ -179,8 +194,66 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             }
         }
         // Any other button only brings the HUD back.
-        Intent::Up | Intent::Down | Intent::Left | Intent::Right | Intent::Menu => pulse_hud(s),
+        Intent::Up | Intent::Down | Intent::Left | Intent::Right => pulse_hud(s),
         Intent::Pick { .. } | Intent::RailPick(_) => {}
+    }
+}
+
+/// Input while the player menu is open. Up and Down pick a row, Left and Right (and A) change its
+/// value, B or Start close the menu. Y still toggles chat. Nothing here is saved: only the
+/// Settings screen saves.
+fn player_menu_intent(
+    s: &mut AppState,
+    row: PlayerMenuRow,
+    intent: Intent,
+    cmds: &mut Vec<Command>,
+) {
+    match intent {
+        Intent::Up => s.player_menu = Some(row.prev()),
+        Intent::Down => s.player_menu = Some(row.next()),
+        Intent::Right | Intent::Select => change_player_option(s, row, true, cmds),
+        Intent::Left => change_player_option(s, row, false, cmds),
+        Intent::Back | Intent::Menu => s.player_menu = None,
+        Intent::ToggleChat => s.chat_open = !s.chat_open,
+        Intent::Retry | Intent::Pick { .. } | Intent::RailPick(_) => {}
+    }
+    pulse_hud(s);
+}
+
+/// Steps a player-menu row to its next or previous value and applies it. Quality and latency are
+/// chosen when a stream is resolved and loaded, so changing them starts the stream again.
+fn change_player_option(
+    s: &mut AppState,
+    row: PlayerMenuRow,
+    forward: bool,
+    cmds: &mut Vec<Command>,
+) {
+    match row {
+        PlayerMenuRow::Quality => {
+            s.session.quality = Some(s.quality().cycled(forward));
+            start_playback(s, cmds);
+        }
+        PlayerMenuRow::Latency => {
+            s.session.latency = s.session.latency.cycled(forward);
+            start_playback(s, cmds);
+        }
+        PlayerMenuRow::Hwdec => {
+            s.session.hwdec = s.session.hwdec.cycled(forward);
+            cmds.push(Command::SetPlayerOption(PlayerOption::Hwdec(
+                s.session.hwdec,
+            )));
+        }
+        PlayerMenuRow::Zoom => {
+            s.session.zoom = s.session.zoom.cycled(forward);
+            cmds.push(Command::SetPlayerOption(PlayerOption::Zoom(s.session.zoom)));
+        }
+        PlayerMenuRow::Stats => {
+            s.session.stats = !s.session.stats;
+            if !s.session.stats {
+                s.stats = None;
+            }
+            cmds.push(Command::SetStats(s.session.stats));
+        }
     }
 }
 
@@ -195,11 +268,19 @@ fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
     };
     s.playback = Playback::Loading;
     s.paused = false;
+    // The numbers of the last stream mean nothing for this one.
+    s.stats = None;
     pulse_hud(s);
     cmds.push(Command::Play {
         channel,
-        quality: s.settings.quality,
+        quality: s.quality(),
+        latency: s.session.latency,
     });
+    // Leaving the player stops the reports, so a stream started with the stats box on asks for
+    // them again. This is what keeps the box on from stream to stream.
+    if s.session.stats {
+        cmds.push(Command::SetStats(true));
+    }
 }
 
 fn toggle_pause(s: &mut AppState, cmds: &mut Vec<Command>) {
@@ -363,6 +444,13 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             if s.screen == Screen::Player && active {
                 s.playback = Playback::Failed(message);
                 s.paused = false;
+            }
+        }
+        // Like the other player events, only trusted while a stream is on screen, and only while
+        // the stats box is on (a report can still be on its way after it was turned off).
+        Event::PlayerStats(stats) => {
+            if s.screen == Screen::Player && s.session.stats {
+                s.stats = Some(stats);
             }
         }
         Event::DeviceCodeIssued(code) => {
@@ -673,7 +761,13 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
             s.paused = false;
             s.chat.clear();
             s.chat_status = ChatStatus::Idle;
+            // The menu's choices stay for the next stream. Its numbers do not.
+            s.player_menu = None;
+            s.stats = None;
             cmds.push(Command::StopPlayback);
+            if s.session.stats {
+                cmds.push(Command::SetStats(false));
+            }
             cmds.push(Command::LeaveChat);
         }
         Screen::Login => leave_login(s, cmds),

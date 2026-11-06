@@ -306,6 +306,30 @@ pub enum LoginProblem {
     Failed(String),
 }
 
+/// What the player reports about the stream it plays, about once a second while the stats box
+/// is on. Every value is `None` when the player does not know it (yet). Whole numbers in small
+/// units keep the state `Eq`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerStats {
+    /// Decoded picture size in pixels.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Frames per second, times 1000 (`59_940` is 59.94 fps).
+    pub fps_milli: Option<u32>,
+    /// Video codec, as the player names it ("h264").
+    pub codec: Option<String>,
+    /// The hardware decoder in use, `None` when decoding on the CPU.
+    pub hwdec: Option<String>,
+    /// Bits per second.
+    pub video_bitrate: Option<u64>,
+    pub audio_bitrate: Option<u64>,
+    /// How much is buffered ahead, in milliseconds.
+    pub buffer_ms: Option<u32>,
+    /// Frames dropped on the way to the screen, and by the decoder, since the stream started.
+    pub dropped_frames: Option<u64>,
+    pub decoder_dropped_frames: Option<u64>,
+}
+
 /// Device Code Grant details shown on the sign-in screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceCode {

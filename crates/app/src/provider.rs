@@ -370,6 +370,8 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             Command::Play { .. }
             | Command::SetPaused(_)
             | Command::StopPlayback
+            | Command::SetPlayerOption(_)
+            | Command::SetStats(_)
             | Command::FetchThumbnails { .. }
             | Command::FetchChatImages { .. }
             | Command::JoinChat { .. }

@@ -1,9 +1,10 @@
 //! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
 
 use crate::domain::{
-    ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, Row, RowKind, Tile, User,
+    ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, PlayerStats, Row,
+    RowKind, Tile, User,
 };
-use crate::settings::{Quality, Settings};
+use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
 
 /// What the user wants, independent of the input device.
@@ -50,10 +51,20 @@ pub enum Command {
     FetchThumbnails { urls: Vec<String> },
     /// Resolve the channel's playlist and play it. Answered with `Event::StreamOffline` or
     /// `Event::PlaybackFailed` if that fails, and later with the player's own events
-    /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`).
-    Play { channel: String, quality: Quality },
+    /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`). `latency` sets the player's buffers
+    /// for this stream.
+    Play {
+        channel: String,
+        quality: Quality,
+        latency: Latency,
+    },
     /// Pause or resume the player.
     SetPaused(bool),
+    /// Change a player option that applies at once, without reloading the stream. It lasts until
+    /// the app quits (or the next change).
+    SetPlayerOption(PlayerOption),
+    /// Start or stop the player's stats reports (`Event::PlayerStats`, about once a second).
+    SetStats(bool),
     /// Stop the player and drop the stream.
     StopPlayback,
     /// Start receiving chat for a channel, leaving any other one. The client stays connected
@@ -77,6 +88,13 @@ pub enum Command {
     SaveSettings(Settings),
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
+}
+
+/// A player option that can change while a stream plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerOption {
+    Hwdec(Hwdec),
+    Zoom(Zoom),
 }
 
 /// The result of fetching one more page of a row.
@@ -144,6 +162,8 @@ pub enum Event {
     PlaybackEnded,
     /// The player could not play the stream.
     PlaybackError(String),
+    /// The player's latest numbers for the stats box. Ignored unless the box is on.
+    PlayerStats(PlayerStats),
     DeviceCodeIssued(DeviceCode),
     /// The login finished and the credentials are in place. Feeds are reloaded for the account.
     SignedIn(User),

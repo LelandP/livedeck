@@ -273,6 +273,34 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the hints bar does not come back on pause"
     );
 
+    // The player menu and the stats box: both lay out (no binding loop) and are drawn on the left
+    // of the video, above the hints bar, with the hints bar kept on screen.
+    let mut menu = watching_a_busy_chat(ChatLayout::Side);
+    menu.chat_open = false;
+    menu.playback = htpc_core::Playback::Playing;
+    let (mut menu, _) = reduce(&menu, Intent::Menu);
+    menu.session.stats = true;
+    menu.stats = Some(htpc_core::PlayerStats {
+        width: Some(1920),
+        height: Some(1080),
+        ..Default::default()
+    });
+    Update::full(view_model(&menu)).apply(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5_000));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    // The focused row's border (`Theme.accent-light`, #bf94ff), drawn whether or not there are
+    // fonts.
+    let accent = |p: &Rgba8Pixel| p.r > 160 && p.b > 200 && p.g > 120 && p.g < 180;
+    assert!(
+        count(&image, 0..560, 0..HINTS_TOP, accent) > 0,
+        "the player menu is not drawn"
+    );
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the hints bar hides while the menu is open"
+    );
+
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
     // element that has a size but no position, which once put the heading strip mid-screen.
     let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));

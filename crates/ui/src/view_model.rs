@@ -11,7 +11,8 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus, Feed, FeedId,
-    LoginProblem, Paging, Playback, Rgb, Row, RowKind, Screen, SettingsRow, Stream, Tile,
+    LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen, SettingsRow, Stream,
+    Tile,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
@@ -183,6 +184,14 @@ pub struct ViewModel {
     /// photo of the screen to be a useful bug report. Empty when there is nothing.
     pub playback_details: String,
     pub paused: bool,
+    /// The player menu is open (Start on the Player screen).
+    pub player_menu_open: bool,
+    /// Its focused row (`PlayerMenuRow` order: quality, hardware decoding, latency, zoom, stats).
+    pub player_menu_focus: i32,
+    /// The current value of each player-menu row, in the same order.
+    pub player_menu_values: Vec<String>,
+    /// The stats box, one fact per line. Empty while the box is off.
+    pub stats_text: String,
     /// Changes whenever the HUD should come back (the window hides it again after a timeout).
     pub hud_pulse: i32,
     /// The "Quit LiveDeck?" prompt is open.
@@ -190,6 +199,89 @@ pub struct ViewModel {
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
+}
+
+/// The values the player menu shows, in `PlayerMenuRow` order.
+fn player_menu_values(state: &AppState) -> Vec<String> {
+    PlayerMenuRow::ALL
+        .iter()
+        .map(|row| match row {
+            PlayerMenuRow::Quality => state.quality().label(),
+            PlayerMenuRow::Hwdec => state.session.hwdec.label(),
+            PlayerMenuRow::Latency => state.session.latency.label(),
+            PlayerMenuRow::Zoom => state.session.zoom.label(),
+            PlayerMenuRow::Stats if state.session.stats => "On",
+            PlayerMenuRow::Stats => "Off",
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A bit rate as people read it: `850 kb/s`, `6.2 Mb/s`.
+pub fn format_bitrate(bits_per_second: u64) -> String {
+    if bits_per_second < 1_000_000 {
+        format!("{} kb/s", (bits_per_second + 500) / 1_000)
+    } else {
+        let tenths = (bits_per_second + 50_000) / 100_000;
+        format!("{}.{} Mb/s", tenths / 10, tenths % 10)
+    }
+}
+
+/// Frames per second from thousandths, with no more decimals than it needs: `60`, `59.94`.
+pub fn format_fps(fps_milli: u32) -> String {
+    let hundredths = (fps_milli + 5) / 10;
+    let text = format!("{}.{:02}", hundredths / 100, hundredths % 100);
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// What the stats box says, one fact per line. Empty while it is off or off the Player screen.
+fn stats_text(state: &AppState) -> String {
+    if !state.session.stats || state.screen != Screen::Player {
+        return String::new();
+    }
+    let quality = format!("Asked for: {}", state.quality().label());
+    let Some(s) = &state.stats else {
+        return format!("Waiting for the player…\n{quality}");
+    };
+    const UNKNOWN: &str = "—";
+    let size = match (s.width, s.height) {
+        (Some(w), Some(h)) => format!("{w}×{h}"),
+        _ => UNKNOWN.to_owned(),
+    };
+    let fps = s
+        .fps_milli
+        .map(|f| format!(" · {} fps", format_fps(f)))
+        .unwrap_or_default();
+    let decoder = match &s.hwdec {
+        Some(hw) => format!("hardware ({hw})"),
+        None => "software".to_owned(),
+    };
+    let rate = |r: Option<u64>| r.map_or_else(|| UNKNOWN.to_owned(), format_bitrate);
+    let buffer = s.buffer_ms.map_or_else(
+        || UNKNOWN.to_owned(),
+        |ms| format!("{}.{} s", ms / 1000, (ms % 1000) / 100),
+    );
+    let count = |n: Option<u64>| n.map_or_else(|| UNKNOWN.to_owned(), |n| n.to_string());
+    [
+        format!("Video: {size}{fps}"),
+        format!(
+            "Codec: {} · {decoder}",
+            s.codec.as_deref().unwrap_or(UNKNOWN)
+        ),
+        format!(
+            "Bitrate: {} video · {} audio",
+            rate(s.video_bitrate),
+            rate(s.audio_bitrate)
+        ),
+        format!("Buffer: {buffer}"),
+        format!(
+            "Dropped frames: {} · decoder {}",
+            count(s.dropped_frames),
+            count(s.decoder_dropped_frames)
+        ),
+        quality,
+    ]
+    .join("\n")
 }
 
 /// Compact viewer count: `860`, `4.2K`, `48.1K`, `1.3M`. Rounds to the nearest tenth.
@@ -552,6 +644,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
             SettingsRow::ChatLayout | SettingsRow::Quality => "Change",
         };
         (label, false)
+    } else if on_player && state.player_menu.is_some() {
+        // The menu has the buttons: A changes the focused value.
+        ("Change", false)
     } else if on_player {
         match playback {
             PlaybackId::Loading => ("", false),
@@ -601,6 +696,10 @@ pub fn view_model(state: &AppState) -> ViewModel {
         playback_error,
         playback_details,
         paused: state.paused,
+        player_menu_open: on_player && state.player_menu.is_some(),
+        player_menu_focus: to_i32(state.player_menu.unwrap_or_default().index()),
+        player_menu_values: player_menu_values(state),
+        stats_text: stats_text(state),
         hud_pulse: state.hud_pulse as i32,
         exit_prompt: state.exit_prompt,
         rows,
@@ -754,6 +853,15 @@ impl Update {
         ui.set_playback_error(vm.playback_error.into());
         ui.set_playback_details(vm.playback_details.into());
         ui.set_paused(vm.paused);
+        ui.set_player_menu_open(vm.player_menu_open);
+        ui.set_player_menu_focus(vm.player_menu_focus);
+        let values: Vec<slint::SharedString> = vm
+            .player_menu_values
+            .iter()
+            .map(|v| v.as_str().into())
+            .collect();
+        ui.set_player_menu_values(ModelRc::new(VecModel::from(values)));
+        ui.set_stats_text(vm.stats_text.into());
         ui.set_hud_pulse(vm.hud_pulse);
         ui.set_exit_prompt(vm.exit_prompt);
     }
@@ -1108,6 +1216,30 @@ mod tests {
         assert_eq!(format_viewers(999_949), "999.9K");
         assert_eq!(format_viewers(999_950), "1.0M");
         assert_eq!(format_viewers(1_250_000), "1.3M");
+    }
+
+    #[test]
+    fn bitrate_and_fps_formatting() {
+        assert_eq!(format_bitrate(0), "0 kb/s");
+        assert_eq!(format_bitrate(160_000), "160 kb/s");
+        assert_eq!(format_bitrate(999_499), "999 kb/s");
+        assert_eq!(format_bitrate(1_000_000), "1.0 Mb/s");
+        assert_eq!(format_bitrate(6_240_000), "6.2 Mb/s");
+        assert_eq!(format_fps(60_000), "60");
+        assert_eq!(format_fps(59_940), "59.94");
+        assert_eq!(format_fps(29_970), "29.97");
+        assert_eq!(format_fps(25_500), "25.5");
+        assert_eq!(format_fps(59_998), "60");
+    }
+
+    #[test]
+    fn the_stats_box_is_only_on_the_player_while_on() {
+        let (mut s, _) = reduce(&loaded(), Intent::Select);
+        assert!(view_model(&s).stats_text.is_empty());
+        s.session.stats = true;
+        assert!(view_model(&s).stats_text.starts_with("Waiting"));
+        let (s, _) = reduce(&s, Intent::Back);
+        assert!(view_model(&s).stats_text.is_empty(), "not over Home");
     }
 
     #[test]

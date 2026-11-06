@@ -80,6 +80,12 @@ export component MainWindow inherits Window {
     // What the player logged before failing (shown small under the error, for bug reports).
     in property <string> playback-details: "";
     in property <bool> paused: false;
+    // The player menu (Start while watching): open, focused row, and each row's value.
+    in property <bool> player-menu-open: false;
+    in property <int> player-menu-focus: 0;
+    in property <[string]> player-menu-values: [];
+    // The stats box over the video, one fact per line. Empty while it is off.
+    in property <string> stats-text: "";
     // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
     in property <int> hud-pulse: 0;
     // The "Quit LiveDeck?" prompt (B on a root screen). A quits, B cancels.
@@ -244,6 +250,10 @@ export component MainWindow inherits Window {
         playback-details: root.playback-details;
         paused: root.paused;
         hud-visible: root.hud-visible;
+        menu-open: root.player-menu-open;
+        menu-focus: root.player-menu-focus;
+        menu-values: root.player-menu-values;
+        stats-text: root.stats-text;
     }
 
     // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
@@ -292,7 +302,7 @@ export component MainWindow inherits Window {
         background: #0e0e10f0;
         // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
         // comes back on any button. Loading, paused and error screens keep it.
-        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt ? 0.0 : 1.0;
+        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open ? 0.0 : 1.0;
         animate opacity { duration: Theme.t-med; }
 
         // Empty while the quit prompt is open: the prompt shows its own buttons.
@@ -308,7 +318,10 @@ export component MainWindow inherits Window {
             if root.screen == 1 && root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 1 : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
-            if root.screen == 1 || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: "Back"; clicked => { root.action(UiAction.back); } }
+            // Start opens the player menu. With it open, B closes it instead of leaving the stream.
+            if root.screen == 1 && !root.player-menu-open : Hint { glyph: "≡"; label: "Options"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 1 && root.player-menu-open : Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
+            if (root.screen == 1 && !root.player-menu-open) || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: "Back"; clicked => { root.action(UiAction.back); } }
             // Root screens: nowhere further back, so B asks to quit (with the rail open, B only closes it).
             if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
             if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }

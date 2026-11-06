@@ -8,22 +8,44 @@
 
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use libmpv2::events::Event;
 use libmpv2::{mpv_end_file_reason, Mpv};
 
 use crate::output::VideoOutput;
 use crate::recent::RecentLog;
-use crate::{Player, PlayerEvent};
+use crate::{Latency, LoadOptions, Player, PlayerEvent, PlayerOption, PlayerStats, Zoom};
 
 /// How often the control thread looks for mpv events when no command arrives.
 const POLL: Duration = Duration::from_millis(50);
 
+/// How often stats are read while they are on.
+const STATS_EVERY: Duration = Duration::from_secs(1);
+
+/// What a latency means in mpv options: `(option, low, normal)`. The low values are mpv's own
+/// `low-latency` profile (set once at start), the normal ones mpv's defaults plus a longer
+/// read-ahead and a short wait to refill the cache after a stall. Applied before each load, as
+/// most of them are only read when a file opens.
+const LATENCY_OPTIONS: &[(&str, &str, &str)] = &[
+    ("audio-buffer", "0", "0.2"),
+    ("vd-lavc-threads", "1", "0"),
+    ("cache-pause", "no", "yes"),
+    ("cache-pause-wait", "1", "3"),
+    ("demuxer-lavf-o", "fflags=+nobuffer", ""),
+    ("demuxer-lavf-probe-info", "nostreams", "auto"),
+    ("demuxer-lavf-analyzeduration", "0.1", "0"),
+    ("demuxer-readahead-secs", "1", "10"),
+    ("video-latency-hacks", "yes", "no"),
+    ("stream-buffer-size", "4k", "128k"),
+];
+
 enum Control {
-    Load(String),
+    Load(String, LoadOptions),
     Pause(bool),
     Stop,
+    Option(PlayerOption),
+    Stats(bool),
 }
 
 pub struct MpvPlayer {
@@ -93,8 +115,8 @@ impl MpvPlayer {
 }
 
 impl Player for MpvPlayer {
-    fn load(&self, url: &str) {
-        self.send(Control::Load(url.to_owned()));
+    fn load(&self, url: &str, options: LoadOptions) {
+        self.send(Control::Load(url.to_owned(), options));
     }
 
     fn set_paused(&self, paused: bool) {
@@ -103,6 +125,83 @@ impl Player for MpvPlayer {
 
     fn stop(&self) {
         self.send(Control::Stop);
+    }
+
+    fn set_option(&self, option: PlayerOption) {
+        self.send(Control::Option(option));
+    }
+
+    fn set_stats(&self, on: bool) {
+        self.send(Control::Stats(on));
+    }
+}
+
+/// Sets the buffering options of `latency` for the next load. Best effort: an option this mpv
+/// build lacks is logged and skipped.
+fn apply_latency(mpv: &Mpv, latency: Latency) {
+    for (name, low, normal) in LATENCY_OPTIONS {
+        let value = match latency {
+            Latency::Low => *low,
+            Latency::Normal => *normal,
+        };
+        if let Err(e) = mpv.set_property(name, value) {
+            tracing::warn!(option = name, value, %e, "mpv latency option not applied");
+        }
+    }
+}
+
+/// Applies an option that changes while playing. mpv keeps it for later streams as well.
+fn apply_option(mpv: &Mpv, option: PlayerOption) {
+    let result = match option {
+        PlayerOption::Hwdec(on) => mpv.set_property("hwdec", if on { "auto-safe" } else { "no" }),
+        // `panscan` 1.0 crops the picture until it fills the window, 0.0 shows all of it.
+        PlayerOption::Zoom(zoom) => mpv.set_property(
+            "panscan",
+            match zoom {
+                Zoom::Fit => 0.0,
+                Zoom::Fill => 1.0,
+            },
+        ),
+    };
+    if let Err(e) = result {
+        tracing::warn!(?option, %e, "mpv option not changed");
+    }
+}
+
+/// A numeric property, whether mpv keeps it as a whole number or a fraction. `None` while it
+/// has no value (nothing loaded yet).
+fn number(mpv: &Mpv, name: &str) -> Option<f64> {
+    mpv.get_property::<f64>(name)
+        .ok()
+        .or_else(|| mpv.get_property::<i64>(name).ok().map(|v| v as f64))
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+/// A text property, `None` if it is empty or "no" (mpv's word for "none" in `hwdec-current`).
+fn text(mpv: &Mpv, name: &str) -> Option<String> {
+    mpv.get_property::<String>(name)
+        .ok()
+        .filter(|v| !v.is_empty() && v != "no")
+}
+
+/// Reads the stats box's numbers from mpv's properties.
+fn read_stats(mpv: &Mpv) -> PlayerStats {
+    let whole = |name: &str| number(mpv, name).map(|v| v.round() as u64);
+    let small = |v: f64| u32::try_from(v.round() as u64).ok();
+    PlayerStats {
+        width: number(mpv, "video-params/w").and_then(small),
+        height: number(mpv, "video-params/h").and_then(small),
+        fps_milli: number(mpv, "estimated-vf-fps")
+            .or_else(|| number(mpv, "container-fps"))
+            .and_then(|fps| small(fps * 1000.0)),
+        // `video-format` is the short codec name ("h264"), `video-codec` the long one.
+        codec: text(mpv, "video-format").or_else(|| text(mpv, "video-codec")),
+        hwdec: text(mpv, "hwdec-current"),
+        video_bitrate: whole("video-bitrate"),
+        audio_bitrate: whole("audio-bitrate"),
+        buffer_ms: number(mpv, "demuxer-cache-duration").and_then(|s| small(s * 1000.0)),
+        dropped_frames: whole("frame-drop-count"),
+        decoder_dropped_frames: whole("decoder-frame-drop-count"),
     }
 }
 
@@ -167,10 +266,13 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
     let mut starting = false;
     // What mpv warned about since the current stream started, shown with a failure.
     let mut recent = RecentLog::default();
+    // When the next stats report is due, while stats are on.
+    let mut stats_due: Option<Instant> = None;
     loop {
         match rx.recv_timeout(POLL) {
-            Ok(Control::Load(url)) => {
+            Ok(Control::Load(url, options)) => {
                 recent.clear();
+                apply_latency(mpv, options.latency);
                 let _ = mpv.set_property("pause", false);
                 match mpv.command("loadfile", &[url.as_str(), "replace"]) {
                     Ok(()) => starting = true,
@@ -190,6 +292,9 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
                     tracing::warn!(%e, "could not stop mpv");
                 }
             }
+            Ok(Control::Option(option)) => apply_option(mpv, option),
+            // The first report comes at once, so the box does not sit empty for a second.
+            Ok(Control::Stats(on)) => stats_due = on.then(Instant::now),
             Err(RecvTimeoutError::Timeout) => {}
             // The player was dropped: the app is quitting.
             Err(RecvTimeoutError::Disconnected) => break,
@@ -224,6 +329,14 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
                     tracing::warn!(%e, "mpv could not play the stream");
                     on_event(PlayerEvent::Failed(recent.report(&describe(&e))));
                 }
+            }
+        }
+
+        if let Some(due) = stats_due {
+            let now = Instant::now();
+            if now >= due {
+                on_event(PlayerEvent::Stats(read_stats(mpv)));
+                stats_due = Some(now + STATS_EVERY);
             }
         }
     }

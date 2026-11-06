@@ -21,6 +21,41 @@ component ChatList inherits Rectangle {
     }
 }
 
+// One row of the player menu: what it changes on the left, its value between arrows on the right.
+component MenuRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <bool> focused;
+
+    height: Theme.menu-row-h;
+    border-radius: 6px;
+    background: root.focused ? Theme.surface-high : transparent;
+    border-width: 2px;
+    border-color: root.focused ? Theme.accent-light : transparent;
+    animate border-color, background { duration: Theme.t-fast; }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 16px;
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: Theme.fs-body;
+            font-weight: 700;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.focused ? "◀  " + root.value + "  ▶" : root.value;
+            color: root.focused ? Theme.accent-light : Theme.muted;
+            font-size: Theme.fs-body;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
 // Chat is a side panel (the video shrinks to make room) or an overlay (lines over the video).
 export component PlayerScreen inherits Rectangle {
     in property <StreamItem> stream;
@@ -39,6 +74,14 @@ export component PlayerScreen inherits Rectangle {
     in property <string> playback-details: "";
     in property <bool> paused: false;
     in property <bool> hud-visible: true;
+    // The player menu (Start): open, its focused row and the value of each row (PlayerMenuRow
+    // order in htpc-core: quality, hardware decoding, latency, zoom, stats).
+    in property <bool> menu-open: false;
+    in property <int> menu-focus: 0;
+    in property <[string]> menu-values: [];
+    // The stats box, one fact per line. Empty hides it.
+    in property <string> stats-text: "";
+    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats"];
 
     // Skeleton pulse, 0..1 (only ticks while a skeleton is shown).
     property <float> pulse: 0.5 + 0.5 * Math.sin(mod(animation-tick() / Theme.t-pulse, 1) * 360deg);
@@ -143,11 +186,65 @@ export component PlayerScreen inherits Rectangle {
             }
         }
 
-        // HUD: channel, title and viewers. Fades out on its own while playing.
+        // Stats box ("nerds view"): top left, over the video, on every stream until turned off.
+        if root.stats-text != "" : Rectangle {
+            x: Theme.safe-x / 2;
+            y: 24px;
+            width: Theme.stats-w;
+            height: stats-layout.preferred-height;
+            background: #000000b8;
+            border-radius: 8px;
+            stats-layout := VerticalLayout {
+                padding: 14px;
+                Text {
+                    text: root.stats-text;
+                    color: Theme.text;
+                    font-size: Theme.fs-small;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // Player menu: bottom left, just above the HUD text. Up/Down pick a row, Left/Right change
+        // it (see `player_menu_intent` in htpc-core).
+        if root.menu-open : Rectangle {
+            x: Theme.safe-x / 2;
+            y: parent.height - 190px - self.height - 8px;
+            width: Theme.menu-w;
+            height: menu-layout.preferred-height;
+            background: #18181bf0;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: Theme.surface-high;
+            menu-layout := VerticalLayout {
+                padding: 12px;
+                spacing: 4px;
+                Text {
+                    text: "OPTIONS";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-small;
+                    font-weight: 800;
+                    letter-spacing: 3px;
+                }
+                for title[i] in root.menu-titles : MenuRow {
+                    title: title;
+                    value: root.menu-values[i];
+                    focused: root.menu-focus == i;
+                }
+                Text {
+                    text: "Not saved: lasts until LiveDeck quits";
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                }
+            }
+        }
+
+        // HUD: channel, title and viewers. Fades out on its own while playing, never while the
+        // menu is open.
         Rectangle {
             y: parent.height - 190px;
             height: 190px;
-            opacity: (root.hud-visible || root.playback != 1 || root.paused) ? 1.0 : 0.0;
+            opacity: (root.hud-visible || root.menu-open || root.playback != 1 || root.paused) ? 1.0 : 0.0;
             animate opacity { duration: Theme.t-med; }
             background: @linear-gradient(180deg, #00000000, #000000d0);
 

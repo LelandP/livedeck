@@ -492,7 +492,8 @@ fn category_streams_load_as_a_grid_and_play_on_select() {
             },
             Command::Play {
                 channel: "s1".into(),
-                quality: Quality::Best
+                quality: Quality::Best,
+                latency: Latency::Low
             }
         ]
     );

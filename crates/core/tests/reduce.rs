@@ -437,7 +437,8 @@ fn select_stream_opens_player_and_joins_chat() {
             },
             Command::Play {
                 channel: "t1".into(),
-                quality: Quality::Best
+                quality: Quality::Best,
+                latency: Latency::Low
             }
         ]
     );

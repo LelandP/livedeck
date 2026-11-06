@@ -1,8 +1,10 @@
 //! Application state. Owned by the store and replaced on every `reduce`.
 
 use crate::chat::ChatBuffer;
-use crate::domain::{ChatStatus, DeviceCode, FeedId, LoginProblem, Row, Stream, Tile, User};
-use crate::settings::Settings;
+use crate::domain::{
+    ChatStatus, DeviceCode, FeedId, LoginProblem, PlayerStats, Row, Stream, Tile, User,
+};
+use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
@@ -100,6 +102,55 @@ impl SettingsRow {
     pub fn next(self) -> Self {
         Self::ALL[(self.index() + 1).min(Self::ALL.len() - 1)]
     }
+}
+
+/// The rows of the player menu (Start on the Player screen), top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerMenuRow {
+    #[default]
+    Quality,
+    Hwdec,
+    Latency,
+    Zoom,
+    Stats,
+}
+
+impl PlayerMenuRow {
+    pub const ALL: [PlayerMenuRow; 5] = [
+        PlayerMenuRow::Quality,
+        PlayerMenuRow::Hwdec,
+        PlayerMenuRow::Latency,
+        PlayerMenuRow::Zoom,
+        PlayerMenuRow::Stats,
+    ];
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The row above, stopping at the top.
+    pub fn prev(self) -> Self {
+        Self::ALL[self.index().saturating_sub(1)]
+    }
+
+    /// The row below, stopping at the bottom.
+    pub fn next(self) -> Self {
+        Self::ALL[(self.index() + 1).min(Self::ALL.len() - 1)]
+    }
+}
+
+/// What the player menu changed for this run of the app. Never saved: it starts from the
+/// settings (or built-in defaults) and is gone when the app quits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SessionOptions {
+    /// The quality picked in the player menu. `None` follows `Settings::quality`, and changing
+    /// the quality on the Settings screen sets it back to `None`.
+    pub quality: Option<Quality>,
+    pub hwdec: Hwdec,
+    pub latency: Latency,
+    pub zoom: Zoom,
+    /// The stats box is on. It stays on from stream to stream until it is turned off.
+    pub stats: bool,
 }
 
 /// Card focus on the home rows.
@@ -212,6 +263,12 @@ pub struct AppState {
     pub now_playing: Option<Stream>,
     pub playback: Playback,
     pub paused: bool,
+    /// The player menu is open on this row (Start on the Player screen). It takes the D-pad.
+    pub player_menu: Option<PlayerMenuRow>,
+    /// The player menu's choices for this run of the app.
+    pub session: SessionOptions,
+    /// The latest numbers for the stats box. Only kept while it is on and a stream is on screen.
+    pub stats: Option<PlayerStats>,
     /// Counts the inputs that should bring the HUD back. The reducer has no clock, so the window
     /// shows the HUD on every change and hides it again after a timeout.
     pub hud_pulse: u32,
@@ -235,6 +292,11 @@ pub struct AppState {
 impl AppState {
     pub fn is_signed_in(&self) -> bool {
         self.user.is_some()
+    }
+
+    /// The quality streams are played at: the player menu's pick, or else the saved setting.
+    pub fn quality(&self) -> Quality {
+        self.session.quality.unwrap_or(self.settings.quality)
     }
 
     /// The feed a screen shows, or `None` for screens without one (Player, Login).
