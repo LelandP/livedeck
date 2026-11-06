@@ -290,6 +290,10 @@ export component MainWindow inherits Window {
         height: Theme.hints-h;
         width: parent.width;
         background: #0e0e10f0;
+        // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
+        // comes back on any button. Loading, paused and error screens keep it.
+        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt ? 0.0 : 1.0;
+        animate opacity { duration: Theme.t-med; }
 
         // Empty while the quit prompt is open: the prompt shows its own buttons.
         if !root.exit-prompt : HorizontalLayout {

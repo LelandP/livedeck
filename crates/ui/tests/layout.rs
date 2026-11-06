@@ -240,6 +240,39 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         );
     }
 
+    // A playing stream: the hints bar shows at first, then fades out with the HUD.
+    let mut playing = watching_a_busy_chat(ChatLayout::Side);
+    playing.chat_open = false;
+    playing.playback = htpc_core::Playback::Playing;
+    playing.paused = false;
+    Update::full(view_model(&playing)).apply(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10));
+    let image = render(&ui);
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the hints bar is not shown when a stream starts"
+    );
+    // The HUD timer is 4 s, then the fade takes 240 ms. The mock clock runs animations before
+    // timers, so the fade only starts on the tick after the timer fires.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(4_500));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    assert_eq!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button),
+        0,
+        "the hints bar stays on screen over a playing stream"
+    );
+    // Pausing brings it back.
+    playing.paused = true;
+    playing.hud_pulse += 1;
+    Update::full(view_model(&playing)).apply(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the hints bar does not come back on pause"
+    );
+
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
     // element that has a size but no position, which once put the heading strip mid-screen.
     let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));
