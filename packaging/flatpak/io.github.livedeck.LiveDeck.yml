@@ -48,7 +48,9 @@ modules:
         commit: 4a05d8127f525943ebf45fdc6497c9e665947f0d
 
   # H.264 (what Twitch streams use) decodes with FFmpeg's own decoder, so no GPL libraries are
-  # needed. VAAPI gives hardware decoding on the Deck's AMD GPU.
+  # needed. VAAPI gives hardware decoding on the Deck's AMD GPU. GnuTLS (from the runtime) gives
+  # FFmpeg its https protocol: Twitch playlists are https URLs, and FFmpeg does not pick a TLS
+  # library on its own, so without it every stream fails to load (mpv's "loading failed", -13).
   - name: ffmpeg
     cleanup:
       - /include
@@ -64,6 +66,7 @@ modules:
       - --enable-libfreetype
       - --enable-libdrm
       - --enable-vaapi
+      - --enable-gnutls
     sources:
       - type: git
         # GitHub's mirror of git.ffmpeg.org (same tag and commit), which is reachable from CI.
