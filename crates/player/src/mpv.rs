@@ -68,7 +68,7 @@ impl MpvPlayer {
             }
             Ok(())
         })
-        .map_err(|e| format!("libmpv failed to start: {e}"))?;
+        .map_err(|e| format!("libmpv failed to start: {}", describe(&e)))?;
         let mpv = Arc::new(mpv);
 
         let (tx, rx) = channel();
@@ -125,6 +125,26 @@ fn use_c_numeric_locale() {
 #[cfg(not(target_os = "linux"))]
 fn use_c_numeric_locale() {}
 
+/// An mpv error in words, for the player's error screen: "Raw(-13)" tells nobody anything. The
+/// code stays in brackets for bug reports.
+fn describe(e: &libmpv2::Error) -> String {
+    use libmpv2::mpv_error as code;
+    let libmpv2::Error::Raw(raw) = e else {
+        return e.to_string();
+    };
+    let what = match *raw {
+        code::LoadingFailed => "the stream could not be opened",
+        code::NothingToPlay => "the stream has no audio or video",
+        code::UnknownFormat => "the stream's format is not supported",
+        code::AoInitFailed => "no audio output could be opened",
+        code::VoInitFailed => "no video output could be opened",
+        code::OptionNotFound => "mpv was given an option this build does not have",
+        code::Unsupported | code::NotImplemented => "this mpv build does not support it",
+        _ => return format!("mpv error {raw}"),
+    };
+    format!("{what} (mpv error {raw})")
+}
+
 fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEvent)) {
     // True from `Load` until the first frame, so `Playing` is reported once per stream.
     let mut starting = false;
@@ -134,7 +154,10 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
                 let _ = mpv.set_property("pause", false);
                 match mpv.command("loadfile", &[url.as_str(), "replace"]) {
                     Ok(()) => starting = true,
-                    Err(e) => on_event(PlayerEvent::Failed(format!("loadfile failed: {e}"))),
+                    Err(e) => on_event(PlayerEvent::Failed(format!(
+                        "loadfile failed: {}",
+                        describe(&e)
+                    ))),
                 }
             }
             Ok(Control::Pause(paused)) => {
@@ -170,7 +193,8 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
                 // An end-of-file with an error code arrives as an `Err`.
                 Err(e) => {
                     starting = false;
-                    on_event(PlayerEvent::Failed(e.to_string()));
+                    tracing::warn!(%e, "mpv could not play the stream");
+                    on_event(PlayerEvent::Failed(describe(&e)));
                 }
             }
         }
