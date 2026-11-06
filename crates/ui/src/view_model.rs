@@ -137,6 +137,8 @@ pub struct ViewModel {
     pub screen: ScreenId,
     pub sel_row: i32,
     pub sel_col: i32,
+    /// Home and Following: the column each row is scrolled to, focused or not. Empty on grids.
+    pub row_cols: Vec<i32>,
     pub rail_index: i32,
     pub rail_focused: bool,
     /// Rail entry highlighted as the current destination.
@@ -618,6 +620,13 @@ pub fn view_model(state: &AppState) -> ViewModel {
         Some(f) => (feed_rows(&id, f), f.focus, f.error.clone(), f.loading),
         None => (Vec::new(), Default::default(), None, false),
     };
+    // Separate rows keep their own scroll position (see `Feed::row_cols`).
+    let row_cols: Vec<i32> = match feed {
+        Some(f) if !id.is_grid() => (0..rows.len())
+            .map(|r| to_i32(if r == focus.row { focus.col } else { f.col_of(r) }))
+            .collect(),
+        _ => Vec::new(),
+    };
     let failed_page =
         feed.is_some_and(|f| f.rows.iter().any(|r| matches!(r.paging, Paging::Failed(_))));
     let selects_category = feed
@@ -665,6 +674,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         screen,
         sel_row: to_i32(focus.row),
         sel_col: to_i32(focus.col),
+        row_cols,
         rail_index: to_i32(state.rail.index.index()),
         rail_focused: state.rail.focused,
         rail_current,
@@ -825,6 +835,7 @@ impl Update {
         ui.set_screen(vm.screen as i32);
         ui.set_sel_row(vm.sel_row);
         ui.set_sel_col(vm.sel_col);
+        ui.set_row_cols(ModelRc::new(VecModel::from(vm.row_cols)));
         ui.set_rail_index(vm.rail_index);
         ui.set_rail_focused(vm.rail_focused);
         ui.set_rail_current(vm.rail_current);

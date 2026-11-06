@@ -9,6 +9,8 @@ export component HomeContent inherits Rectangle {
     in property <[RowData]> rows;
     in property <int> sel-row;
     in property <int> sel-col;
+    // The column each row is scrolled to, so a row keeps its place while another one is focused.
+    in property <[int]> row-cols;
     in property <bool> active;
     in property <string> heading;
     callback picked(int, int);
@@ -45,7 +47,7 @@ export component HomeContent inherits Rectangle {
 
             Rectangle {
                 y: 44px;
-                x: ri == root.sel-row ? -max(0, root.sel-col - 1) * Theme.slot-width(r.shape) : 0px;
+                x: -max(0, (ri == root.sel-row ? root.sel-col : root.row-cols[ri]) - 1) * Theme.slot-width(r.shape);
                 animate x { duration: Theme.t-med; easing: ease-out; }
 
                 for item[ci] in r.items : StreamCard {

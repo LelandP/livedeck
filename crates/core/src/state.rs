@@ -170,6 +170,9 @@ pub struct Feed {
     /// The last full-load error. Cleared when a load starts or succeeds. Rows already on screen
     /// stay visible next to it.
     pub error: Option<String>,
+    /// Home and Following only: the column each row was last left on, so a row keeps its
+    /// scroll position while focus is on another row (grids keep the column instead).
+    pub row_cols: Vec<usize>,
 }
 
 impl Feed {
@@ -198,6 +201,31 @@ impl Feed {
     pub fn clamp_focus(&mut self) {
         self.focus.row = self.focus.row.min(self.rows.len().saturating_sub(1));
         self.clamp_col();
+    }
+
+    /// Moves focus to `row`. With `per_row_cols` (separate rows, not a grid) the row being left
+    /// remembers its column and the new row gets back the one it was left on (0 the first time).
+    pub fn focus_row(&mut self, row: usize, per_row_cols: bool) {
+        if per_row_cols && row != self.focus.row {
+            self.remember_col();
+            self.focus.col = self.col_of(row);
+        }
+        self.focus.row = row;
+        self.clamp_col();
+    }
+
+    /// The column `row` was last left on (0 if never).
+    pub fn col_of(&self, row: usize) -> usize {
+        self.row_cols.get(row).copied().unwrap_or(0)
+    }
+
+    /// Stores the focused column as the focused row's own.
+    pub fn remember_col(&mut self) {
+        let row = self.focus.row;
+        if self.row_cols.len() <= row {
+            self.row_cols.resize(row + 1, 0);
+        }
+        self.row_cols[row] = self.focus.col;
     }
 
     /// Keeps the column inside the focused row (used after a row change).

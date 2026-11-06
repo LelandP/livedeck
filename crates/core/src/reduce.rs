@@ -289,13 +289,20 @@ fn toggle_pause(s: &mut AppState, cmds: &mut Vec<Command>) {
     cmds.push(Command::SetPaused(s.paused));
 }
 
+/// The current feed is separate rows (Home, Following), where each row keeps its own column.
+/// In a grid (Browse, a category) Up and Down keep the column instead.
+fn per_row_cols(s: &AppState) -> bool {
+    s.current_feed_id().is_some_and(|id| !id.is_grid())
+}
+
 fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     // Mouse fallbacks and Menu work whether or not the rail has focus.
     match intent {
         Intent::Pick { row, col } => {
             if s.tile(row, col).is_some() {
+                let per_row = per_row_cols(s);
                 if let Some(feed) = s.current_feed_mut() {
-                    feed.focus.row = row;
+                    feed.focus_row(row, per_row);
                     feed.focus.col = col;
                 }
                 select_tile(s, cmds);
@@ -347,17 +354,17 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             load_more_if_near_end(s, cmds);
         }
         Intent::Up => {
+            let per_row = per_row_cols(s);
             if let Some(feed) = s.current_feed_mut() {
-                feed.focus.row = feed.focus.row.saturating_sub(1);
-                feed.clamp_col();
+                feed.focus_row(feed.focus.row.saturating_sub(1), per_row);
             }
             load_more_if_near_end(s, cmds);
         }
         Intent::Down => {
+            let per_row = per_row_cols(s);
             if let Some(feed) = s.current_feed_mut() {
                 if !feed.rows.is_empty() {
-                    feed.focus.row = (feed.focus.row + 1).min(feed.rows.len() - 1);
-                    feed.clamp_col();
+                    feed.focus_row((feed.focus.row + 1).min(feed.rows.len() - 1), per_row);
                 }
             }
             load_more_if_near_end(s, cmds);

@@ -61,6 +61,8 @@ export component MainWindow inherits Window {
     in property <int> screen: 0;
     in property <int> sel-row: 0;
     in property <int> sel-col: 0;
+    // Home and Following: the column each row is scrolled to (view_model.rs `row_cols`).
+    in property <[int]> row-cols;
     // Rail cursor: 0..3 nav entries, 4 = account (RailEntry order in htpc-core).
     in property <int> rail-index: 0;
     in property <bool> rail-focused: false;
@@ -155,6 +157,7 @@ export component MainWindow inherits Window {
         rows: root.rows;
         sel-row: root.sel-row;
         sel-col: root.sel-col;
+        row-cols: root.row-cols;
         active: !root.rail-focused;
         heading: root.heading;
         picked(r, c) => { root.card-clicked(r, c); }
@@ -202,18 +205,6 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 : Rail {
-        x: 0px;
-        y: 0px;
-        height: parent.height - Theme.hints-h;
-        items: root.rail-items;
-        selected: root.rail-index;
-        current: root.rail-current;
-        expanded: root.rail-focused;
-        user-name: root.user-name;
-        activated(i) => { root.rail-clicked(i); }
-    }
-
     if root.screen == 2 : SignInScreen {
         x: Theme.rail-collapsed;
         width: parent.width - Theme.rail-collapsed;
@@ -234,6 +225,20 @@ export component MainWindow inherits Window {
         quality: root.quality-label;
         version: root.version;
         focus-row: root.rail-focused ? -1 : root.settings-focus;
+    }
+
+    // After every screen it sits beside: Slint paints in declaration order, and the expanded rail
+    // must draw over the screen content, not under it.
+    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 : Rail {
+        x: 0px;
+        y: 0px;
+        height: parent.height - Theme.hints-h;
+        items: root.rail-items;
+        selected: root.rail-index;
+        current: root.rail-current;
+        expanded: root.rail-focused;
+        user-name: root.user-name;
+        activated(i) => { root.rail-clicked(i); }
     }
 
     if root.screen == 1 : PlayerScreen {
@@ -314,7 +319,7 @@ export component MainWindow inherits Window {
 
             if root.screen == 0 || root.screen == 3 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if (root.screen == 0 || root.screen == 3) && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
-            if root.screen == 0 || root.screen == 3 : Hint { glyph: "◀"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 0 || root.screen == 3 : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 1 && root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 1 : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
@@ -326,7 +331,7 @@ export component MainWindow inherits Window {
             if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
             if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
-            if root.screen == 4 : Hint { glyph: "◀"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 4 : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
         }
     }
 }

@@ -124,6 +124,21 @@ fn intents_on_empty_rows_are_safe() {
 // ---- focus ---------------------------------------------------------------------------------
 
 #[test]
+fn home_rows_each_keep_their_own_column() {
+    // Scroll row 0 to col 3, go down: row 1 starts at its own column (0), not row 0's.
+    let (s, _) = run(home(), &[Intent::Right; 3]);
+    let (s, _) = reduce(&s, Intent::Down);
+    assert_eq!(s.home.focus, Focus { row: 1, col: 0 });
+    // Scroll row 1, go down and back up: each row is where it was left.
+    let (s, _) = run(s, &[Intent::Right, Intent::Down]);
+    assert_eq!(s.home.focus, Focus { row: 2, col: 0 });
+    let (s, _) = reduce(&s, Intent::Up);
+    assert_eq!(s.home.focus, Focus { row: 1, col: 1 });
+    let (s, _) = reduce(&s, Intent::Up);
+    assert_eq!(s.home.focus, Focus { row: 0, col: 3 });
+}
+
+#[test]
 fn right_clamps_at_row_end() {
     let (s, _) = run(home(), &[Intent::Right; 10]);
     assert_eq!(s.home.focus, Focus { row: 0, col: 4 });
@@ -142,17 +157,6 @@ fn down_and_up_clamp_at_edges() {
     assert_eq!(s.home.focus.row, 2);
     let (s, _) = run(s, &[Intent::Up; 10]);
     assert_eq!(s.home.focus.row, 0);
-}
-
-#[test]
-fn row_change_clamps_column_to_shorter_row() {
-    // Col 4 in row 0, then down to row 1 (2 tiles).
-    let (s, _) = run(home(), &[Intent::Right; 4]);
-    let (s, _) = reduce(&s, Intent::Down);
-    assert_eq!(s.home.focus, Focus { row: 1, col: 1 });
-    // Moving back up keeps the clamped column (scaffold behaviour).
-    let (s, _) = reduce(&s, Intent::Up);
-    assert_eq!(s.home.focus, Focus { row: 0, col: 1 });
 }
 
 // ---- rail ----------------------------------------------------------------------------------
