@@ -52,6 +52,11 @@ fn best_and_worst_have_no_fallback() {
 }
 
 #[test]
+fn audio_only_falls_back_to_video_when_a_stream_has_no_audio_rendition() {
+    assert_eq!(quality_arg("audio_only"), "audio_only,best");
+}
+
+#[test]
 fn no_playable_streams_means_offline() {
     let out = failed("error: No playable streams found on this URL: https://twitch.tv/x\n");
     assert_eq!(map_output(&out), Err(ResolveError::Offline));

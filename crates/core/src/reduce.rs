@@ -9,6 +9,7 @@ use crate::domain::{grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RowKind,
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 use crate::state::{
     AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen, SettingsRow,
+    SleepTimer,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -38,6 +39,13 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
 }
 
 fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    // "Still watching?": any button keeps going, and does nothing else (it must not also pause,
+    // open chat or leave the stream).
+    if let Some(timer) = s.sleep.filter(|t| t.warning) {
+        start_sleep(s, timer.minutes, cmds);
+        pulse_hud(s);
+        return;
+    }
     if s.exit_prompt {
         exit_prompt_intent(s, intent, cmds);
         return;
@@ -221,7 +229,8 @@ fn player_menu_intent(
 }
 
 /// Steps a player-menu row to its next or previous value and applies it. Quality and latency are
-/// chosen when a stream is resolved and loaded, so changing them starts the stream again.
+/// chosen when a stream is resolved and loaded, so changing them (or audio only) starts the
+/// stream again.
 fn change_player_option(
     s: &mut AppState,
     row: PlayerMenuRow,
@@ -229,6 +238,8 @@ fn change_player_option(
     cmds: &mut Vec<Command>,
 ) {
     match row {
+        // Audio only has no quality to pick: the row is locked until it is turned off.
+        PlayerMenuRow::Quality if s.audio_only => {}
         PlayerMenuRow::Quality => {
             s.session.quality = Some(s.quality().cycled(forward));
             start_playback(s, cmds);
@@ -254,7 +265,40 @@ fn change_player_option(
             }
             cmds.push(Command::SetStats(s.session.stats));
         }
+        // Both directions toggle. The quality is kept, so turning it off goes back to it.
+        PlayerMenuRow::AudioOnly => {
+            s.audio_only = !s.audio_only;
+            start_playback(s, cmds);
+        }
+        // Every step starts the timer again at the new length, counted from now.
+        PlayerMenuRow::SleepTimer => {
+            match SleepTimer::cycled(s.sleep.map(|t| t.minutes), forward) {
+                Some(minutes) => start_sleep(s, minutes, cmds),
+                None => {
+                    s.sleep = None;
+                    cmds.push(Command::CancelSleepTimer);
+                }
+            }
+        }
     }
+}
+
+/// Sets a fresh sleep timer of `minutes` (replacing any running one) and asks the app to run it.
+fn start_sleep(s: &mut AppState, minutes: u16, cmds: &mut Vec<Command>) {
+    s.last_sleep_id = s.last_sleep_id.wrapping_add(1);
+    let id = s.last_sleep_id;
+    s.sleep = Some(SleepTimer {
+        id,
+        minutes,
+        left_min: minutes,
+        warning: false,
+    });
+    cmds.push(Command::StartSleepTimer { id, minutes });
+}
+
+/// The running sleep timer, if its id is `id`. Events of an older timer find nothing.
+fn sleep_timer(s: &mut AppState, id: u32) -> Option<&mut SleepTimer> {
+    s.sleep.as_mut().filter(|t| t.id == id)
 }
 
 fn pulse_hud(s: &mut AppState) {
@@ -273,7 +317,7 @@ fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
     pulse_hud(s);
     cmds.push(Command::Play {
         channel,
-        quality: s.quality(),
+        stream: s.stream_kind(),
         latency: s.session.latency,
     });
     // Leaving the player stops the reports, so a stream started with the stats box on asks for
@@ -505,6 +549,29 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.rail.index = RailEntry::Home;
             }
         }
+        Event::SleepTimerTick { id, left_min } => {
+            if let Some(timer) = sleep_timer(s, id) {
+                timer.left_min = left_min;
+            }
+        }
+        Event::SleepTimerWarning { id } => {
+            if let Some(timer) = sleep_timer(s, id) {
+                timer.left_min = 0;
+                timer.warning = true;
+            }
+        }
+        Event::SleepTimerFired { id } => {
+            if sleep_timer(s, id).is_some() {
+                s.sleep = None;
+                // Like pressing B: the stream stops and chat is left, so nothing reconnects in
+                // the background and the browse screens are there on wake. With nothing playing
+                // it still suspends: the user asked for sleep.
+                if s.screen == Screen::Player {
+                    back(s, cmds);
+                }
+                cmds.push(Command::Suspend);
+            }
+        }
     }
 }
 
@@ -710,6 +777,8 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
         channel: stream.channel.clone(),
     });
     s.now_playing = Some(stream);
+    // Every stream opens as video.
+    s.audio_only = false;
     push_screen(s, Screen::Player);
     start_playback(s, cmds);
 }
@@ -764,6 +833,8 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     match s.screen {
         Screen::Player => {
             s.now_playing = None;
+            // Audio only belongs to the stream that was left, not to the next one.
+            s.audio_only = false;
             s.playback = Playback::Idle;
             s.paused = false;
             s.chat.clear();

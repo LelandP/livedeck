@@ -89,9 +89,9 @@ fn up_and_down_move_between_rows_and_stop_at_the_ends() {
     let (s, _) = run(&playing(), &[Intent::Menu, Intent::Up]);
     assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
     let (s, _) = run(&s, &[Intent::Down; 10]);
-    assert_eq!(s.player_menu, Some(PlayerMenuRow::Stats));
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::SleepTimer));
     let (s, _) = reduce(&s, Intent::Up);
-    assert_eq!(s.player_menu, Some(PlayerMenuRow::Zoom));
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::AudioOnly));
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn changing_quality_reloads_the_stream_and_is_not_saved() {
         cmds,
         vec![Command::Play {
             channel: "chan".into(),
-            quality: Quality::P1080,
+            stream: StreamKind::Video(Quality::P1080),
             latency: Latency::Low,
         }]
     );
@@ -141,7 +141,7 @@ fn the_menu_quality_is_kept_for_the_next_stream() {
     let (_, cmds) = run(&s, &[Intent::Right, Intent::Select]);
     assert!(cmds.contains(&Command::Play {
         channel: "other".into(),
-        quality: Quality::Worst,
+        stream: StreamKind::Video(Quality::Worst),
         latency: Latency::Low,
     }));
 }
@@ -169,7 +169,7 @@ fn changing_latency_reloads_the_stream_with_it() {
         cmds,
         vec![Command::Play {
             channel: "chan".into(),
-            quality: Quality::Best,
+            stream: StreamKind::Video(Quality::Best),
             latency: Latency::Normal,
         }]
     );
@@ -298,6 +298,102 @@ fn leaving_the_player_closes_the_menu_but_keeps_the_choices() {
     // The next stream opens with the menu closed.
     let (s, _) = reduce(&s, Intent::Select);
     assert_eq!(s.player_menu, None);
+}
+
+/// Opens the menu on the audio-only row.
+fn on_audio_row() -> AppState {
+    let (s, _) = run(&playing(), &[Intent::Menu]);
+    let (s, _) = run(&s, &[Intent::Down; 5]);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::AudioOnly));
+    s
+}
+
+#[test]
+fn audio_only_reloads_the_stream_as_sound_only() {
+    let s = on_audio_row();
+    assert!(!s.audio_only, "every stream starts as video");
+    let (s, cmds) = reduce(&s, Intent::Right);
+    assert!(s.audio_only);
+    assert_eq!(s.playback, Playback::Loading);
+    assert_eq!(
+        cmds,
+        vec![Command::Play {
+            channel: "chan".into(),
+            stream: StreamKind::AudioOnly,
+            latency: Latency::Low,
+        }]
+    );
+    no_saves(&cmds);
+}
+
+#[test]
+fn turning_audio_only_off_goes_back_to_the_session_quality() {
+    // Pick 720p in the menu first, then go audio only.
+    let (s, _) = run(&playing(), &[Intent::Menu, Intent::Right, Intent::Right]);
+    assert_eq!(s.quality(), Quality::P720);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let (s, _) = run(&s, &[Intent::Down; 5]);
+    let (s, _) = reduce(&s, Intent::Select);
+    assert!(s.audio_only);
+    assert_eq!(s.quality(), Quality::P720, "the quality is kept");
+    // Left toggles as well.
+    let (s, cmds) = reduce(&s, Intent::Left);
+    assert!(!s.audio_only);
+    assert_eq!(
+        cmds,
+        vec![Command::Play {
+            channel: "chan".into(),
+            stream: StreamKind::Video(Quality::P720),
+            latency: Latency::Low,
+        }]
+    );
+}
+
+#[test]
+fn the_quality_row_is_locked_while_audio_only_is_on() {
+    let (s, _) = reduce(&on_audio_row(), Intent::Right);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let (s, _) = run(&s, &[Intent::Up; 6]);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
+    let (s, cmds) = run(&s, &[Intent::Right, Intent::Left, Intent::Select]);
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(s.quality(), Quality::Best);
+    assert_eq!(s.playback, Playback::Playing, "no reload");
+}
+
+#[test]
+fn a_retry_stays_audio_only() {
+    let (s, _) = reduce(&on_audio_row(), Intent::Right);
+    let s = reduce(
+        &s,
+        Event::PlaybackFailed {
+            channel: "chan".into(),
+            message: "x".into(),
+        },
+    )
+    .0;
+    let (s, _) = reduce(&s, Intent::Back); // close the menu
+    let (_, cmds) = reduce(&s, Intent::Retry);
+    assert!(cmds.contains(&Command::Play {
+        channel: "chan".into(),
+        stream: StreamKind::AudioOnly,
+        latency: Latency::Low,
+    }));
+}
+
+#[test]
+fn the_next_stream_starts_as_video_again() {
+    let (s, _) = reduce(&on_audio_row(), Intent::Right);
+    let (s, _) = run(&s, &[Intent::Back, Intent::Back]);
+    assert_eq!(s.screen, Screen::Home);
+    assert!(!s.audio_only, "reset on leaving");
+    let (s, cmds) = run(&s, &[Intent::Right, Intent::Select]);
+    assert!(!s.audio_only);
+    assert!(cmds.contains(&Command::Play {
+        channel: "other".into(),
+        stream: StreamKind::Video(Quality::Best),
+        latency: Latency::Low,
+    }));
 }
 
 #[test]

@@ -46,6 +46,28 @@ enum Control {
     Stop,
     Option(PlayerOption),
     Stats(bool),
+    /// Fade the volume to silence over this long.
+    FadeOut(Duration),
+    /// End a fade: full volume again.
+    RestoreVolume,
+}
+
+/// mpv's normal volume (its `volume` property is a percentage).
+const FULL_VOLUME: f64 = 100.0;
+
+/// The volume `elapsed` into a fade of `length`: a straight line from full to silent.
+fn fade_volume(elapsed: Duration, length: Duration) -> f64 {
+    if length.is_zero() {
+        return 0.0;
+    }
+    let done = (elapsed.as_secs_f64() / length.as_secs_f64()).clamp(0.0, 1.0);
+    FULL_VOLUME * (1.0 - done)
+}
+
+fn set_volume(mpv: &Mpv, volume: f64) {
+    if let Err(e) = mpv.set_property("volume", volume) {
+        tracing::warn!(%e, volume, "could not change the volume");
+    }
 }
 
 pub struct MpvPlayer {
@@ -134,6 +156,14 @@ impl Player for MpvPlayer {
     fn set_stats(&self, on: bool) {
         self.send(Control::Stats(on));
     }
+
+    fn fade_out(&self, duration: Duration) {
+        self.send(Control::FadeOut(duration));
+    }
+
+    fn restore_volume(&self) {
+        self.send(Control::RestoreVolume);
+    }
 }
 
 /// Sets the buffering options of `latency` for the next load. Best effort: an option this mpv
@@ -162,6 +192,9 @@ fn apply_option(mpv: &Mpv, option: PlayerOption) {
                 Zoom::Fill => 1.0,
             },
         ),
+        // `vid=no` leaves the video track unselected: nothing is decoded or rendered. As an
+        // option it also holds for the next `loadfile`.
+        PlayerOption::Video(on) => mpv.set_property("vid", if on { "auto" } else { "no" }),
     };
     if let Err(e) = result {
         tracing::warn!(?option, %e, "mpv option not changed");
@@ -199,6 +232,7 @@ fn read_stats(mpv: &Mpv) -> PlayerStats {
         hwdec: text(mpv, "hwdec-current"),
         video_bitrate: whole("video-bitrate"),
         audio_bitrate: whole("audio-bitrate"),
+        audio_codec: text(mpv, "audio-codec-name"),
         buffer_ms: number(mpv, "demuxer-cache-duration").and_then(|s| small(s * 1000.0)),
         dropped_frames: whole("frame-drop-count"),
         decoder_dropped_frames: whole("decoder-frame-drop-count"),
@@ -268,12 +302,17 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
     let mut recent = RecentLog::default();
     // When the next stats report is due, while stats are on.
     let mut stats_due: Option<Instant> = None;
+    // A volume fade in progress: when it started and how long it takes.
+    let mut fade: Option<(Instant, Duration)> = None;
     loop {
         match rx.recv_timeout(POLL) {
             Ok(Control::Load(url, options)) => {
                 recent.clear();
                 apply_latency(mpv, options.latency);
                 let _ = mpv.set_property("pause", false);
+                // A fade only quietens the stream it ran on.
+                fade = None;
+                set_volume(mpv, FULL_VOLUME);
                 match mpv.command("loadfile", &[url.as_str(), "replace"]) {
                     Ok(()) => starting = true,
                     Err(e) => on_event(PlayerEvent::Failed(
@@ -295,6 +334,11 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
             Ok(Control::Option(option)) => apply_option(mpv, option),
             // The first report comes at once, so the box does not sit empty for a second.
             Ok(Control::Stats(on)) => stats_due = on.then(Instant::now),
+            Ok(Control::FadeOut(length)) => fade = Some((Instant::now(), length)),
+            Ok(Control::RestoreVolume) => {
+                fade = None;
+                set_volume(mpv, FULL_VOLUME);
+            }
             Err(RecvTimeoutError::Timeout) => {}
             // The player was dropped: the app is quitting.
             Err(RecvTimeoutError::Disconnected) => break,
@@ -332,6 +376,16 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
             }
         }
 
+        // One step per pass (about every 50 ms), so the loop never waits on the fade.
+        if let Some((start, length)) = fade {
+            let elapsed = start.elapsed();
+            set_volume(mpv, fade_volume(elapsed, length));
+            if elapsed >= length {
+                // Stays silent until the next load or a restore.
+                fade = None;
+            }
+        }
+
         if let Some(due) = stats_due {
             let now = Instant::now();
             if now >= due {
@@ -341,4 +395,19 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
         }
     }
     tracing::debug!("mpv control thread finished");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fade_goes_from_full_to_silent() {
+        let five = Duration::from_secs(5);
+        assert_eq!(fade_volume(Duration::ZERO, five), 100.0);
+        assert_eq!(fade_volume(Duration::from_millis(2500), five), 50.0);
+        assert_eq!(fade_volume(five, five), 0.0);
+        assert_eq!(fade_volume(Duration::from_secs(9), five), 0.0);
+        assert_eq!(fade_volume(Duration::ZERO, Duration::ZERO), 0.0);
+    }
 }

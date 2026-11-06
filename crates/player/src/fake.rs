@@ -1,6 +1,7 @@
 //! Players for tests and for builds without libmpv.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::{LoadOptions, Player, PlayerEvent, PlayerOption};
 
@@ -11,6 +12,8 @@ pub enum PlayerCall {
     Stop,
     SetOption(PlayerOption),
     SetStats(bool),
+    FadeOut(Duration),
+    RestoreVolume,
 }
 
 type Listener = Box<dyn Fn(PlayerEvent) + Send + Sync>;
@@ -68,6 +71,14 @@ impl Player for FakePlayer {
     fn set_stats(&self, on: bool) {
         self.record(PlayerCall::SetStats(on));
     }
+
+    fn fade_out(&self, duration: Duration) {
+        self.record(PlayerCall::FadeOut(duration));
+    }
+
+    fn restore_volume(&self) {
+        self.record(PlayerCall::RestoreVolume);
+    }
 }
 
 /// A player for builds without libmpv (and `--mock`), or for when libmpv failed to start: loading
@@ -111,6 +122,10 @@ impl Player for UnavailablePlayer {
     fn set_option(&self, _option: PlayerOption) {}
 
     fn set_stats(&self, _on: bool) {}
+
+    fn fade_out(&self, _duration: Duration) {}
+
+    fn restore_volume(&self) {}
 }
 
 #[cfg(test)]
@@ -128,6 +143,8 @@ mod tests {
         player.set_paused(true);
         player.set_option(PlayerOption::Hwdec(false));
         player.set_stats(true);
+        player.fade_out(Duration::from_secs(5));
+        player.restore_volume();
         player.stop();
         player.emit(PlayerEvent::Playing);
 
@@ -138,6 +155,8 @@ mod tests {
                 PlayerCall::SetPaused(true),
                 PlayerCall::SetOption(PlayerOption::Hwdec(false)),
                 PlayerCall::SetStats(true),
+                PlayerCall::FadeOut(Duration::from_secs(5)),
+                PlayerCall::RestoreVolume,
                 PlayerCall::Stop
             ]
         );

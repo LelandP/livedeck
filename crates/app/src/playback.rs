@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use htpc_core::{Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, Quality, Zoom};
+use htpc_core::{Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, StreamKind, Zoom};
 use htpc_player::{LoadOptions, Player, PlayerEvent};
 use htpc_resolver::{ResolveError, StreamResolver};
 
@@ -35,9 +35,9 @@ impl<R: StreamResolver> Playback<R> {
         match cmd {
             Command::Play {
                 channel,
-                quality,
+                stream,
                 latency,
-            } => self.play(channel, quality, latency).await,
+            } => self.play(channel, stream, latency).await,
             Command::SetPaused(paused) => {
                 self.player.set_paused(paused);
                 Vec::new()
@@ -58,14 +58,20 @@ impl<R: StreamResolver> Playback<R> {
         }
     }
 
-    async fn play(&self, channel: String, quality: Quality, latency: Latency) -> Vec<Event> {
-        match self.resolver.resolve(&channel, quality.as_str()).await {
+    async fn play(&self, channel: String, stream: StreamKind, latency: Latency) -> Vec<Event> {
+        let rendition = rendition_name(stream);
+        match self.resolver.resolve(&channel, rendition).await {
             Ok(url) => {
-                tracing::info!(%channel, "playlist resolved, starting the player");
+                tracing::info!(%channel, rendition, "playlist resolved, starting the player");
                 let latency = match latency {
                     Latency::Low => htpc_player::Latency::Low,
                     Latency::Normal => htpc_player::Latency::Normal,
                 };
+                // Before the load, as mpv reads it when the file opens. Without an audio
+                // rendition Streamlink falls back to video, which is then still not decoded.
+                let video = !matches!(stream, StreamKind::AudioOnly);
+                self.player
+                    .set_option(htpc_player::PlayerOption::Video(video));
                 self.player.load(&url.0, LoadOptions { latency });
                 Vec::new()
             }
@@ -78,6 +84,15 @@ impl<R: StreamResolver> Playback<R> {
                 }]
             }
         }
+    }
+}
+
+/// The name the resolver is asked for. Twitch's sound-only rendition is `audio_only`, which the
+/// Streamlink resolver turns into `audio_only,best`.
+fn rendition_name(stream: StreamKind) -> &'static str {
+    match stream {
+        StreamKind::Video(quality) => quality.as_str(),
+        StreamKind::AudioOnly => "audio_only",
     }
 }
 
@@ -124,6 +139,7 @@ fn core_stats(s: htpc_player::PlayerStats) -> PlayerStats {
         hwdec: s.hwdec,
         video_bitrate: s.video_bitrate,
         audio_bitrate: s.audio_bitrate,
+        audio_codec: s.audio_codec,
         buffer_ms: s.buffer_ms,
         dropped_frames: s.dropped_frames,
         decoder_dropped_frames: s.decoder_dropped_frames,
@@ -133,16 +149,19 @@ fn core_stats(s: htpc_player::PlayerStats) -> PlayerStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use htpc_core::Quality;
     use htpc_player::{FakePlayer, PlayerCall};
     use htpc_resolver::FakeResolver;
 
     fn play(channel: &str) -> Command {
         Command::Play {
             channel: channel.into(),
-            quality: Quality::P720,
+            stream: StreamKind::Video(Quality::P720),
             latency: Latency::Low,
         }
     }
+
+    const VIDEO_ON: PlayerCall = PlayerCall::SetOption(htpc_player::PlayerOption::Video(true));
 
     fn playback(resolver: FakeResolver) -> (Playback<FakeResolver>, FakePlayer) {
         let player = FakePlayer::new();
@@ -155,11 +174,36 @@ mod tests {
         assert!(pb.execute(play("chan")).await.is_empty());
         assert_eq!(
             player.calls(),
-            [PlayerCall::Load(
-                "https://x/a.m3u8".into(),
-                LoadOptions::default()
-            )]
+            [
+                VIDEO_ON,
+                PlayerCall::Load("https://x/a.m3u8".into(), LoadOptions::default())
+            ]
         );
+    }
+
+    #[tokio::test]
+    async fn audio_only_turns_video_off_before_the_load() {
+        let (pb, player) = playback(FakeResolver::playing("u"));
+        let cmd = Command::Play {
+            channel: "chan".into(),
+            stream: StreamKind::AudioOnly,
+            latency: Latency::Low,
+        };
+        assert!(pb.execute(cmd).await.is_empty());
+        assert_eq!(
+            player.calls(),
+            [
+                PlayerCall::SetOption(htpc_player::PlayerOption::Video(false)),
+                PlayerCall::Load("u".into(), LoadOptions::default())
+            ]
+        );
+    }
+
+    #[test]
+    fn audio_only_resolves_the_audio_rendition() {
+        assert_eq!(rendition_name(StreamKind::AudioOnly), "audio_only");
+        assert_eq!(rendition_name(StreamKind::Video(Quality::P720)), "720p");
+        assert_eq!(rendition_name(StreamKind::Video(Quality::Best)), "best");
     }
 
     #[tokio::test]
@@ -167,18 +211,21 @@ mod tests {
         let (pb, player) = playback(FakeResolver::playing("u"));
         let cmd = Command::Play {
             channel: "chan".into(),
-            quality: Quality::Best,
+            stream: StreamKind::Video(Quality::Best),
             latency: Latency::Normal,
         };
         pb.execute(cmd).await;
         assert_eq!(
             player.calls(),
-            [PlayerCall::Load(
-                "u".into(),
-                LoadOptions {
-                    latency: htpc_player::Latency::Normal
-                }
-            )]
+            [
+                VIDEO_ON,
+                PlayerCall::Load(
+                    "u".into(),
+                    LoadOptions {
+                        latency: htpc_player::Latency::Normal
+                    }
+                )
+            ]
         );
     }
 

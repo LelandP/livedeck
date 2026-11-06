@@ -193,7 +193,10 @@ fn the_new_quality_is_used_by_the_next_stream() {
         Intent::Select,
     );
     let play = cmds.iter().find_map(|c| match c {
-        Command::Play { quality, .. } => Some(*quality),
+        Command::Play {
+            stream: StreamKind::Video(quality),
+            ..
+        } => Some(*quality),
         _ => None,
     });
     assert_eq!(play, Some(Quality::P1080));

@@ -26,6 +26,8 @@ component MenuRow inherits Rectangle {
     in property <string> title;
     in property <string> value;
     in property <bool> focused;
+    // Cannot be changed right now (Quality while audio only is on): no arrows, dimmed value.
+    in property <bool> locked: false;
 
     height: Theme.menu-row-h;
     border-radius: 6px;
@@ -47,11 +49,95 @@ component MenuRow inherits Rectangle {
             overflow: elide;
         }
         Text {
-            text: root.focused ? "◀  " + root.value + "  ▶" : root.value;
-            color: root.focused ? Theme.accent-light : Theme.muted;
+            text: root.focused && !root.locked ? "◀  " + root.value + "  ▶" : root.value;
+            color: root.focused && !root.locked ? Theme.accent-light : Theme.muted;
+            opacity: root.locked ? 0.6 : 1.0;
             font-size: Theme.fs-body;
             vertical-alignment: center;
             horizontal-alignment: right;
+        }
+    }
+}
+
+// What audio only shows instead of the video: a small, dim block of the channel, its title and
+// thumbnail on black, which glides to a new spot every 30 s. Like a screensaver, no pixel stays lit
+// long enough to burn in, and nothing is redrawn between glides (a constant animation would redraw
+// at full frame rate, costing more battery than skipping the video saves). Black pixels are off
+// on an OLED Deck.
+component AudioWatermark inherits Rectangle {
+    in property <StreamItem> stream;
+    // The part of the parent the block may use: chat covers the rest.
+    in property <length> area-w;
+    in property <length> area-h;
+    // Show the darkened thumbnail next to the text, when there is one.
+    in property <bool> show-thumbnail: true;
+
+    // Moves so far. Each spot comes from an R2 sequence: spread out like random ones, but with no
+    // randomness, and never close to the previous spot.
+    property <int> step: 0;
+    property <float> fx: mod(0.5 + root.step * 0.7548777, 1.0);
+    property <float> fy: mod(0.5 + root.step * 0.5698403, 1.0);
+    property <length> margin: 32px;
+
+    glide := Timer {
+        interval: 30s;
+        running: true;
+        triggered => { root.step += 1; }
+    }
+
+    block := Rectangle {
+        width: block-layout.preferred-width;
+        height: block-layout.preferred-height;
+        x: root.margin + root.fx * max(0px, root.area-w - 2 * root.margin - self.width);
+        y: root.margin + root.fy * max(0px, root.area-h - Theme.hints-h - 2 * root.margin - self.height);
+        animate x, y { duration: 3s; easing: ease-in-out; }
+
+        block-layout := HorizontalLayout {
+            spacing: 20px;
+            if root.show-thumbnail && root.stream.thumb-url != "" : Rectangle {
+                width: 160px;
+                height: 90px;
+                border-radius: 8px;
+                clip: true;
+                opacity: 0.28;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.stream.thumbnail;
+                    image-fit: cover;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+                // The stream's tint, the only colour on screen.
+                Rectangle {
+                    width: 48px;
+                    height: 3px;
+                    border-radius: 1.5px;
+                    background: root.stream.tint;
+                    opacity: 0.7;
+                }
+                Text {
+                    text: root.stream.channel;
+                    color: #ffffff40;
+                    font-size: Theme.fs-display;
+                    font-weight: 800;
+                }
+                Text {
+                    text: root.stream.title;
+                    color: #ffffff26;
+                    font-size: Theme.fs-body;
+                    overflow: elide;
+                    max-width: 520px;
+                }
+                Text {
+                    text: "♪  Audio only";
+                    color: #ffffff26;
+                    font-size: Theme.fs-small;
+                    letter-spacing: 2px;
+                }
+            }
         }
     }
 }
@@ -75,13 +161,27 @@ export component PlayerScreen inherits Rectangle {
     in property <bool> paused: false;
     in property <bool> hud-visible: true;
     // The player menu (Start): open, its focused row and the value of each row (PlayerMenuRow
-    // order in htpc-core: quality, hardware decoding, latency, zoom, stats).
+    // order in htpc-core: quality, hardware decoding, latency, zoom, stats, audio only, sleep).
     in property <bool> menu-open: false;
     in property <int> menu-focus: 0;
     in property <[string]> menu-values: [];
+    // Sound only: a black screen with a drifting watermark instead of the video.
+    in property <bool> audio-only: false;
     // The stats box, one fact per line. Empty hides it.
     in property <string> stats-text: "";
-    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats"];
+    // The sleep timer next to the channel name ("Sleep in 42 min"). Empty without one.
+    in property <string> sleep-label: "";
+    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer"];
+    // What each row does, shown under the rows for the focused one. Same order as the titles.
+    property <[string]> menu-help: [
+        "Picture quality. Lower uses less data and battery. Reloads the stream.",
+        "Decode on the graphics chip. Turn off if the picture stutters or shows glitches.",
+        "Low stays close to live. Normal buffers more, for fewer stalls on weak Wi-Fi. Reloads the stream.",
+        "Fit shows the whole picture with black bars. Fill crops it to fill the screen.",
+        "A box with resolution, codec, bitrate, buffer and dropped frames.",
+        "Sound only, on a dark screen. Saves data and battery. For this stream only.",
+        "Stops the stream and puts the device to sleep after a while. Asks a minute before.",
+    ];
 
     // Skeleton pulse, 0..1 (only ticks while a skeleton is shown).
     property <float> pulse: 0.5 + 0.5 * Math.sin(mod(animation-tick() / Theme.t-pulse, 1) * 360deg);
@@ -102,18 +202,29 @@ export component PlayerScreen inherits Rectangle {
             height: parent.height;
             source: root.video;
             image-fit: fill;
-            visible: root.playback == 1;
+            // mpv sends no frames in audio only, but the texture may still hold the last one.
+            visible: root.playback == 1 && !root.audio-only;
         }
 
-        // Loading: the stream's tint, pulsing, until the first frame.
-        Rectangle {
-            visible: root.playback == 0;
+        // Audio only: pure black, and the watermark keeps clear of an open chat overlay (the side
+        // panel already narrows this rectangle).
+        if root.playback == 1 && root.audio-only : AudioWatermark {
+            width: parent.width;
+            height: parent.height;
+            stream: root.stream;
+            area-w: parent.width - (root.chat-open && root.chat-overlay ? Theme.chat-overlay-w : 0px);
+            area-h: parent.height;
+        }
+
+        // Loading: the stream's tint, pulsing, until the first frame. Created only while loading,
+        // so the pulse's animation clock does not keep the window redrawing afterwards.
+        if root.playback == 0 : Rectangle {
             background: @linear-gradient(135deg, root.stream.tint, #000000);
             opacity: 0.55 + 0.45 * root.pulse;
         }
         Text {
             visible: root.playback == 0;
-            text: "Starting stream…";
+            text: root.audio-only ? "Starting audio…" : "Starting stream…";
             color: Theme.text;
             font-size: Theme.fs-body;
             horizontal-alignment: center;
@@ -187,10 +298,12 @@ export component PlayerScreen inherits Rectangle {
         }
 
         // Stats box ("nerds view"): top left, over the video, on every stream until turned off.
+        // While the menu is open it moves to the menu's right, as the menu is tall enough to
+        // cover it, and narrows if the chat panel leaves less room.
         if root.stats-text != "" : Rectangle {
-            x: Theme.safe-x / 2;
+            x: Theme.safe-x / 2 + (root.menu-open ? Theme.menu-w + 16px : 0px);
             y: 24px;
-            width: Theme.stats-w;
+            width: min(Theme.stats-w, parent.width - self.x - 16px);
             height: stats-layout.preferred-height;
             background: #000000b8;
             border-radius: 8px;
@@ -230,6 +343,13 @@ export component PlayerScreen inherits Rectangle {
                     title: title;
                     value: root.menu-values[i];
                     focused: root.menu-focus == i;
+                    locked: i == 0 && root.audio-only;
+                }
+                Text {
+                    text: root.menu-focus == 0 && root.audio-only ? "Locked while Audio only is on." : root.menu-help[root.menu-focus];
+                    color: Theme.text;
+                    font-size: Theme.fs-small;
+                    wrap: word-wrap;
                 }
                 Text {
                     text: "Not saved: lasts until LiveDeck quits";
@@ -255,11 +375,31 @@ export component PlayerScreen inherits Rectangle {
                 alignment: end;
                 spacing: 4px;
 
-                Text {
-                    text: root.stream.channel;
-                    color: Theme.text;
-                    font-size: Theme.fs-title;
-                    font-weight: 800;
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 16px;
+                    Text {
+                        text: root.stream.channel;
+                        color: Theme.text;
+                        font-size: Theme.fs-title;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                    // Fades with the rest of the HUD, and any button shows it again.
+                    if root.sleep-label != "" : Rectangle {
+                        width: sleep-text.preferred-width + 20px;
+                        height: sleep-text.preferred-height + 8px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: self.height / 2;
+                        background: #ffffff1f;
+                        sleep-text := Text {
+                            text: root.sleep-label;
+                            color: Theme.text;
+                            font-size: Theme.fs-small;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
                 Text {
                     text: root.stream.title + "  ·  " + root.stream.viewers;

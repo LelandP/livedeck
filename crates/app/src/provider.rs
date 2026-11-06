@@ -365,8 +365,9 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                 vec![self.load_more(feed, kind, cursor).await]
             }
             // Playback commands run in `playback.rs`, chat in `chat.rs`, the login ones in
-            // `session.rs`, and thumbnails and chat images are delivered through
-            // `Provider::thumbnail`, so none of them produces events here. The store runs `Quit`.
+            // `session.rs`, the sleep timer in `sleep.rs`, and thumbnails and chat images are
+            // delivered through `Provider::thumbnail`, so none of them produces events here. The
+            // store runs `Quit`.
             Command::Play { .. }
             | Command::SetPaused(_)
             | Command::StopPlayback
@@ -380,6 +381,9 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::CancelLogin
             | Command::SignOut
             | Command::SaveSettings(_)
+            | Command::StartSleepTimer { .. }
+            | Command::CancelSleepTimer
+            | Command::Suspend
             | Command::Quit => Vec::new(),
         }
     }

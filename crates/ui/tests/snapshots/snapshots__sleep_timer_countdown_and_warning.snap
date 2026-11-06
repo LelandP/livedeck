@@ -1,0 +1,11 @@
+---
+source: crates/ui/tests/snapshots.rs
+assertion_line: 363
+expression: out
+---
+screen=Player sleep_label="" warning=false menu_value="Off"
+screen=Player sleep_label="Sleep in 30 min" warning=false menu_value="30 min · 30 left"
+screen=Player sleep_label="Sleep in 2 min" warning=false menu_value="30 min · 2 left"
+screen=Player sleep_label="Sleeping soon" warning=true menu_value="30 min · ending"
+screen=Player sleep_label="Sleep in 30 min" warning=false menu_value="30 min · 30 left"
+screen=Home sleep_label="Sleeping soon" warning=true menu_value="30 min · ending"

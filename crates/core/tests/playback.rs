@@ -30,7 +30,7 @@ fn watching() -> (AppState, Vec<Command>) {
 fn play(channel: &str) -> Command {
     Command::Play {
         channel: channel.into(),
-        quality: Quality::Best,
+        stream: StreamKind::Video(Quality::Best),
         latency: Latency::Low,
     }
 }
@@ -63,7 +63,7 @@ fn the_configured_quality_is_requested() {
     let (_, cmds) = reduce(&s, Intent::Select);
     assert!(cmds.contains(&Command::Play {
         channel: "chan".into(),
-        quality: Quality::P720,
+        stream: StreamKind::Video(Quality::P720),
         latency: Latency::Low
     }));
 }

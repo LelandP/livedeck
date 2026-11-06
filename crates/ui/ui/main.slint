@@ -86,12 +86,18 @@ export component MainWindow inherits Window {
     in property <bool> player-menu-open: false;
     in property <int> player-menu-focus: 0;
     in property <[string]> player-menu-values: [];
+    // The stream plays sound only: the black audio-only screen, and a locked Quality row.
+    in property <bool> audio-only: false;
     // The stats box over the video, one fact per line. Empty while it is off.
     in property <string> stats-text: "";
     // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
     in property <int> hud-pulse: 0;
     // The "Quit LiveDeck?" prompt (B on a root screen). A quits, B cancels.
     in property <bool> exit-prompt: false;
+    // The sleep timer in the player's HUD ("Sleep in 42 min"), and its "Still watching?" card,
+    // during which any button only keeps going.
+    in property <string> sleep-label: "";
+    in property <bool> sleep-warning: false;
     // The area mpv renders into (logical px). Rust multiplies by the scale factor. Not animated
     // with the chat slide, so the texture is allocated once per layout change.
     out property <length> video-w: root.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
@@ -258,7 +264,9 @@ export component MainWindow inherits Window {
         menu-open: root.player-menu-open;
         menu-focus: root.player-menu-focus;
         menu-values: root.player-menu-values;
+        audio-only: root.audio-only;
         stats-text: root.stats-text;
+        sleep-label: root.sleep-label;
     }
 
     // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
@@ -300,6 +308,38 @@ export component MainWindow inherits Window {
         }
     }
 
+    // "Still watching?" (sleep timer, 60 s before the end). Small and low, over any screen: the
+    // timer runs whatever is on. Clicking it counts as a button.
+    if root.sleep-warning : Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - Theme.hints-h - self.height - 48px;
+        width: 520px;
+        height: warning-layout.preferred-height;
+        border-radius: 12px;
+        border-width: 2px;
+        border-color: Theme.accent-light;
+        background: #18181bf0;
+        TouchArea { clicked => { root.action(UiAction.select); } }
+        warning-layout := VerticalLayout {
+            padding: 24px;
+            spacing: 8px;
+            Text {
+                text: "Still watching?";
+                color: Theme.text;
+                font-size: Theme.fs-title;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Press any button to keep going. Otherwise LiveDeck stops and the device goes to sleep in a minute.";
+                color: Theme.muted;
+                font-size: Theme.fs-body;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
     Rectangle {
         y: parent.height - Theme.hints-h;
         height: Theme.hints-h;
@@ -307,11 +347,19 @@ export component MainWindow inherits Window {
         background: #0e0e10f0;
         // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
         // comes back on any button. Loading, paused and error screens keep it.
-        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open ? 0.0 : 1.0;
+        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning ? 0.0 : 1.0;
         animate opacity { duration: Theme.t-med; }
 
+        // During the sleep warning every button does the same thing.
+        if root.sleep-warning : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            alignment: end;
+            Hint { glyph: "A"; label: "Any button: keep watching"; clicked => { root.action(UiAction.select); } }
+        }
+
         // Empty while the quit prompt is open: the prompt shows its own buttons.
-        if !root.exit-prompt : HorizontalLayout {
+        if !root.exit-prompt && !root.sleep-warning : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 36px;

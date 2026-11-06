@@ -4,6 +4,7 @@ use crate::chat::ChatBuffer;
 use crate::domain::{
     ChatStatus, DeviceCode, FeedId, LoginProblem, PlayerStats, Row, Stream, Tile, User,
 };
+use crate::msg::StreamKind;
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -113,15 +114,21 @@ pub enum PlayerMenuRow {
     Latency,
     Zoom,
     Stats,
+    /// Sound only, for this stream (see `AppState::audio_only`).
+    AudioOnly,
+    /// Stop and suspend the device after a while (see `AppState::sleep`).
+    SleepTimer,
 }
 
 impl PlayerMenuRow {
-    pub const ALL: [PlayerMenuRow; 5] = [
+    pub const ALL: [PlayerMenuRow; 7] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Hwdec,
         PlayerMenuRow::Latency,
         PlayerMenuRow::Zoom,
         PlayerMenuRow::Stats,
+        PlayerMenuRow::AudioOnly,
+        PlayerMenuRow::SleepTimer,
     ];
 
     pub fn index(self) -> usize {
@@ -151,6 +158,36 @@ pub struct SessionOptions {
     pub zoom: Zoom,
     /// The stats box is on. It stays on from stream to stream until it is turned off.
     pub stats: bool,
+}
+
+/// The lengths the sleep timer offers, in minutes. Off comes before the first.
+pub const SLEEP_STEPS: [u16; 6] = [15, 30, 45, 60, 90, 120];
+
+/// A running sleep timer. It runs on wall-clock time in the app, whatever is on screen, and is
+/// never saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SleepTimer {
+    /// Goes up every time a timer is set, so late events from an older one are ignored.
+    pub id: u32,
+    /// The length it was set to.
+    pub minutes: u16,
+    /// Whole minutes left, for the display. 0 once less than a minute is left.
+    pub left_min: u16,
+    /// "Still watching?" is up: the next button press only extends the timer.
+    pub warning: bool,
+}
+
+impl SleepTimer {
+    /// The length after (or, with `forward == false`, before) `minutes`, where `None` is off.
+    /// Wraps around through off.
+    pub fn cycled(minutes: Option<u16>, forward: bool) -> Option<u16> {
+        let all: Vec<Option<u16>> = std::iter::once(None)
+            .chain(SLEEP_STEPS.iter().copied().map(Some))
+            .collect();
+        let len = all.len() as isize;
+        let at = all.iter().position(|m| *m == minutes).unwrap_or(0) as isize;
+        all[(at + if forward { 1 } else { -1 }).rem_euclid(len) as usize]
+    }
 }
 
 /// Card focus on the home rows.
@@ -289,6 +326,9 @@ pub struct AppState {
     /// How the chat connection of the channel being watched is doing.
     pub chat_status: ChatStatus,
     pub now_playing: Option<Stream>,
+    /// The stream on screen plays sound only (player menu). Unlike `session`, it belongs to this
+    /// stream: every stream opens as video.
+    pub audio_only: bool,
     pub playback: Playback,
     pub paused: bool,
     /// The player menu is open on this row (Start on the Player screen). It takes the D-pad.
@@ -315,6 +355,10 @@ pub struct AppState {
     /// The "Quit LiveDeck?" prompt is open (B on a root screen). It takes all input: A quits,
     /// B closes it.
     pub exit_prompt: bool,
+    /// The sleep timer, while one runs (player menu).
+    pub sleep: Option<SleepTimer>,
+    /// The id of the last sleep timer set, kept after it ends so ids never repeat.
+    pub last_sleep_id: u32,
 }
 
 impl AppState {
@@ -325,6 +369,15 @@ impl AppState {
     /// The quality streams are played at: the player menu's pick, or else the saved setting.
     pub fn quality(&self) -> Quality {
         self.session.quality.unwrap_or(self.settings.quality)
+    }
+
+    /// What the stream on screen is played as: sound only, or video at `quality()`.
+    pub fn stream_kind(&self) -> StreamKind {
+        if self.audio_only {
+            StreamKind::AudioOnly
+        } else {
+            StreamKind::Video(self.quality())
+        }
     }
 
     /// The feed a screen shows, or `None` for screens without one (Player, Login).

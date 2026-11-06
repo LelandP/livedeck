@@ -12,8 +12,10 @@ mod awake;
 mod chat;
 mod mock;
 mod playback;
+mod power;
 mod provider;
 mod session;
+mod sleep;
 mod store;
 
 use std::sync::Arc;
@@ -33,8 +35,10 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::chat::Chat;
 use crate::playback::Playback;
+use crate::power::Suspend;
 use crate::provider::{ApiProvider, Provider};
 use crate::session::{AppAuth, Apply, Notify, Session, Viewer, NO_CLIENT_ID};
+use crate::sleep::Sleep;
 use crate::store::{SaveSettings, Store};
 
 const HELP: &str = "\
@@ -413,6 +417,8 @@ struct Wiring {
     save_settings: Option<SaveSettings>,
     /// Start full screen (see `want_fullscreen`).
     fullscreen: bool,
+    /// What the sleep timer suspends with. Only logs in `--mock`.
+    power: Arc<dyn Suspend>,
 }
 
 /// How often the session checks whether the access token is about to run out. It also notices a
@@ -434,6 +440,7 @@ fn run_app<P: Provider, R: StreamResolver>(
         env_token,
         save_settings,
         fullscreen,
+        power,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -478,9 +485,11 @@ fn run_app<P: Provider, R: StreamResolver>(
             resume.resume().await;
         }
     });
+    let sleep = Sleep::new(Arc::clone(&player), power, tx.clone());
     let playback = Playback::new(resolver, player);
     let chat = Chat::new(chat, tx.clone());
-    let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx);
+    let mut store =
+        Store::new(state, provider, playback, chat, session, ui.as_weak(), tx).with_sleep(sleep);
     if let Some(save) = save_settings {
         store = store.with_settings_saver(save);
     }
@@ -623,6 +632,8 @@ fn main() -> Result<()> {
             // The mock must not overwrite the user's real config.
             save_settings: None,
             fullscreen,
+            // Nor put the developer's machine to sleep.
+            power: Arc::new(power::LogOnly),
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -664,6 +675,7 @@ fn main() -> Result<()> {
         env_token,
         save_settings,
         fullscreen,
+        power: Arc::new(power::SystemSuspend),
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

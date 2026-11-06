@@ -323,6 +323,9 @@ pub struct PlayerStats {
     /// Bits per second.
     pub video_bitrate: Option<u64>,
     pub audio_bitrate: Option<u64>,
+    /// Audio codec, as the player names it ("aac"). Shown instead of the video lines in audio
+    /// only mode.
+    pub audio_codec: Option<String>,
     /// How much is buffered ahead, in milliseconds.
     pub buffer_ms: Option<u32>,
     /// Frames dropped on the way to the screen, and by the decoder, since the stream started.

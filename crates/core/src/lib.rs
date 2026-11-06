@@ -17,10 +17,10 @@ pub use domain::{
     DeviceCode, FeedId, LoginProblem, Moderation, Paging, PlayerStats, Rgb, Row, RowKind, Stream,
     Tile, User,
 };
-pub use msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
+pub use msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption, StreamKind};
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
 pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{
     AppState, CategoryFeed, Feed, Focus, Playback, PlayerMenuRow, RailEntry, RailState, Screen,
-    SessionOptions, SettingsRow,
+    SessionOptions, SettingsRow, SleepTimer, SLEEP_STEPS,
 };

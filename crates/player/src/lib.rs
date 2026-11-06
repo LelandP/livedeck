@@ -63,6 +63,9 @@ pub enum PlayerOption {
     /// Hardware decoding where it is safe (`true`), or decoding on the CPU.
     Hwdec(bool),
     Zoom(Zoom),
+    /// Decode and show video (`true`), or play the sound only and send no frames. Kept for the
+    /// streams loaded after it, so it is set before each load.
+    Video(bool),
 }
 
 /// How much the player buffers. Set when a stream is loaded.
@@ -95,6 +98,7 @@ pub struct PlayerStats {
     /// Bits per second.
     pub video_bitrate: Option<u64>,
     pub audio_bitrate: Option<u64>,
+    pub audio_codec: Option<String>,
     /// Buffered ahead, in milliseconds.
     pub buffer_ms: Option<u32>,
     pub dropped_frames: Option<u64>,
@@ -114,4 +118,9 @@ pub trait Player: Send + Sync + 'static {
     fn set_option(&self, option: PlayerOption);
     /// Starts (`true`) or stops sending [`PlayerEvent::Stats`].
     fn set_stats(&self, on: bool);
+    /// Lowers the volume from full to silent over `duration` (the sleep timer's gentle stop).
+    /// The next [`Player::load`] or [`Player::restore_volume`] brings it back to full.
+    fn fade_out(&self, duration: std::time::Duration);
+    /// Stops a fade and sets the volume back to full.
+    fn restore_volume(&self);
 }

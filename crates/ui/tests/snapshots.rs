@@ -275,6 +275,7 @@ fn player_menu_and_stats_box() {
         hwdec: Some("vaapi".into()),
         video_bitrate: Some(6_240_000),
         audio_bitrate: Some(160_000),
+        audio_codec: Some("aac".into()),
         buffer_ms: Some(1_450),
         dropped_frames: Some(3),
         decoder_dropped_frames: Some(0),
@@ -287,6 +288,78 @@ fn player_menu_and_stats_box() {
     // A report that knows nothing yet (software decoding, nothing measured).
     let s = reduce(&s, Event::PlayerStats(PlayerStats::default())).0;
     out += &menu_lines(&view_model(&s));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn player_audio_only() {
+    let (s, _) = reduce(&home_loaded(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    // Stats on, then down to Audio only and turn it on.
+    let s = send(&s, &[Intent::Menu, Intent::Down, Intent::Down]);
+    let s = send(
+        &s,
+        &[Intent::Down, Intent::Down, Intent::Right, Intent::Down],
+    );
+    let s = send(&s, &[Intent::Right]);
+    let mut out = format!("audio_only={}\n", view_model(&s).audio_only);
+    out += &menu_lines(&view_model(&s));
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let report = PlayerStats {
+        audio_bitrate: Some(160_000),
+        audio_codec: Some("aac".into()),
+        buffer_ms: Some(2_000),
+        ..PlayerStats::default()
+    };
+    let s = reduce(&s, Event::PlayerStats(report)).0;
+    out += &menu_lines(&view_model(&s));
+    // Up to the locked Quality row: A changes nothing.
+    let s = send(&s, &[Intent::Up; 5]);
+    let s = send(&s, &[Intent::Select]);
+    out += &menu_lines(&view_model(&s));
+    // Leaving the player turns it off.
+    let s = send(&s, &[Intent::Back, Intent::Back]);
+    out += &format!("after leaving: audio_only={}\n", view_model(&s).audio_only);
+    insta::assert_snapshot!(out);
+}
+
+fn sleep_lines(vm: &ViewModel) -> String {
+    format!(
+        "screen={:?} sleep_label={:?} warning={} menu_value={:?}\n",
+        vm.screen,
+        vm.sleep_label,
+        vm.sleep_warning,
+        vm.player_menu_values
+            .last()
+            .map(String::as_str)
+            .unwrap_or("")
+    )
+}
+
+#[test]
+fn sleep_timer_countdown_and_warning() {
+    let (s, _) = reduce(&home_loaded(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let mut out = sleep_lines(&view_model(&s));
+    // Start, down to the sleep timer, 15 then 30 minutes.
+    let s = send(&s, &[Intent::Menu]);
+    let s = send(&s, &[Intent::Down; 6]);
+    let s = send(&s, &[Intent::Right, Intent::Right]);
+    out += &sleep_lines(&view_model(&s));
+    let id = s.sleep.unwrap().id;
+    let s = reduce(&s, Event::SleepTimerTick { id, left_min: 2 }).0;
+    out += &sleep_lines(&view_model(&s));
+    let s = send(&s, &[Intent::Back]);
+    let s = reduce(&s, Event::SleepTimerWarning { id }).0;
+    out += &sleep_lines(&view_model(&s));
+    // A button keeps going: a fresh 30 minutes.
+    let s = send(&s, &[Intent::Select]);
+    out += &sleep_lines(&view_model(&s));
+    // Left on the browse screens, the warning still shows.
+    let s = send(&s, &[Intent::Back]);
+    let id = s.sleep.unwrap().id;
+    let s = reduce(&s, Event::SleepTimerWarning { id }).0;
+    out += &sleep_lines(&view_model(&s));
     insta::assert_snapshot!(out);
 }
 

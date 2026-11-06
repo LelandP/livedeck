@@ -51,11 +51,11 @@ pub enum Command {
     FetchThumbnails { urls: Vec<String> },
     /// Resolve the channel's playlist and play it. Answered with `Event::StreamOffline` or
     /// `Event::PlaybackFailed` if that fails, and later with the player's own events
-    /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`). `latency` sets the player's buffers
-    /// for this stream.
+    /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`). `stream` says which rendition to
+    /// play, `latency` sets the player's buffers for this stream.
     Play {
         channel: String,
-        quality: Quality,
+        stream: StreamKind,
         latency: Latency,
     },
     /// Pause or resume the player.
@@ -86,8 +86,26 @@ pub enum Command {
     SignOut,
     /// Write these settings to the config file. There is no `Event`: the state already holds them.
     SaveSettings(Settings),
+    /// Start a sleep timer of `minutes`, replacing any running one. Answered over time with
+    /// `Event::SleepTimerTick` once a minute, `Event::SleepTimerWarning` 60 s before the end, and
+    /// `Event::SleepTimerFired` (after fading the sound out), all carrying `id`.
+    StartSleepTimer { id: u32, minutes: u16 },
+    /// Stop the running sleep timer. Sound it had started fading comes back.
+    CancelSleepTimer,
+    /// Suspend the device (the sleep timer ran out). Failure is only logged.
+    Suspend,
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
+}
+
+/// Which rendition of a stream `Command::Play` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    /// Video (and sound) at this quality.
+    Video(Quality),
+    /// Sound only: the stream's audio rendition, with video decoding off in the player. A stream
+    /// without one falls back to video, still without decoding it.
+    AudioOnly,
 }
 
 /// A player option that can change while a stream plays.
@@ -172,6 +190,19 @@ pub enum Event {
     /// The session is over and the credentials are gone: the user signed out, or Twitch refused
     /// to refresh the tokens. Feeds are reloaded without the account.
     SignedOut,
+    /// A minute passed on the sleep timer `id`: `left_min` whole minutes are left.
+    SleepTimerTick {
+        id: u32,
+        left_min: u16,
+    },
+    /// The sleep timer `id` ends in 60 s.
+    SleepTimerWarning {
+        id: u32,
+    },
+    /// The sleep timer `id` ran out (the sound has already faded).
+    SleepTimerFired {
+        id: u32,
+    },
 }
 
 /// Anything the reducer accepts.

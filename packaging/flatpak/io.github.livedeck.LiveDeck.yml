@@ -29,6 +29,10 @@ finish-args:
   # Keeps the screen awake during a stream. The Inhibit portal needs no permission; this older
   # interface is for sessions that only listen there.
   - --talk-name=org.freedesktop.ScreenSaver
+  # The sleep timer suspends the device when it runs out (an option in the player menu, off unless
+  # the user sets it). That is logind's Suspend method, on the system bus. Only Suspend is called,
+  # and logind itself decides whether the active user may do it.
+  - --system-talk-name=org.freedesktop.login1
 
 cleanup:
   - '*.la'

@@ -301,6 +301,69 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the hints bar hides while the menu is open"
     );
 
+    // Audio only: the screen lays out, stays nearly all black once the HUD has faded, and the
+    // watermark glides to a new spot after its 30 s timer (and only then).
+    let mut audio = watching_a_busy_chat(ChatLayout::Side);
+    audio.chat_open = false;
+    audio.playback = htpc_core::Playback::Playing;
+    audio.audio_only = true;
+    Update::full(view_model(&audio)).apply(&ui);
+    // A render runs the HUD's change handler, which starts its 4 s timer.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10));
+    render(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(4_500));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let before = render(&ui);
+    let lit = |p: &Rgba8Pixel| p.r > 8 || p.g > 8 || p.b > 8;
+    let total = (WIDTH * HEIGHT) as usize;
+    let lit_before = count(&before, 0..WIDTH, 0..HEIGHT, lit);
+    assert!(
+        lit_before * 100 < total * 3,
+        "the audio-only screen is not black: {lit_before} of {total} pixels lit"
+    );
+    // The tint line is drawn whether or not there are fonts.
+    assert!(lit_before > 0, "the watermark is not drawn");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_secs(10));
+    let still = render(&ui);
+    assert!(
+        still.as_slice() == before.as_slice(),
+        "the audio-only screen changes between glides"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_secs(21));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_secs(4));
+    let moved = render(&ui);
+    assert!(
+        moved.as_slice() != before.as_slice(),
+        "the watermark did not move after 30 s"
+    );
+
+    // Sleep timer: the HUD shows it, and "Still watching?" is drawn centred above the hints bar
+    // (its border is `Theme.accent-light`) with the hints bar kept on screen.
+    let mut warned = watching_a_busy_chat(ChatLayout::Side);
+    warned.chat_open = false;
+    warned.playback = htpc_core::Playback::Playing;
+    warned.sleep = Some(htpc_core::SleepTimer {
+        id: 1,
+        minutes: 30,
+        left_min: 0,
+        warning: true,
+    });
+    // Brings the HUD back, which the audio-only checks above let fade.
+    warned.hud_pulse += 1;
+    Update::full(view_model(&warned)).apply(&ui);
+    // The first frame runs the HUD's change handler, which starts its fade-in.
+    render(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    assert!(
+        count(&image, 380..900, 400..HINTS_TOP, accent) > 0,
+        "the sleep warning is not drawn"
+    );
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the hints bar hides during the sleep warning"
+    );
+
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
     // element that has a size but no position, which once put the heading strip mid-screen.
     let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));

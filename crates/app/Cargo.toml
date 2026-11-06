@@ -31,5 +31,7 @@ tracing-subscriber.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
+# Paused time, for the sleep timer tests.
+tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
 serde_json.workspace = true

@@ -188,16 +188,24 @@ pub struct ViewModel {
     pub paused: bool,
     /// The player menu is open (Start on the Player screen).
     pub player_menu_open: bool,
-    /// Its focused row (`PlayerMenuRow` order: quality, hardware decoding, latency, zoom, stats).
+    /// Its focused row (`PlayerMenuRow` order: quality, hardware decoding, latency, zoom, stats,
+    /// audio only).
     pub player_menu_focus: i32,
     /// The current value of each player-menu row, in the same order.
     pub player_menu_values: Vec<String>,
+    /// The stream on screen plays sound only: the Player screen shows the black audio-only screen,
+    /// and the menu's Quality row is locked.
+    pub audio_only: bool,
     /// The stats box, one fact per line. Empty while the box is off.
     pub stats_text: String,
     /// Changes whenever the HUD should come back (the window hides it again after a timeout).
     pub hud_pulse: i32,
     /// The "Quit LiveDeck?" prompt is open.
     pub exit_prompt: bool,
+    /// The sleep timer in the HUD ("Sleep in 42 min", "Sleeping soon"). Empty without one.
+    pub sleep_label: String,
+    /// "Still watching?" is up: any button keeps going.
+    pub sleep_warning: bool,
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
@@ -207,16 +215,35 @@ pub struct ViewModel {
 fn player_menu_values(state: &AppState) -> Vec<String> {
     PlayerMenuRow::ALL
         .iter()
-        .map(|row| match row {
-            PlayerMenuRow::Quality => state.quality().label(),
-            PlayerMenuRow::Hwdec => state.session.hwdec.label(),
-            PlayerMenuRow::Latency => state.session.latency.label(),
-            PlayerMenuRow::Zoom => state.session.zoom.label(),
-            PlayerMenuRow::Stats if state.session.stats => "On",
-            PlayerMenuRow::Stats => "Off",
+        .map(|row| -> String {
+            match row {
+                PlayerMenuRow::Quality if state.audio_only => "Audio only".into(),
+                PlayerMenuRow::Quality => state.quality().label().into(),
+                PlayerMenuRow::Hwdec => state.session.hwdec.label().into(),
+                PlayerMenuRow::Latency => state.session.latency.label().into(),
+                PlayerMenuRow::Zoom => state.session.zoom.label().into(),
+                PlayerMenuRow::Stats if state.session.stats => "On".into(),
+                PlayerMenuRow::Stats => "Off".into(),
+                PlayerMenuRow::AudioOnly if state.audio_only => "On".into(),
+                PlayerMenuRow::AudioOnly => "Off".into(),
+                PlayerMenuRow::SleepTimer => match state.sleep {
+                    None => "Off".into(),
+                    Some(t) if t.left_min == 0 => format!("{} min · ending", t.minutes),
+                    Some(t) => format!("{} min · {} left", t.minutes, t.left_min),
+                },
+            }
         })
-        .map(str::to_owned)
         .collect()
+}
+
+/// The sleep timer for the HUD: "Sleep in 42 min", "Sleeping soon" in the last minute, or empty
+/// while no timer runs.
+fn sleep_label(state: &AppState) -> String {
+    match state.sleep {
+        None => String::new(),
+        Some(t) if t.left_min == 0 => "Sleeping soon".into(),
+        Some(t) => format!("Sleep in {} min", t.left_min),
+    }
 }
 
 /// A bit rate as people read it: `850 kb/s`, `6.2 Mb/s`.
@@ -241,11 +268,34 @@ fn stats_text(state: &AppState) -> String {
     if !state.session.stats || state.screen != Screen::Player {
         return String::new();
     }
-    let quality = format!("Asked for: {}", state.quality().label());
+    let asked = if state.audio_only {
+        "Audio only"
+    } else {
+        state.quality().label()
+    };
+    let quality = format!("Asked for: {asked}");
     let Some(s) = &state.stats else {
         return format!("Waiting for the player…\n{quality}");
     };
     const UNKNOWN: &str = "—";
+    let rate = |r: Option<u64>| r.map_or_else(|| UNKNOWN.to_owned(), format_bitrate);
+    let buffer = s.buffer_ms.map_or_else(
+        || UNKNOWN.to_owned(),
+        |ms| format!("{}.{} s", ms / 1000, (ms % 1000) / 100),
+    );
+    // No video is decoded, so its lines would only say "—".
+    if state.audio_only {
+        return [
+            format!(
+                "Audio: {} · {}",
+                s.audio_codec.as_deref().unwrap_or(UNKNOWN),
+                rate(s.audio_bitrate)
+            ),
+            format!("Buffer: {buffer}"),
+            quality,
+        ]
+        .join("\n");
+    }
     let size = match (s.width, s.height) {
         (Some(w), Some(h)) => format!("{w}×{h}"),
         _ => UNKNOWN.to_owned(),
@@ -258,11 +308,6 @@ fn stats_text(state: &AppState) -> String {
         Some(hw) => format!("hardware ({hw})"),
         None => "software".to_owned(),
     };
-    let rate = |r: Option<u64>| r.map_or_else(|| UNKNOWN.to_owned(), format_bitrate);
-    let buffer = s.buffer_ms.map_or_else(
-        || UNKNOWN.to_owned(),
-        |ms| format!("{}.{} s", ms / 1000, (ms % 1000) / 100),
-    );
     let count = |n: Option<u64>| n.map_or_else(|| UNKNOWN.to_owned(), |n| n.to_string());
     [
         format!("Video: {size}{fps}"),
@@ -623,7 +668,13 @@ pub fn view_model(state: &AppState) -> ViewModel {
     // Separate rows keep their own scroll position (see `Feed::row_cols`).
     let row_cols: Vec<i32> = match feed {
         Some(f) if !id.is_grid() => (0..rows.len())
-            .map(|r| to_i32(if r == focus.row { focus.col } else { f.col_of(r) }))
+            .map(|r| {
+                to_i32(if r == focus.row {
+                    focus.col
+                } else {
+                    f.col_of(r)
+                })
+            })
             .collect(),
         _ => Vec::new(),
     };
@@ -709,9 +760,12 @@ pub fn view_model(state: &AppState) -> ViewModel {
         player_menu_open: on_player && state.player_menu.is_some(),
         player_menu_focus: to_i32(state.player_menu.unwrap_or_default().index()),
         player_menu_values: player_menu_values(state),
+        audio_only: on_player && state.audio_only,
         stats_text: stats_text(state),
         hud_pulse: state.hud_pulse as i32,
         exit_prompt: state.exit_prompt,
+        sleep_label: sleep_label(state),
+        sleep_warning: state.sleep.is_some_and(|t| t.warning),
         rows,
         chat: state
             .chat
@@ -872,9 +926,12 @@ impl Update {
             .map(|v| v.as_str().into())
             .collect();
         ui.set_player_menu_values(ModelRc::new(VecModel::from(values)));
+        ui.set_audio_only(vm.audio_only);
         ui.set_stats_text(vm.stats_text.into());
         ui.set_hud_pulse(vm.hud_pulse);
         ui.set_exit_prompt(vm.exit_prompt);
+        ui.set_sleep_label(vm.sleep_label.into());
+        ui.set_sleep_warning(vm.sleep_warning);
     }
 }
 

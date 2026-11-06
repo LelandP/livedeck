@@ -22,6 +22,7 @@ use crate::chat::Chat;
 use crate::playback::Playback;
 use crate::provider::Provider;
 use crate::session::Session;
+use crate::sleep::Sleep;
 
 /// Thumbnail downloads running at once. A page of 30 cards must not open 30 connections.
 const THUMBNAIL_CONCURRENCY: usize = 6;
@@ -93,6 +94,8 @@ pub struct Store<P, R, S> {
     keep_awake: Option<KeepAwake>,
     /// What `keep_awake` was last told.
     awake: bool,
+    /// Runs the sleep timer and suspends. `None` in tests that do not care.
+    sleep: Option<Sleep>,
     shown: Option<ViewModel>,
     provider: Arc<P>,
     playback: Arc<Playback<R>>,
@@ -125,6 +128,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             save_settings: None,
             keep_awake: None,
             awake: false,
+            sleep: None,
             shown: None,
             provider: Arc::new(provider),
             playback: Arc::new(playback),
@@ -146,6 +150,12 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     /// Keeps the screen on with `keep_awake` while a stream plays.
     pub fn with_keep_awake(mut self, keep_awake: KeepAwake) -> Self {
         self.keep_awake = Some(keep_awake);
+        self
+    }
+
+    /// Runs the sleep timer commands with `sleep`.
+    pub fn with_sleep(mut self, sleep: Sleep) -> Self {
+        self.sleep = Some(sleep);
         self
     }
 
@@ -249,6 +259,13 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                     .collect();
                 if !fresh.is_empty() {
                     self.spawn_images(fresh, S::chat_image);
+                }
+                continue;
+            }
+            if Sleep::handles(&cmd) {
+                match &self.sleep {
+                    Some(sleep) => sleep.execute(cmd),
+                    None => tracing::debug!(?cmd, "no sleep timer here"),
                 }
                 continue;
             }
