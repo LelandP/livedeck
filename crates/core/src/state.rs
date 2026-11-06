@@ -4,6 +4,7 @@ use crate::chat::ChatBuffer;
 use crate::domain::{
     ChatStatus, DeviceCode, FeedId, LoginProblem, PlayerStats, Row, Stream, Tile, User,
 };
+use crate::keyboard::KeyboardState;
 use crate::msg::StreamKind;
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 
@@ -17,6 +18,8 @@ pub enum Screen {
     Category,
     /// Followed channels, live first. Signed in only.
     Following,
+    /// Find channels and categories by name with the on-screen keyboard. Signed in only.
+    Search,
     Player,
     /// Settings: the account (sign in / sign out), chat layout and stream quality.
     Settings,
@@ -28,8 +31,13 @@ impl Screen {
     pub fn is_root(self) -> bool {
         matches!(
             self,
-            Screen::Home | Screen::Browse | Screen::Following | Screen::Settings
+            Screen::Home | Screen::Browse | Screen::Following | Screen::Search | Screen::Settings
         )
+    }
+
+    /// Screens that only exist while signed in. Signing out leaves them for Home.
+    pub fn needs_account(self) -> bool {
+        matches!(self, Screen::Following | Screen::Search)
     }
 }
 
@@ -40,16 +48,18 @@ pub enum RailEntry {
     Home,
     Following,
     Browse,
+    Search,
     Settings,
     /// The account / sign-in entry pinned to the bottom.
     Account,
 }
 
 impl RailEntry {
-    pub const ALL: [RailEntry; 5] = [
+    pub const ALL: [RailEntry; 6] = [
         RailEntry::Home,
         RailEntry::Following,
         RailEntry::Browse,
+        RailEntry::Search,
         RailEntry::Settings,
         RailEntry::Account,
     ];
@@ -290,6 +300,35 @@ pub struct CategoryFeed {
     pub feed: Feed,
 }
 
+/// Shortest search text (letters and digits, spaces trimmed) that is looked up.
+pub const SEARCH_MIN_CHARS: usize = 2;
+
+/// The Search screen: the text, the keyboard and the results. Kept while a stream is watched
+/// from it, and while other screens are open.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SearchState {
+    /// The text as typed (the keyboard's characters only).
+    pub query: String,
+    pub keys: KeyboardState,
+    /// The results: live channels, categories, offline channels. Each row pages on its own.
+    pub feed: Feed,
+    /// Goes up with every search sent, so answers to older ones are ignored. Never reset.
+    pub id: u32,
+    /// The trimmed text of the latest search sent.
+    pub asked: String,
+    /// The trimmed text the rows on screen answer. Pages are fetched for it.
+    pub results_for: String,
+    /// Focus is on the result rows instead of the keyboard.
+    pub in_results: bool,
+}
+
+impl SearchState {
+    /// The search text is long enough to be looked up.
+    pub fn is_searchable(text: &str) -> bool {
+        text.trim().chars().count() >= SEARCH_MIN_CHARS
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RailState {
     /// True while the rail is expanded and owns controller focus.
@@ -330,6 +369,8 @@ pub struct AppState {
     pub browse: Feed,
     /// The open category, while the Category screen is on the back stack or on screen.
     pub category: Option<CategoryFeed>,
+    /// The Search screen.
+    pub search: SearchState,
     /// The newest chat lines of the channel being watched.
     pub chat: ChatBuffer,
     /// How the chat connection of the channel being watched is doing.
@@ -411,6 +452,7 @@ impl AppState {
                 .category
                 .as_ref()
                 .map(|c| FeedId::Category(c.id.clone())),
+            Screen::Search => Some(FeedId::Search(self.search.results_for.clone())),
             Screen::Player | Screen::Login | Screen::Settings => None,
         }
     }
@@ -443,6 +485,7 @@ impl AppState {
                 .as_ref()
                 .filter(|c| c.id == *game)
                 .map(|c| &c.feed),
+            FeedId::Search(text) => (self.search.results_for == *text).then_some(&self.search.feed),
         }
     }
 
@@ -456,6 +499,9 @@ impl AppState {
                 .as_mut()
                 .filter(|c| c.id == *game)
                 .map(|c| &mut c.feed),
+            FeedId::Search(text) => {
+                (self.search.results_for == *text).then_some(&mut self.search.feed)
+            }
         }
     }
 

@@ -16,6 +16,15 @@ export struct StreamItem {
     offline: bool,
 }
 
+// One key of the Search keyboard: where it sits on the 10-column grid and how many columns it
+// covers (htpc_core::keyboard).
+export struct SearchKey {
+    label: string,
+    row: int,
+    col: int,
+    span: int,
+}
+
 export struct RowData {
     title: string,
     items: [StreamItem],

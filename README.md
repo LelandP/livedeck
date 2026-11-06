@@ -18,6 +18,7 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Subscribe from the player menu: a QR code of the channel's subscribe page to finish on your phone, or (outside Game Mode) open it in a browser
 - Read-only chat with coloured names, badges and emotes, as a side panel or an overlay on the video
 - Sign in with a code and a QR code (no password typed on the TV), then a Followed row and a Following tab
+- Search for channels and categories by name with an on-screen keyboard (signed in)
 - Settings for chat layout and video quality, saved between runs
 - Everything controllable with a gamepad (D-pad, A/B/X/Y, Start)
 
@@ -32,7 +33,6 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Search:** find channels and categories by name, with a controller-friendly on-screen keyboard
 - [ ] **Live notifications:** a popup (and a sound) when another followed channel goes live, with a toggle in Settings to turn it off. Signed-in users only, as it needs Twitch EventSub
 - [ ] **Follow raids:** when the channel you are watching ends its stream with a raid, offer to follow it to the target channel (with a short countdown and a way to stay). Signed-in users only. Shares the EventSub client with live notifications
 - [ ] **Chat sending:** write in chat with the on-screen keyboard from Search, and perhaps quick canned messages. Needs the `chat:edit` permission, so users sign in again
@@ -91,12 +91,13 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
 |---|---|
 | D-pad / left stick / arrow keys | Move focus |
 | A / Enter | Select, watch, change a setting |
-| B / Esc / Backspace | Back (also opens the left menu from Settings) |
+| B / Esc / Backspace | Back (on Search: delete a character first) |
 | X / `r` | Retry a failed load |
 | Y / `y` | Show or hide chat |
 | Start / Menu key | Open or close the left menu (while watching: the player menu) |
 
 - **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
+- **Search:** in the left menu (sign in first). Type with the on-screen keyboard: the D-pad moves, A types, X deletes, Y adds a space, Start jumps to the results. Results update as you type, from two characters on: live channels, categories, then offline channels. Up from the first row (or B) goes back to the keyboard. On a PC you can also just type.
 - **Settings:** chat layout (side panel or over the video) and video quality (applies to the next stream you open).
 - **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. *Sleep timer* counts down whatever you watch (switching channels does not reset it); a minute before the end any button keeps going for the same length again, otherwise the sound fades, the stream stops and the device suspends. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
 - **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `image_cache_max_mb` and an optional `client_id`.

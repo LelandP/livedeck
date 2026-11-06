@@ -11,12 +11,12 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
-    Feed, FeedId, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen,
-    SettingsRow, Stream, Tile,
+    Feed, FeedId, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen,
+    SearchState, SettingsRow, Stream, Tile,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
-use crate::{ChatMsg, ChatPiece, MainWindow, RowData, StreamItem};
+use crate::{ChatMsg, ChatPiece, MainWindow, RowData, SearchKey, StreamItem};
 
 /// Name colour for chatters who have not picked one. Matches the scaffold's mock colour.
 pub const DEFAULT_CHAT_NAME: Rgb = Rgb::new(214, 255, 58);
@@ -51,6 +51,8 @@ pub enum ScreenId {
     Grid = 3,
     /// Settings: account, chat layout, quality, about.
     Settings = 4,
+    /// Search: the text, the on-screen keyboard and the result rows.
+    Search = 5,
 }
 
 /// What the Player screen shows. The values are what `main.slint` switches on.
@@ -216,6 +218,17 @@ pub struct ViewModel {
     pub subscribe_qr_width: i32,
     /// The card offers "A: Open in browser" (not in Game Mode).
     pub subscribe_can_open: bool,
+    /// The Search screen's text as typed.
+    pub search_query: String,
+    /// The focused key, as an index into `htpc_core::keyboard::layout()`.
+    pub search_key_focus: i32,
+    /// The keyboard has focus (not the results, not the rail).
+    pub search_on_keys: bool,
+    /// The result rows have focus.
+    pub search_in_results: bool,
+    /// What Search says where the results go when there are none: type more, searching,
+    /// nothing found, or the error. Empty while results are shown.
+    pub search_status: String,
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
@@ -364,18 +377,22 @@ fn row_title(kind: RowKind, grid: bool) -> &'static str {
         RowKind::FollowedLive => "Followed · Live",
         RowKind::FollowedOffline => "Offline",
         RowKind::TopLive => "Top Live",
-        RowKind::Categories => "Categories",
+        RowKind::Categories | RowKind::SearchCategories => "Categories",
+        RowKind::SearchLive => "Live channels",
+        RowKind::SearchOffline => "Offline channels",
     }
 }
 
 fn shape_of(kind: RowKind) -> Shape {
     match kind {
         RowKind::Featured => Shape::Hero,
-        RowKind::Categories => Shape::Portrait,
+        RowKind::Categories | RowKind::SearchCategories => Shape::Portrait,
         RowKind::FollowedLive
         | RowKind::FollowedOffline
         | RowKind::TopLive
-        | RowKind::CategoryStreams => Shape::Landscape,
+        | RowKind::CategoryStreams
+        | RowKind::SearchLive
+        | RowKind::SearchOffline => Shape::Landscape,
     }
 }
 
@@ -435,7 +452,7 @@ fn skeleton_rows(id: &FeedId) -> Vec<RowVm> {
             row(Shape::Hero, 1),
             row(Shape::Landscape, SKELETON_HOME_COLS),
         ],
-        FeedId::Following => vec![row(Shape::Landscape, SKELETON_HOME_COLS)],
+        FeedId::Following | FeedId::Search(_) => vec![row(Shape::Landscape, SKELETON_HOME_COLS)],
         FeedId::Browse => vec![
             row(Shape::Portrait, grid_cols(RowKind::Categories)),
             row(Shape::Portrait, grid_cols(RowKind::Categories)),
@@ -574,7 +591,8 @@ fn rail_slot(screen: Screen) -> Option<i32> {
         Screen::Following => Some(1),
         // The category screen belongs to the Browse entry.
         Screen::Browse | Screen::Category => Some(2),
-        Screen::Settings => Some(3),
+        Screen::Search => Some(3),
+        Screen::Settings => Some(4),
         Screen::Player | Screen::Login => None,
     }
 }
@@ -593,6 +611,34 @@ fn heading(state: &AppState, id: &FeedId) -> String {
             .as_ref()
             .map(|c| c.name.clone())
             .unwrap_or_default(),
+        FeedId::Search(_) => "Search".to_owned(),
+    }
+}
+
+/// What Search shows where the results go while there are none (see `ViewModel::search_status`).
+fn search_status(state: &AppState) -> String {
+    let search = &state.search;
+    if !SearchState::is_searchable(&search.query) {
+        return "Type at least two letters or digits to find channels and categories.".to_owned();
+    }
+    if let Some(error) = &search.feed.error {
+        return format!("Could not search: {error}. Press Start to try again.");
+    }
+    match (search.feed.rows.is_empty(), search.feed.loading) {
+        (false, _) => String::new(),
+        (true, true) => "Searching…".to_owned(),
+        (true, false) => format!("No channels or categories match “{}”.", search.asked),
+    }
+}
+
+/// What A does on the focused key of the Search keyboard.
+fn key_label(key: Key) -> &'static str {
+    match key {
+        Key::Char(_) => "Type",
+        Key::Space => "Space",
+        Key::Backspace => "Delete",
+        Key::Clear => "Clear",
+        Key::Done => "Results",
     }
 }
 
@@ -601,6 +647,8 @@ fn heading(state: &AppState, id: &FeedId) -> String {
 fn empty_text(id: &FeedId) -> &'static str {
     match id {
         FeedId::Following => "You are not following anyone yet",
+        // Search says it in `search_status`.
+        FeedId::Search(_) => "",
         _ => "Nothing is live here right now",
     }
 }
@@ -650,9 +698,12 @@ pub fn view_model(state: &AppState) -> ViewModel {
         Screen::Login => ScreenId::SignIn,
         Screen::Browse | Screen::Category => ScreenId::Grid,
         Screen::Settings => ScreenId::Settings,
+        Screen::Search => ScreenId::Search,
         // Following draws like Home: horizontal rows.
         Screen::Home | Screen::Following => ScreenId::Home,
     };
+    let on_search = state.screen == Screen::Search;
+    let search_on_keys = on_search && !state.search.in_results && !state.rail.focused;
     // Overlays highlight the root screen underneath them.
     let rail_current = rail_slot(state.screen)
         .or_else(|| state.back_stack.iter().rev().find_map(|s| rail_slot(*s)))
@@ -732,6 +783,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
             SettingsRow::ChatLayout | SettingsRow::Quality => "Change",
         };
         (label, false)
+    } else if search_on_keys {
+        // X is backspace on the keyboard, not retry.
+        (key_label(state.search.keys.key()), false)
     } else if subscribe_open {
         // Only B, in Game Mode.
         let label = if state.can_open_browser {
@@ -809,6 +863,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
         subscribe_qr,
         subscribe_qr_width,
         subscribe_can_open: subscribe_open && state.can_open_browser,
+        search_query: state.search.query.clone(),
+        search_key_focus: to_i32(state.search.keys.index()),
+        search_on_keys,
+        search_in_results: on_search && state.search.in_results,
+        search_status: search_status(state),
         rows,
         chat: state
             .chat
@@ -985,7 +1044,30 @@ impl Update {
         ui.set_subscribe_open(vm.subscribe_open);
         ui.set_subscribe_url(vm.subscribe_url.into());
         ui.set_subscribe_can_open(vm.subscribe_can_open);
+        // The keys never change, so they are handed over once (recreating them would restart
+        // their focus animations on every update).
+        if ui.get_search_keys().row_count() == 0 {
+            ui.set_search_keys(ModelRc::new(VecModel::from(search_keys())));
+        }
+        ui.set_search_query(vm.search_query.into());
+        ui.set_search_key_focus(vm.search_key_focus);
+        ui.set_search_on_keys(vm.search_on_keys);
+        ui.set_search_in_results(vm.search_in_results);
+        ui.set_search_status(vm.search_status.into());
     }
+}
+
+/// The on-screen keyboard for `search.slint`, in `htpc_core::keyboard::layout()` order.
+fn search_keys() -> Vec<SearchKey> {
+    htpc_core::keyboard::layout()
+        .into_iter()
+        .map(|k| SearchKey {
+            label: k.key.label().into(),
+            row: i32::from(k.row),
+            col: i32::from(k.col),
+            span: i32::from(k.span),
+        })
+        .collect()
 }
 
 /// Hands a decoded thumbnail to the window: remembers it and patches every card that shows
@@ -1859,7 +1941,7 @@ mod tests {
         let (s, _) = reduce(&loaded(), Intent::RailPick(RailEntry::Settings));
         let vm = view_model(&s);
         assert_eq!(vm.screen, ScreenId::Settings);
-        assert_eq!(vm.rail_current, 3);
+        assert_eq!(vm.rail_current, 4, "after Search");
         assert_eq!((vm.select_label.as_str(), vm.can_retry), ("Sign in", false));
 
         let vm = view_model(&signed_in(&s));

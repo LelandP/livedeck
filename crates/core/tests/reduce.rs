@@ -224,7 +224,8 @@ fn rail_settings_opens_the_settings_screen() {
 #[test]
 fn account_entry_opens_login_on_top_of_home() {
     let mut keys = vec![Intent::Left];
-    keys.extend([Intent::Down; 4]);
+    // Past Following, Browse, Search and Settings.
+    keys.extend([Intent::Down; 5]);
     keys.push(Intent::Select);
     let (s, cmds) = run(home(), &keys);
     assert_eq!(s.rail.index, RailEntry::Account);

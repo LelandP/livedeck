@@ -1,0 +1,167 @@
+import { Theme } from "theme.slint";
+import { RowData, SearchKey } from "types.slint";
+import { StreamCard } from "components.slint";
+
+// The text field with a blinking caret. The caret is a Slint Timer, not `animation-tick()`, so the
+// window is not redrawn every frame while Search is open.
+component QueryLine inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    property <bool> caret-on: true;
+
+    border-radius: 8px;
+    background: Theme.surface;
+    border-width: 2px;
+    border-color: root.active ? Theme.accent-light : Theme.surface-high;
+    animate border-color { duration: Theme.t-fast; }
+
+    Timer {
+        interval: 530ms;
+        running: root.active;
+        triggered => { root.caret-on = !root.caret-on; }
+    }
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 4px;
+        alignment: start;
+
+        // Before the placeholder while empty, after the text otherwise.
+        if root.text == "" : Rectangle {
+            width: 3px;
+            Rectangle {
+                width: 3px;
+                height: 30px;
+                y: (parent.height - self.height) / 2;
+                background: Theme.accent-light;
+                opacity: root.active && root.caret-on ? 1.0 : 0.0;
+            }
+        }
+        Text {
+            text: root.text == "" ? "Channels and categories" : root.text;
+            color: root.text == "" ? Theme.muted : Theme.text;
+            font-size: Theme.fs-title;
+            font-weight: root.text == "" ? 400 : 700;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.text != "" : Rectangle {
+            width: 3px;
+            Rectangle {
+                width: 3px;
+                height: 30px;
+                y: (parent.height - self.height) / 2;
+                background: Theme.accent-light;
+                opacity: root.active && root.caret-on ? 1.0 : 0.0;
+            }
+        }
+    }
+}
+
+// Search: the text, the on-screen keyboard under it, and the result rows under that. While the
+// results have focus the keyboard slides up out of view and the rows scroll like Home's. Which key
+// or card has focus is decided in Rust (htpc_core::reduce); this file only draws it.
+export component SearchContent inherits Rectangle {
+    in property <[RowData]> rows;
+    in property <int> sel-row;
+    in property <int> sel-col;
+    // The column each row is scrolled to (view_model.rs `row_cols`).
+    in property <[int]> row-cols;
+    in property <string> query;
+    in property <[SearchKey]> keys;
+    in property <int> key-focus;
+    // The keyboard has focus (not the results, not the rail).
+    in property <bool> on-keys;
+    in property <bool> in-results;
+    // Shown where the results go while there are none.
+    in property <string> status;
+    callback picked(int, int);
+    clip: true;
+
+    property <length> left: Theme.safe-x - 24px;
+    property <length> key-w: 64px;
+    property <length> key-h: 50px;
+    property <length> key-gap: 8px;
+    property <length> keyboard-top: 108px;
+    // The first result row starts under the keyboard (five rows of keys), so it shows in full
+    // while typing.
+    property <length> results-top: root.keyboard-top + 5 * (root.key-h + root.key-gap) + 16px;
+
+    Rectangle {
+        y: root.in-results ? 24px - root.results-top - root.sel-row * Theme.row-h : 0px;
+        animate y { duration: Theme.t-med; easing: ease-out; }
+
+        QueryLine {
+            x: root.left;
+            y: 28px;
+            width: 10 * root.key-w + 9 * root.key-gap;
+            height: 60px;
+            text: root.query;
+            active: root.on-keys;
+        }
+
+        for key[i] in root.keys : Rectangle {
+            x: root.left + key.col * (root.key-w + root.key-gap);
+            y: root.keyboard-top + key.row * (root.key-h + root.key-gap);
+            width: key.span * root.key-w + (key.span - 1) * root.key-gap;
+            height: root.key-h;
+            border-radius: 6px;
+            background: root.on-keys && i == root.key-focus ? Theme.accent : Theme.surface;
+            animate background { duration: Theme.t-fast; }
+
+            Text {
+                text: key.label;
+                color: root.on-keys && i == root.key-focus ? Theme.text : Theme.muted;
+                font-size: Theme.fs-body;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.rows.length == 0 : Text {
+            x: root.left;
+            y: root.results-top + 8px;
+            width: root.width - root.left - Theme.safe-x;
+            text: root.status;
+            color: Theme.muted;
+            font-size: Theme.fs-body;
+            wrap: word-wrap;
+        }
+
+        for r[ri] in root.rows : Rectangle {
+            y: root.results-top + ri * Theme.row-h;
+            height: Theme.row-h;
+            opacity: !root.in-results || ri == root.sel-row ? 1.0 : 0.6;
+            animate opacity { duration: Theme.t-med; }
+
+            Text {
+                x: root.left;
+                y: 0px;
+                text: r.title;
+                color: root.in-results && ri == root.sel-row ? Theme.accent-light : Theme.muted;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                y: 44px;
+                x: -max(0, (ri == root.sel-row ? root.sel-col : root.row-cols[ri]) - 1) * Theme.slot-width(r.shape);
+                animate x { duration: Theme.t-med; easing: ease-out; }
+
+                for item[ci] in r.items : StreamCard {
+                    x: root.left + ci * Theme.slot-width(r.shape);
+                    // At the top of the row (Slint would centre it), so the first row fits under
+                    // the keyboard.
+                    y: 0px;
+                    item: item;
+                    shape: r.shape;
+                    focused: root.in-results && ri == root.sel-row && ci == root.sel-col && !item.loading;
+                    dimmed: !root.in-results || ri != root.sel-row;
+                    clicked => { root.picked(ri, ci); }
+                }
+            }
+        }
+    }
+}

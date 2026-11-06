@@ -32,7 +32,9 @@ pub use fake_auth::{FakeAuth, FakeAuthCall};
 pub use gql::{GqlClient, GQL_MAX_PAGE_SIZE, GQL_URL, WEB_CLIENT_ID};
 pub use helix::{Credentials, HelixClient, DEFAULT_BASE_URL};
 pub use hybrid::HybridApi;
-pub use model::{FollowedChannel, Game, Page, PageRequest, StreamInfo, UserInfo, MAX_PAGE_SIZE};
+pub use model::{
+    ChannelResult, FollowedChannel, Game, Page, PageRequest, StreamInfo, UserInfo, MAX_PAGE_SIZE,
+};
 pub use ratelimit::{Bucket, RateLimiter, RetryPolicy};
 pub use refreshing::{Refresher, RefreshingApi};
 
@@ -73,4 +75,32 @@ pub trait TwitchApi: Send + Sync + 'static {
     /// `GET /users`: the user with this login, or the token's owner when `login` is `None`.
     /// `Ok(None)` if no such user exists.
     fn user(&self, login: Option<&str>) -> impl Future<Output = Result<Option<UserInfo>>> + Send;
+
+    /// `GET /search/channels`: channels whose name matches `query`, best match first. With
+    /// `live_only`, only the ones live right now. Needs a token (any kind): the anonymous client
+    /// answers [`Error::NotSignedIn`].
+    fn search_channels(
+        &self,
+        query: &str,
+        live_only: bool,
+        page: PageRequest,
+    ) -> impl Future<Output = Result<Page<ChannelResult>>> + Send;
+
+    /// `GET /search/categories`: categories whose name matches `query`, best match first. Needs
+    /// a token, like [`TwitchApi::search_channels`].
+    fn search_categories(
+        &self,
+        query: &str,
+        page: PageRequest,
+    ) -> impl Future<Output = Result<Page<Game>>> + Send;
+
+    /// `GET /streams?user_login=`: the live streams of these channels (at most 100 logins), in
+    /// no particular order. A channel that is not live is simply missing.
+    fn streams_by_login(
+        &self,
+        logins: &[String],
+    ) -> impl Future<Output = Result<Vec<StreamInfo>>> + Send;
 }
+
+/// Most logins one `streams_by_login` call takes (Helix's limit).
+pub const MAX_LOGINS: usize = 100;

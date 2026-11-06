@@ -3,16 +3,17 @@
 import "../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf";
 import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
 import { Theme } from "theme.slint";
-import { StreamItem, RowData, ChatMsg, ChatPiece } from "types.slint";
+import { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey } from "types.slint";
 import { Hint } from "components.slint";
 import { HomeContent } from "home.slint";
 import { GridContent } from "grid.slint";
+import { SearchContent } from "search.slint";
 import { Rail } from "rail.slint";
 import { PlayerScreen } from "player.slint";
 import { SignInScreen } from "signin.slint";
 import { SettingsScreen } from "settings.slint";
 
-export { StreamItem, RowData, ChatMsg, ChatPiece }
+export { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey }
 
 // Hint-bar actions (mouse fallback). Rust maps them to core Intents.
 export enum UiAction { select, back, toggle-chat, menu, retry }
@@ -56,14 +57,23 @@ export component MainWindow inherits Window {
     // The app version for the about text (set by the app from its Cargo version).
     in property <string> version: "";
 
-    // 0 = home / following, 1 = player, 2 = sign in, 3 = grid: browse / category, 4 = settings
-    // (ScreenId in view_model.rs)
+    // 0 = home / following, 1 = player, 2 = sign in, 3 = grid: browse / category, 4 = settings,
+    // 5 = search (ScreenId in view_model.rs)
     in property <int> screen: 0;
     in property <int> sel-row: 0;
     in property <int> sel-col: 0;
-    // Home and Following: the column each row is scrolled to (view_model.rs `row_cols`).
+    // Home, Following and Search: the column each row is scrolled to (view_model.rs `row_cols`).
     in property <[int]> row-cols;
-    // Rail cursor: 0..3 nav entries, 4 = account (RailEntry order in htpc-core).
+
+    // Search: the text, the keyboard (set once) and its focused key, where focus is, and what to
+    // say while there are no results.
+    in property <string> search-query: "";
+    in property <[SearchKey]> search-keys;
+    in property <int> search-key-focus: 0;
+    in property <bool> search-on-keys: false;
+    in property <bool> search-in-results: false;
+    in property <string> search-status: "";
+    // Rail cursor: 0..4 nav entries, 5 = account (RailEntry order in htpc-core).
     in property <int> rail-index: 0;
     in property <bool> rail-focused: false;
     // Rail entry shown as the current destination.
@@ -141,9 +151,10 @@ export component MainWindow inherits Window {
     callback action(UiAction);
 
     // Order must match `htpc_core::RailEntry`. The account entry is appended by Rail.
-    property <[string]> rail-items: ["Home", "Following", "Browse", "Settings"];
+    property <[string]> rail-items: ["Home", "Following", "Browse", "Search", "Settings"];
 
-    // Controller first. Keyboard stand-in: arrows, Enter = A, Esc/Backspace = B, Y = chat.
+    // Controller first. Keyboard stand-in: arrows, Enter = A, Esc/Backspace = B, Y = chat. On
+    // Search, typed characters and Backspace edit the text instead.
     // Mouse is a fallback only: clicks act, hover never moves controller focus.
     FocusScope {
         init => { self.focus(); }
@@ -185,6 +196,24 @@ export component MainWindow inherits Window {
         sel-col: root.sel-col;
         active: !root.rail-focused;
         heading: root.heading;
+        picked(r, c) => { root.card-clicked(r, c); }
+    }
+
+    if root.screen == 5 : SearchContent {
+        x: Theme.rail-collapsed;
+        y: 0px;
+        width: parent.width - Theme.rail-collapsed;
+        height: parent.height - Theme.hints-h;
+        rows: root.rows;
+        sel-row: root.sel-row;
+        sel-col: root.sel-col;
+        row-cols: root.row-cols;
+        query: root.search-query;
+        keys: root.search-keys;
+        key-focus: root.search-key-focus;
+        on-keys: root.search-on-keys;
+        in-results: root.search-in-results;
+        status: root.search-status;
         picked(r, c) => { root.card-clicked(r, c); }
     }
 
@@ -241,7 +270,7 @@ export component MainWindow inherits Window {
 
     // After every screen it sits beside: Slint paints in declaration order, and the expanded rail
     // must draw over the screen content, not under it.
-    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 : Rail {
+    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 || root.screen == 5 : Rail {
         x: 0px;
         y: 0px;
         height: parent.height - Theme.hints-h;
@@ -392,6 +421,18 @@ export component MainWindow inherits Window {
             if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+            // Search, on the keyboard: X deletes, Y types a space, Start goes to the results, and
+            // B deletes too until the text is empty, then asks to quit.
+            if root.screen == 5 && root.search-on-keys : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.screen == 5 && root.search-on-keys : Hint { glyph: "X"; label: "Delete"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 5 && root.search-on-keys : Hint { glyph: "Y"; label: "Space"; clicked => { root.action(UiAction.toggle-chat); } }
+            if root.screen == 5 && root.search-on-keys : Hint { glyph: "≡"; label: "Results"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 5 && root.search-on-keys && root.search-query == "" : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
+            // Search, in the results (or the rail): like Home, and B returns to the keyboard.
+            if root.screen == 5 && !root.search-on-keys : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.screen == 5 && root.search-in-results && root.can-retry && !root.rail-focused : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 5 && !root.search-on-keys : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 5 && root.search-in-results && !root.rail-focused : Hint { glyph: "B"; label: "Keyboard"; clicked => { root.action(UiAction.back); } }
         }
     }
 }

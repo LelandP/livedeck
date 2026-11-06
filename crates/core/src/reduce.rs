@@ -6,10 +6,11 @@
 use std::collections::HashSet;
 
 use crate::domain::{grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RowKind, Stream, Tile};
+use crate::keyboard::{self, Key};
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 use crate::state::{
     subscribe_url, AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen,
-    SettingsRow, SleepTimer,
+    SearchState, SettingsRow, SleepTimer,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -39,6 +40,9 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
 }
 
 fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    let Some(intent) = typed_key(s, intent) else {
+        return;
+    };
     // "Still watching?": any button keeps going, and does nothing else (it must not also pause,
     // open chat or leave the stream).
     if let Some(timer) = s.sleep.filter(|t| t.warning) {
@@ -54,9 +58,30 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Screen::Login => login_intent(s, intent, cmds),
         Screen::Player => player_intent(s, intent, cmds),
         // Settings has no cards, but shares the rail handling and the Left-opens-the-rail rule.
-        Screen::Home | Screen::Browse | Screen::Category | Screen::Following | Screen::Settings => {
-            home_intent(s, intent, cmds)
-        }
+        Screen::Home
+        | Screen::Browse
+        | Screen::Category
+        | Screen::Following
+        | Screen::Search
+        | Screen::Settings => home_intent(s, intent, cmds),
+    }
+}
+
+/// What a physical keyboard's typing means here. Only the Search keyboard takes text (while it
+/// has focus and nothing is in front of it). Everywhere else `y` and `r` stay the chat and retry
+/// shortcuts, Backspace is Back, and other characters do nothing.
+fn typed_key(s: &AppState, intent: Intent) -> Option<Intent> {
+    let typing = s.screen == Screen::Search
+        && !s.rail.focused
+        && !s.exit_prompt
+        && !s.sleep.is_some_and(|t| t.warning);
+    match intent {
+        Intent::Text(_) | Intent::Erase if typing => Some(intent),
+        Intent::Text('y' | 'Y') => Some(Intent::ToggleChat),
+        Intent::Text('r' | 'R') => Some(Intent::Retry),
+        Intent::Text(_) => None,
+        Intent::Erase => Some(Intent::Back),
+        other => Some(other),
     }
 }
 
@@ -207,7 +232,8 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         }
         // Any other button only brings the HUD back.
         Intent::Up | Intent::Down | Intent::Left | Intent::Right => pulse_hud(s),
-        Intent::Pick { .. } | Intent::RailPick(_) => {}
+        // Typing never reaches the player (see `typed_key`).
+        Intent::Pick { .. } | Intent::RailPick(_) | Intent::Text(_) | Intent::Erase => {}
     }
 }
 
@@ -230,7 +256,11 @@ fn player_menu_intent(
         Intent::Left => change_player_option(s, row, false, cmds),
         Intent::Back | Intent::Menu => s.player_menu = None,
         Intent::ToggleChat => s.chat_open = !s.chat_open,
-        Intent::Retry | Intent::Pick { .. } | Intent::RailPick(_) => {}
+        Intent::Retry
+        | Intent::Pick { .. }
+        | Intent::RailPick(_)
+        | Intent::Text(_)
+        | Intent::Erase => {}
     }
     pulse_hud(s);
 }
@@ -365,6 +395,8 @@ fn per_row_cols(s: &AppState) -> bool {
 }
 
 fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    // On the Search keyboard Start means "done" (see `keyboard_intent`), not the rail.
+    let on_search_keys = s.screen == Screen::Search && !s.rail.focused && !s.search.in_results;
     // Mouse fallbacks and Menu work whether or not the rail has focus.
     match intent {
         Intent::Pick { row, col } => {
@@ -374,6 +406,9 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
                     feed.focus_row(row, per_row);
                     feed.focus.col = col;
                 }
+                if s.screen == Screen::Search {
+                    s.search.in_results = true;
+                }
                 select_tile(s, cmds);
             }
             return;
@@ -382,7 +417,7 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             activate_rail(s, entry, cmds);
             return;
         }
-        Intent::Menu => {
+        Intent::Menu if !on_search_keys => {
             s.rail.focused = !s.rail.focused;
             return;
         }
@@ -400,11 +435,135 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         return;
     }
 
-    if s.screen == Screen::Settings {
-        settings_intent(s, intent, cmds);
+    match s.screen {
+        Screen::Settings => settings_intent(s, intent, cmds),
+        Screen::Search if s.search.in_results => search_results_intent(s, intent, cmds),
+        Screen::Search => keyboard_intent(s, intent, cmds),
+        _ => feed_intent(s, intent, cmds),
+    }
+}
+
+/// Input on the Search keyboard. The D-pad moves between keys and A presses one. Left at the left
+/// edge opens the rail, Down from the bottom row goes into the results. X deletes, Y types a
+/// space, Start jumps to the results. B deletes too, and only asks to quit once the text is empty.
+fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    match intent {
+        Intent::Up => {
+            s.search.keys.up();
+        }
+        Intent::Down => {
+            if !s.search.keys.down() {
+                enter_results(s);
+            }
+        }
+        Intent::Left => {
+            if !s.search.keys.left() {
+                s.rail.focused = true;
+            }
+        }
+        Intent::Right => {
+            s.search.keys.right();
+        }
+        Intent::Select => match s.search.keys.key() {
+            Key::Char(c) => edit_search(s, cmds, |q| keyboard::type_char(q, c)),
+            Key::Space => edit_search(s, cmds, |q| keyboard::type_char(q, ' ')),
+            Key::Backspace => edit_search(s, cmds, keyboard::backspace),
+            Key::Clear => edit_search(s, cmds, |q| {
+                let had = !q.is_empty();
+                q.clear();
+                had
+            }),
+            Key::Done => search_done(s, cmds),
+        },
+        Intent::Retry => edit_search(s, cmds, keyboard::backspace),
+        Intent::ToggleChat => edit_search(s, cmds, |q| keyboard::type_char(q, ' ')),
+        Intent::Menu => search_done(s, cmds),
+        Intent::Back | Intent::Erase if s.search.query.is_empty() => s.exit_prompt = true,
+        Intent::Back | Intent::Erase => edit_search(s, cmds, keyboard::backspace),
+        Intent::Text(c) => type_on_search(s, c, cmds),
+        Intent::Pick { .. } | Intent::RailPick(_) => {}
+    }
+}
+
+/// Input on the Search results. They work like Home, except that Up from the first row and B go
+/// back to the keyboard, and typing on a physical keyboard edits the text (which leaves the
+/// results, as they are about to change).
+fn search_results_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    match intent {
+        Intent::Up if s.search.feed.focus.row == 0 => s.search.in_results = false,
+        Intent::Back => s.search.in_results = false,
+        Intent::Retry if s.search.feed.error.is_some() => resend_search(s, cmds),
+        Intent::Text(c) => type_on_search(s, c, cmds),
+        Intent::Erase => edit_search(s, cmds, keyboard::backspace),
+        Intent::ToggleChat => {}
+        _ => feed_intent(s, intent, cmds),
+    }
+}
+
+/// A character from a physical keyboard. Letters are lowercased like the on-screen keys.
+fn type_on_search(s: &mut AppState, c: char, cmds: &mut Vec<Command>) {
+    let c = c.to_ascii_lowercase();
+    edit_search(s, cmds, |q| keyboard::type_char(q, c));
+}
+
+/// Applies `edit` to the search text. If it changed, focus returns to the keyboard and, once the
+/// trimmed text differs from the last search, a new search is sent (a short text clears the rows
+/// instead, and still tells the app, which drops a search it is waiting to send).
+fn edit_search(s: &mut AppState, cmds: &mut Vec<Command>, edit: impl FnOnce(&mut String) -> bool) {
+    if !edit(&mut s.search.query) {
         return;
     }
+    s.search.in_results = false;
+    let asked = s.search.query.trim().to_owned();
+    if asked == s.search.asked {
+        return;
+    }
+    s.search.asked = asked;
+    if SearchState::is_searchable(&s.search.asked) {
+        resend_search(s, cmds);
+    } else {
+        s.search.id = s.search.id.wrapping_add(1);
+        s.search.feed = Feed::default();
+        s.search.results_for.clear();
+        cmds.push(Command::Search {
+            id: s.search.id,
+            query: s.search.asked.clone(),
+        });
+    }
+}
 
+/// Sends the current search again under a new id. The rows on screen stay until the answer.
+fn resend_search(s: &mut AppState, cmds: &mut Vec<Command>) {
+    s.search.id = s.search.id.wrapping_add(1);
+    s.search.feed.loading = true;
+    s.search.feed.error = None;
+    cmds.push(Command::Search {
+        id: s.search.id,
+        query: s.search.asked.clone(),
+    });
+}
+
+/// "done" (or Start) on the keyboard: into the results, or try again after a failed search.
+fn search_done(s: &mut AppState, cmds: &mut Vec<Command>) {
+    let failed = s.search.feed.error.is_some() && !s.search.feed.loading;
+    if failed && SearchState::is_searchable(&s.search.asked) {
+        resend_search(s, cmds);
+    } else {
+        enter_results(s);
+    }
+}
+
+/// Moves focus from the keyboard to the first result row, if there is one.
+fn enter_results(s: &mut AppState) {
+    if s.search.feed.rows.is_empty() {
+        return;
+    }
+    s.search.in_results = true;
+    s.search.feed.focus_row(0, true);
+}
+
+/// The D-pad, A and X on a feed of cards (Home, Following, Browse, a category, Search results).
+fn feed_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
         Intent::Left => {
             let at_start = s.current_feed().is_none_or(|f| f.focus.col == 0);
@@ -553,6 +712,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.login_problem = None;
                 match s.after_login.take() {
                     Some(Screen::Following) => open_following(s, cmds),
+                    Some(Screen::Search) => open_root(s, Screen::Search, cmds),
                     _ => pop_screen(s),
                 }
             }
@@ -560,18 +720,45 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::SignedOut => {
             s.user = None;
             s.following = Feed::default();
+            // The results came from the account. The id carries on, so a late answer to an
+            // old search can never pass for a new one.
+            s.search = SearchState {
+                id: s.search.id,
+                ..SearchState::default()
+            };
             reload_home(s, cmds);
-            // Following only exists while signed in. Anything that would lead back there goes
-            // Home instead.
+            // Following and Search only exist while signed in. Anything that would lead back
+            // there goes Home instead.
             for screen in &mut s.back_stack {
-                if *screen == Screen::Following {
+                if screen.needs_account() {
                     *screen = Screen::Home;
                 }
             }
-            if s.screen == Screen::Following {
+            if s.screen.needs_account() {
                 s.screen = Screen::Home;
                 s.back_stack.clear();
                 s.rail.index = RailEntry::Home;
+            }
+        }
+        Event::SearchResults { id, rows } => {
+            if id == s.search.id && SearchState::is_searchable(&s.search.asked) {
+                let search = &mut s.search;
+                search.results_for = search.asked.clone();
+                // New results start at their first card.
+                search.feed = Feed {
+                    rows,
+                    ..Feed::default()
+                };
+                if search.in_results && search.feed.rows.is_empty() {
+                    search.in_results = false;
+                }
+                fetch_thumbnails(search.feed.rows.iter().flat_map(|r| &r.tiles), cmds);
+            }
+        }
+        Event::SearchFailed { id, message } => {
+            if id == s.search.id {
+                s.search.feed.loading = false;
+                s.search.feed.error = Some(message);
             }
         }
         Event::SleepTimerTick { id, left_min } => {
@@ -808,15 +995,16 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     start_playback(s, cmds);
 }
 
-/// Where a rail entry leads. Following while signed out goes to Login (and on to Following once
-/// the login succeeds). The account entry is Login while signed out and Settings, where the
-/// account can be managed, while signed in.
+/// Where a rail entry leads. Following and Search while signed out go to Login (and on to the
+/// screen once the login succeeds). The account entry is Login while signed out and Settings,
+/// where the account can be managed, while signed in.
 fn rail_target(s: &AppState, entry: RailEntry) -> Screen {
     match entry {
         RailEntry::Account if s.is_signed_in() => Screen::Settings,
         RailEntry::Account => Screen::Login,
-        RailEntry::Following if !s.is_signed_in() => Screen::Login,
+        RailEntry::Following | RailEntry::Search if !s.is_signed_in() => Screen::Login,
         RailEntry::Following => Screen::Following,
+        RailEntry::Search => Screen::Search,
         RailEntry::Browse => Screen::Browse,
         RailEntry::Settings => Screen::Settings,
         RailEntry::Home => Screen::Home,
@@ -834,22 +1022,31 @@ fn activate_rail(s: &mut AppState, entry: RailEntry, cmds: &mut Vec<Command>) {
     }
     if target == Screen::Login {
         // Login sits on top of the current screen, so Back returns there.
-        let then = (entry == RailEntry::Following).then_some(Screen::Following);
+        let then = match entry {
+            RailEntry::Following => Some(Screen::Following),
+            RailEntry::Search => Some(Screen::Search),
+            _ => None,
+        };
         open_login(s, then, cmds);
     } else if target == Screen::Following {
         open_following(s, cmds);
     } else {
-        // Root screens reset the back stack and drop any open category.
-        s.back_stack.clear();
-        s.category = None;
-        s.screen = target;
-        // The directory loads the first time it is opened. After that, Retry reloads it.
-        if target == Screen::Browse && s.browse.rows.is_empty() && !s.browse.loading {
-            s.browse = Feed::loading();
-            cmds.push(Command::LoadFeed {
-                feed: FeedId::Browse,
-            });
-        }
+        open_root(s, target, cmds);
+    }
+}
+
+/// Shows a root screen. Root screens reset the back stack and drop any open category. Search
+/// keeps its text and results from the last visit.
+fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
+    s.back_stack.clear();
+    s.category = None;
+    s.screen = target;
+    // The directory loads the first time it is opened. After that, Retry reloads it.
+    if target == Screen::Browse && s.browse.rows.is_empty() && !s.browse.loading {
+        s.browse = Feed::loading();
+        cmds.push(Command::LoadFeed {
+            feed: FeedId::Browse,
+        });
     }
 }
 

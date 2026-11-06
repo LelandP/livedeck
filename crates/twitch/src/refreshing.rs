@@ -9,7 +9,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::{
-    Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi,
+    UserInfo,
 };
 
 /// Renews the credentials of the inner API. The app's session implements it.
@@ -92,5 +93,25 @@ impl<A: TwitchApi, R: Refresher> TwitchApi for RefreshingApi<A, R> {
 
     async fn user(&self, login: Option<&str>) -> Result<Option<UserInfo>> {
         self.with_refresh(|| self.inner.user(login)).await
+    }
+
+    async fn search_channels(
+        &self,
+        query: &str,
+        live_only: bool,
+        page: PageRequest,
+    ) -> Result<Page<ChannelResult>> {
+        self.with_refresh(|| self.inner.search_channels(query, live_only, page.clone()))
+            .await
+    }
+
+    async fn search_categories(&self, query: &str, page: PageRequest) -> Result<Page<Game>> {
+        self.with_refresh(|| self.inner.search_categories(query, page.clone()))
+            .await
+    }
+
+    async fn streams_by_login(&self, logins: &[String]) -> Result<Vec<StreamInfo>> {
+        self.with_refresh(|| self.inner.streams_by_login(logins))
+            .await
     }
 }

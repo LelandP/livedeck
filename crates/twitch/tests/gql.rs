@@ -168,6 +168,21 @@ async fn user_lookup_and_anonymous_limits() {
     assert!(matches!(followed, Err(Error::NotSignedIn)));
 }
 
+#[tokio::test]
+async fn search_needs_a_sign_in_and_sends_nothing() {
+    let server = MockServer::start().await;
+    let api = client(&server);
+    let channels = api
+        .search_channels("x", false, PageRequest::default())
+        .await;
+    assert!(matches!(channels, Err(Error::NotSignedIn)));
+    let games = api.search_categories("x", PageRequest::default()).await;
+    assert!(matches!(games, Err(Error::NotSignedIn)));
+    let live = api.streams_by_login(&["x".into()]).await;
+    assert!(matches!(live, Err(Error::NotSignedIn)));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
 /// Hits the real gql.twitch.tv. Run by hand to detect schema / client-ID changes:
 /// `cargo test -p htpc-twitch-api --test gql -- --ignored live_`
 #[tokio::test]

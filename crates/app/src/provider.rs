@@ -2,6 +2,7 @@
 //! `Event`s. The real app uses `HelixClient` or the anonymous `GqlClient`. `--mock` uses `FakeApi`
 //! with fixture data, so all three go through the same mapping and the same `Event`s.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,7 +11,9 @@ use htpc_core::{
     Stream, Tile,
 };
 use htpc_storage::ImageCache;
-use htpc_twitch_api::{FollowedChannel, Game, Page, PageRequest, StreamInfo, TwitchApi};
+use htpc_twitch_api::{
+    ChannelResult, FollowedChannel, Game, Page, PageRequest, StreamInfo, TwitchApi,
+};
 use htpc_ui::Thumbnail;
 use tokio::sync::OnceCell;
 
@@ -112,6 +115,7 @@ impl<A: TwitchApi> ApiProvider<A> {
             FeedId::Following => self.load_following().await,
             FeedId::Browse => self.load_browse().await,
             FeedId::Category(game) => self.load_category(game).await,
+            FeedId::Search(text) => self.load_search(text).await,
         };
         match result {
             Ok(rows) => Event::FeedLoaded { feed, rows },
@@ -300,6 +304,98 @@ impl<A: TwitchApi> ApiProvider<A> {
         ))
     }
 
+    /// The search results for `text`, fetched concurrently: live channels (looked up again for
+    /// their viewer counts and previews, so they look like every other stream card), categories,
+    /// and the channels that are not live. Failed and empty rows are skipped. If every request
+    /// fails, the error text is returned instead.
+    async fn load_search(&self, text: &str) -> Result<Vec<Row>, String> {
+        let page = || PageRequest::first(HOME_PAGE_SIZE);
+        let bucket = refresh_bucket();
+        let (live, all, games) = tokio::join!(
+            async {
+                let found = self.api.search_channels(text, true, page()).await?;
+                let tiles = self.live_tiles(&found.items, bucket).await;
+                Ok::<_, htpc_twitch_api::Error>((tiles, paging_of(&found)))
+            },
+            self.api.search_channels(text, false, page()),
+            self.api.search_categories(text, page()),
+        );
+
+        let mut errors = Vec::new();
+        let mut note = |what: &str, err: &htpc_twitch_api::Error| {
+            tracing::warn!(what, %err, "search failed");
+            errors.push(err.to_string());
+        };
+        let mut rows = Vec::new();
+        let mut live_logins = HashSet::new();
+        match live {
+            Ok((tiles, paging)) => {
+                live_logins.extend(tiles.iter().map(|t| t.key().to_ascii_lowercase()));
+                if !tiles.is_empty() {
+                    rows.push(Row::new(RowKind::SearchLive, tiles).with_paging(paging));
+                }
+            }
+            Err(err) => note("live channels", &err),
+        }
+        match games {
+            Ok(found) => {
+                let tiles = category_tiles(&found);
+                if !tiles.is_empty() {
+                    rows.push(
+                        Row::new(RowKind::SearchCategories, tiles).with_paging(paging_of(&found)),
+                    );
+                }
+            }
+            Err(err) => note("categories", &err),
+        }
+        match all {
+            Ok(found) => {
+                let tiles: Vec<Tile> = offline_tiles(&found.items)
+                    .into_iter()
+                    .filter(|t| !live_logins.contains(&t.key().to_ascii_lowercase()))
+                    .collect();
+                if !tiles.is_empty() {
+                    rows.push(
+                        Row::new(RowKind::SearchOffline, tiles).with_paging(paging_of(&found)),
+                    );
+                }
+            }
+            Err(err) => note("channels", &err),
+        }
+        if rows.is_empty() && errors.len() == 3 {
+            Err(errors.join("; "))
+        } else {
+            Ok(rows)
+        }
+    }
+
+    /// Stream cards for live search results, in the search's order. Each is looked up in
+    /// `/streams` for its viewer count and preview. One that is not found there (it just went
+    /// offline, or the lookup failed) still gets a card from what the search said.
+    async fn live_tiles(&self, found: &[ChannelResult], bucket: u64) -> Vec<Tile> {
+        let live: Vec<&ChannelResult> = found.iter().filter(|c| c.is_live).collect();
+        if live.is_empty() {
+            return Vec::new();
+        }
+        let logins: Vec<String> = live.iter().map(|c| c.broadcaster_login.clone()).collect();
+        let streams = self
+            .api
+            .streams_by_login(&logins)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(%err, "could not look up the live search results");
+                Vec::new()
+            });
+        live.iter()
+            .map(|c| {
+                streams
+                    .iter()
+                    .find(|s| s.user_login.eq_ignore_ascii_case(&c.broadcaster_login))
+                    .map_or_else(|| channel_stream(c), |s| stream(s, bucket))
+            })
+            .collect()
+    }
+
     /// One more page of a row. `IntegrityRequired` is the anonymous GQL API's answer to every
     /// page after the first, so it ends the row instead of failing it.
     async fn load_more(&self, feed: FeedId, kind: RowKind, cursor: String) -> Event {
@@ -334,6 +430,23 @@ impl<A: TwitchApi> ApiProvider<A> {
                 .streams_by_category(game, req)
                 .await
                 .map(|p| (stream_tiles(&p, bucket), p.cursor)),
+            (FeedId::Search(text), RowKind::SearchLive) => {
+                match self.api.search_channels(text, true, req).await {
+                    Ok(p) => Ok((self.live_tiles(&p.items, bucket).await, p.cursor)),
+                    Err(err) => Err(err),
+                }
+            }
+            (FeedId::Search(text), RowKind::SearchCategories) => self
+                .api
+                .search_categories(text, req)
+                .await
+                .map(|p| (category_tiles(&p), p.cursor)),
+            // The reducer drops a channel already shown (it went live meanwhile, or repeats).
+            (FeedId::Search(text), RowKind::SearchOffline) => self
+                .api
+                .search_channels(text, false, req)
+                .await
+                .map(|p| (offline_tiles(&p.items), p.cursor)),
             // The hero never pages, and Following is loaded whole (see `load_following`).
             _ => Ok((Vec::new(), None)),
         };
@@ -363,6 +476,16 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             Command::LoadFeed { feed } => vec![self.load_feed(feed).await],
             Command::LoadMore { feed, kind, cursor } => {
                 vec![self.load_more(feed, kind, cursor).await]
+            }
+            // Waiting for typing to pause is `search.rs`'s job. This runs the search itself.
+            Command::Search { id, query } => {
+                if !htpc_core::SearchState::is_searchable(&query) {
+                    return Vec::new();
+                }
+                match self.load_search(&query).await {
+                    Ok(rows) => vec![Event::SearchResults { id, rows }],
+                    Err(message) => vec![Event::SearchFailed { id, message }],
+                }
             }
             // Playback commands run in `playback.rs`, chat in `chat.rs`, the login ones in
             // `session.rs`, the sleep timer in `sleep.rs`, and thumbnails and chat images are
@@ -447,6 +570,34 @@ fn stream(s: &StreamInfo, bucket: u64) -> Tile {
         // The bucket makes the cache fetch a fresh preview every `PREVIEW_REFRESH_SECS`.
         thumbnail: sized_url(&s.thumbnail_url, PREVIEW_SIZE).map(|u| format!("{u}?t={bucket}")),
     })
+}
+
+/// A live search result that `/streams` did not know: a card from what the search said, without
+/// viewers or a preview.
+fn channel_stream(c: &ChannelResult) -> Tile {
+    Tile::Stream(Stream {
+        channel: c.broadcaster_login.clone(),
+        title: c.title.clone(),
+        category: c.game_name.clone(),
+        viewers: 0,
+        tint: tint_for(&c.broadcaster_login),
+        thumbnail: None,
+    })
+}
+
+/// The search results that are not live, as dimmed channel cards.
+fn offline_tiles(found: &[ChannelResult]) -> Vec<Tile> {
+    found
+        .iter()
+        .filter(|c| !c.is_live)
+        .map(|c| {
+            Tile::Channel(Channel {
+                channel: c.broadcaster_login.clone(),
+                name: c.display_name.clone(),
+                tint: tint_for(&c.broadcaster_login),
+            })
+        })
+        .collect()
 }
 
 /// A followed channel that is not live.
@@ -984,6 +1135,135 @@ mod tests {
             } => assert!(message.contains("not signed in"), "{message}"),
             other => panic!("expected FeedFailed, got {other:?}"),
         }
+    }
+
+    // ---- search ------------------------------------------------------------------------
+
+    async fn search(provider: &ApiProvider<impl TwitchApi>, text: &str) -> Vec<Event> {
+        let cmd = Command::Search {
+            id: 7,
+            query: text.into(),
+        };
+        provider.execute(cmd).await
+    }
+
+    fn search_rows(events: Vec<Event>) -> Vec<Row> {
+        match &events[..] {
+            [Event::SearchResults { id: 7, rows }] => rows.clone(),
+            other => panic!("expected search results, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_search_splits_live_categories_and_offline() {
+        let mut api = fake_api();
+        api.follows = follows(&["marrow", "marrowfan_tv"]);
+        let provider = ApiProvider::new(api);
+        let rows = search_rows(search(&provider, "MARROW").await);
+        assert_eq!(kinds(&rows), [RowKind::SearchLive, RowKind::SearchOffline]);
+        // The live one is a full stream card (from `/streams`), and is not repeated as offline.
+        let Tile::Stream(live) = &rows[0].tiles[0] else {
+            panic!("a stream card expected")
+        };
+        assert_eq!((live.channel.as_str(), live.viewers), ("marrow", 1_900));
+        let off: Vec<_> = rows[1].tiles.iter().map(channel_of).collect();
+        assert_eq!(off, ["marrowfan_tv"]);
+        assert!(matches!(rows[1].tiles[0], Tile::Channel(_)));
+
+        let rows = search_rows(search(&provider, "music").await);
+        assert_eq!(kinds(&rows), [RowKind::SearchCategories]);
+        assert!(search_rows(search(&provider, "zzzz").await).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_short_search_asks_nothing() {
+        let provider = ApiProvider::new(fake_api());
+        assert!(search(&provider, " a ").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn signed_out_search_fails_with_the_reason() {
+        let server = MockServer::start().await;
+        let provider = ApiProvider::new(gql(&server));
+        match &search(&provider, "abc").await[..] {
+            [Event::SearchFailed { id: 7, message }] => {
+                assert!(message.contains("not signed in"), "{message}")
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn helix_search_enriches_live_results_and_keeps_the_ones_it_cannot_find() {
+        let server = MockServer::start().await;
+        let channel = |login: &str, live: bool| {
+            serde_json::json!({ "broadcaster_login": login, "display_name": login.to_uppercase(),
+                "id": format!("id-{login}"), "is_live": live, "game_name": "Chess",
+                "title": format!("{login} title"), "thumbnail_url": "" })
+        };
+        Mock::given(path("/search/channels"))
+            .and(query_param("live_only", "true"))
+            .respond_with(json(serde_json::json!({
+                "data": [channel("found", true), channel("gone", true)],
+                "pagination": { "cursor": "next" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(path("/search/channels"))
+            .and(query_param("live_only", "false"))
+            .respond_with(json(serde_json::json!({
+                "data": [channel("found", true), channel("sleeper", false)],
+                "pagination": {}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(path("/search/categories"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        Mock::given(path("/streams"))
+            .and(query_param("user_login", "found"))
+            .respond_with(json(serde_json::json!({ "data": [
+                { "user_id": "1", "user_login": "found", "user_name": "Found",
+                  "game_name": "Chess", "title": "live now", "viewer_count": 321,
+                  "thumbnail_url": "https://cdn/found-{width}x{height}.jpg" }
+            ]})))
+            .mount(&server)
+            .await;
+
+        let provider = ApiProvider::new(helix(&server));
+        let rows = search_rows(search(&provider, "fo").await);
+        // The failed categories row is left out.
+        assert_eq!(kinds(&rows), [RowKind::SearchLive, RowKind::SearchOffline]);
+        assert_eq!(rows[0].paging, Paging::More("next".into()));
+        let cards: Vec<_> = rows[0]
+            .tiles
+            .iter()
+            .map(|t| match t {
+                Tile::Stream(s) => (s.channel.as_str(), s.viewers, s.thumbnail.is_some()),
+                other => panic!("stream expected, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(cards, [("found", 321, true), ("gone", 0, false)]);
+        assert_eq!(channel_of(&rows[1].tiles[0]), "sleeper");
+
+        // The next page of the live row goes to the same text, with the cursor.
+        let event = provider
+            .load_more(
+                FeedId::Search("fo".into()),
+                RowKind::SearchLive,
+                "next".into(),
+            )
+            .await;
+        let Event::MoreLoaded {
+            outcome: PageOutcome::Page { tiles, .. },
+            ..
+        } = event
+        else {
+            panic!("a page was expected, got {event:?}");
+        };
+        assert_eq!(tiles.len(), 2);
     }
 
     #[tokio::test]

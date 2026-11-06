@@ -97,6 +97,12 @@ pub enum RowKind {
     Categories,
     /// The live streams of one category (the Category screen).
     CategoryStreams,
+    /// Search: live channels whose name matches.
+    SearchLive,
+    /// Search: categories whose name matches.
+    SearchCategories,
+    /// Search: channels whose name matches that are not live, dimmed.
+    SearchOffline,
 }
 
 /// How a row continues past the tiles it already has.
@@ -171,12 +177,14 @@ pub enum FeedId {
     Browse,
     /// The streams of the category with this Twitch game id (a grid).
     Category(String),
+    /// The results for this search text (horizontal rows: live, categories, offline).
+    Search(String),
 }
 
 impl FeedId {
     /// Grid feeds scroll vertically through rows of [`grid_cols`] and page on their last row.
     pub fn is_grid(&self) -> bool {
-        !matches!(self, FeedId::Home | FeedId::Following)
+        !matches!(self, FeedId::Home | FeedId::Following | FeedId::Search(_))
     }
 }
 

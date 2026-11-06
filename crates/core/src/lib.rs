@@ -6,6 +6,7 @@
 
 pub mod chat;
 pub mod domain;
+pub mod keyboard;
 pub mod msg;
 pub mod reduce;
 pub mod settings;
@@ -17,10 +18,12 @@ pub use domain::{
     DeviceCode, FeedId, LoginProblem, Moderation, Paging, PlayerStats, Rgb, Row, RowKind, Stream,
     Tile, User,
 };
+pub use keyboard::{Key, KeySlot, KeyboardState};
 pub use msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption, StreamKind};
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
 pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{
     subscribe_url, AppState, CategoryFeed, Feed, Focus, Playback, PlayerMenuRow, RailEntry,
-    RailState, Screen, SessionOptions, SettingsRow, SleepTimer, SLEEP_STEPS,
+    RailState, Screen, SearchState, SessionOptions, SettingsRow, SleepTimer, SEARCH_MIN_CHARS,
+    SLEEP_STEPS,
 };

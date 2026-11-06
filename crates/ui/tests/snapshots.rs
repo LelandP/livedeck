@@ -399,6 +399,99 @@ fn sleep_timer_countdown_and_warning() {
     insta::assert_snapshot!(out);
 }
 
+fn search_lines(vm: &ViewModel) -> String {
+    let mut out = format!(
+        "query={:?} key={} on_keys={} in_results={} select={:?} retry={} status={:?}\n",
+        vm.search_query,
+        vm.search_key_focus,
+        vm.search_on_keys,
+        vm.search_in_results,
+        vm.select_label,
+        vm.can_retry,
+        vm.search_status
+    );
+    out += &render(vm);
+    out
+}
+
+#[test]
+fn search_empty_typing_and_results() {
+    let user = htpc_core::User {
+        login: "nightowl_dev".into(),
+    };
+    let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let s = send(&s, &[Intent::RailPick(RailEntry::Search)]);
+    let mut out = String::from("-- empty\n");
+    out += &search_lines(&view_model(&s));
+
+    // `l`, `o` typed on the keyboard (down a row, right to `o`), then waiting for the answer.
+    let s = send(
+        &s,
+        &[
+            Intent::Down,
+            Intent::Right,
+            Intent::Select,
+            Intent::Right,
+            Intent::Right,
+            Intent::Right,
+            Intent::Select,
+        ],
+    );
+    out += "-- typing\n";
+    out += &search_lines(&view_model(&s));
+
+    let id = s.search.id;
+    let rows = vec![
+        Row::new(
+            RowKind::SearchLive,
+            vec![
+                stream("lofi_lena", 860, true),
+                stream("lorekeeper", 42, false),
+            ],
+        ),
+        Row::new(RowKind::SearchCategories, vec![category("27471", "Lords")]),
+        Row::new(
+            RowKind::SearchOffline,
+            vec![Tile::Channel(htpc_core::Channel {
+                channel: "lonely_owl".into(),
+                name: "Lonely_Owl".into(),
+                tint: Rgb::from_hex(0x2d4a6b),
+            })],
+        ),
+    ];
+    let s = reduce(&s, Event::SearchResults { id, rows }).0;
+    out += "-- results, keyboard focused\n";
+    out += &search_lines(&view_model(&s));
+    let s = send(&s, &[Intent::Menu, Intent::Down]);
+    out += "-- results focused\n";
+    out += &search_lines(&view_model(&s));
+
+    // Nothing found, and a failed search.
+    let s = send(&s, &[Intent::Back, Intent::Text('x')]);
+    let id = s.search.id;
+    let none = reduce(
+        &s,
+        Event::SearchResults {
+            id,
+            rows: Vec::new(),
+        },
+    )
+    .0;
+    out += "-- nothing found\n";
+    out += &search_lines(&view_model(&none));
+    let failed = reduce(
+        &s,
+        Event::SearchFailed {
+            id,
+            message: "network error: timed out".into(),
+        },
+    )
+    .0;
+    out += "-- failed\n";
+    out += &search_lines(&view_model(&failed));
+    insta::assert_snapshot!(out);
+}
+
 fn chat_lines(vm: &ViewModel) -> String {
     let mut out = format!(
         "open={} overlay={} status={:?}\n",

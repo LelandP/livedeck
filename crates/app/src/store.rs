@@ -21,6 +21,7 @@ use crate::awake::KeepAwake;
 use crate::chat::Chat;
 use crate::playback::Playback;
 use crate::provider::Provider;
+use crate::search::Searcher;
 use crate::session::Session;
 use crate::sleep::Sleep;
 
@@ -106,6 +107,8 @@ pub struct Store<P, R, S> {
     chat_images: HashSet<String>,
     /// Runs the login and sign-out commands.
     session: Arc<Session>,
+    /// Runs searches once typing pauses.
+    searcher: Searcher,
     sink: S,
     tx: UnboundedSender<Msg>,
     downloads: Arc<Semaphore>,
@@ -135,6 +138,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             chat,
             chat_images: HashSet::new(),
             session,
+            searcher: Searcher::default(),
             sink,
             tx,
             downloads: Arc::new(Semaphore::new(THUMBNAIL_CONCURRENCY)),
@@ -265,6 +269,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 if !fresh.is_empty() {
                     self.spawn_images(fresh, S::chat_image);
                 }
+                continue;
+            }
+            if Searcher::handles(&cmd) {
+                self.searcher
+                    .run(Arc::clone(&self.provider), self.tx.clone(), cmd);
                 continue;
             }
             if Sleep::handles(&cmd) {

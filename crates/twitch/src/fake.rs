@@ -4,7 +4,8 @@
 //! string, and the last page has no cursor.
 
 use crate::{
-    Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi,
+    UserInfo,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -107,6 +108,87 @@ impl TwitchApi for FakeApi {
                 .cloned()),
         }
     }
+
+    /// Matches the live streams (`top`, `followed`) and the followed channels by name. Case,
+    /// spaces and punctuation are ignored, as Twitch does.
+    async fn search_channels(
+        &self,
+        query: &str,
+        live_only: bool,
+        page: PageRequest,
+    ) -> Result<Page<ChannelResult>> {
+        let mut seen = std::collections::HashSet::new();
+        let live = self
+            .live()
+            .filter(|s| matches(query, &s.user_login, &s.user_name));
+        let mut found: Vec<ChannelResult> = live
+            .map(|s| ChannelResult {
+                id: s.user_id.clone(),
+                broadcaster_login: s.user_login.clone(),
+                display_name: s.user_name.clone(),
+                game_name: s.game_name.clone(),
+                is_live: true,
+                title: s.title.clone(),
+                thumbnail_url: String::new(),
+            })
+            .filter(|c| seen.insert(c.broadcaster_login.to_ascii_lowercase()))
+            .collect();
+        if !live_only {
+            let offline = self
+                .follows
+                .iter()
+                .filter(|c| matches(query, &c.broadcaster_login, &c.broadcaster_name))
+                .map(|c| ChannelResult {
+                    id: c.broadcaster_id.clone(),
+                    broadcaster_login: c.broadcaster_login.clone(),
+                    display_name: c.broadcaster_name.clone(),
+                    game_name: String::new(),
+                    is_live: false,
+                    title: String::new(),
+                    thumbnail_url: String::new(),
+                })
+                .filter(|c| seen.insert(c.broadcaster_login.to_ascii_lowercase()));
+            found.extend(offline.collect::<Vec<_>>());
+        }
+        page_of(&found, &page)
+    }
+
+    async fn search_categories(&self, query: &str, page: PageRequest) -> Result<Page<Game>> {
+        let found: Vec<Game> = self
+            .games
+            .iter()
+            .filter(|g| matches(query, &g.name, &g.name))
+            .cloned()
+            .collect();
+        page_of(&found, &page)
+    }
+
+    async fn streams_by_login(&self, logins: &[String]) -> Result<Vec<StreamInfo>> {
+        Ok(self
+            .live()
+            .filter(|s| logins.iter().any(|l| l.eq_ignore_ascii_case(&s.user_login)))
+            .cloned()
+            .collect())
+    }
+}
+
+impl FakeApi {
+    /// Every live stream the fake knows, Top Live first.
+    fn live(&self) -> impl Iterator<Item = &StreamInfo> {
+        self.top.iter().chain(&self.followed)
+    }
+}
+
+/// True if `query` is part of `login` or `name`, comparing letters and digits only.
+fn matches(query: &str, login: &str, name: &str) -> bool {
+    let fold = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let q = fold(query);
+    !q.is_empty() && (fold(login).contains(&q) || fold(name).contains(&q))
 }
 
 #[cfg(test)]
@@ -162,5 +244,58 @@ mod tests {
             .unwrap();
         let logins: Vec<_> = page.items.iter().map(|s| s.user_login.as_str()).collect();
         assert_eq!(logins, ["a", "c"]);
+    }
+
+    #[tokio::test]
+    async fn search_matches_names_loosely_and_splits_live_from_offline() {
+        let api = FakeApi {
+            top: vec![stream("counter_strike_fan", "1"), stream("other", "1")],
+            follows: vec![
+                FollowedChannel {
+                    broadcaster_id: "9".into(),
+                    broadcaster_login: "strikeout".into(),
+                    broadcaster_name: "StrikeOut".into(),
+                },
+                // Live too: listed once, as live.
+                FollowedChannel {
+                    broadcaster_id: "1".into(),
+                    broadcaster_login: "counter_strike_fan".into(),
+                    broadcaster_name: "counter_strike_fan".into(),
+                },
+            ],
+            games: vec![Game {
+                id: "32399".into(),
+                name: "Counter-Strike".into(),
+                box_art_url: String::new(),
+            }],
+            ..FakeApi::new()
+        };
+        let all = api
+            .search_channels("STRIKE", false, PageRequest::default())
+            .await
+            .unwrap();
+        let found: Vec<_> = all
+            .items
+            .iter()
+            .map(|c| (c.broadcaster_login.as_str(), c.is_live))
+            .collect();
+        assert_eq!(found, [("counter_strike_fan", true), ("strikeout", false)]);
+        let live = api
+            .search_channels("strike", true, PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(live.items.len(), 1);
+
+        let games = api
+            .search_categories("counter strike", PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(games.items[0].id, "32399");
+
+        let streams = api
+            .streams_by_login(&["Counter_Strike_Fan".into(), "nobody".into()])
+            .await
+            .unwrap();
+        assert_eq!(streams.len(), 1);
     }
 }

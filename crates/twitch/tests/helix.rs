@@ -184,6 +184,89 @@ async fn user_by_login_and_token_owner() {
 }
 
 #[tokio::test]
+async fn search_channels_sends_the_query_and_parses() {
+    let server = MockServer::start().await;
+    Mock::given(path("/search/channels"))
+        .and(query_param("query", "loserfruit"))
+        .and(query_param("live_only", "true"))
+        .and(query_param("first", "20"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [
+                { "broadcaster_language": "en", "broadcaster_login": "loserfruit",
+                  "display_name": "Loserfruit", "game_id": "498000", "game_name": "House Flipper",
+                  "id": "41245072", "is_live": true, "tags": [],
+                  "thumbnail_url": "https://cdn/fruit-profile_image-300x300.png",
+                  "title": "loserfruit", "started_at": "2026-11-05T19:00:00Z" }
+            ],
+            "pagination": { "cursor": "Mg==" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = client(&server)
+        .search_channels("loserfruit", true, PageRequest::first(20))
+        .await
+        .unwrap();
+    let c = &page.items[0];
+    assert_eq!(
+        (c.broadcaster_login.as_str(), c.display_name.as_str()),
+        ("loserfruit", "Loserfruit")
+    );
+    assert!(c.is_live);
+    assert_eq!(c.game_name, "House Flipper");
+    assert_eq!(page.cursor.as_deref(), Some("Mg=="));
+}
+
+#[tokio::test]
+async fn search_categories_turns_the_box_art_into_a_template() {
+    let server = MockServer::start().await;
+    Mock::given(path("/search/categories"))
+        .and(query_param("query", "fort"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [
+                { "id": "33214", "name": "Fortnite",
+                  "box_art_url": "https://static-cdn.jtvnw.net/ttv-boxart/33214-52x72.jpg" }
+            ],
+            "pagination": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = client(&server)
+        .search_categories("fort", PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(page.items[0].name, "Fortnite");
+    assert_eq!(
+        page.items[0].box_art_url,
+        "https://static-cdn.jtvnw.net/ttv-boxart/33214-{width}x{height}.jpg"
+    );
+    assert_eq!(page.cursor, None);
+}
+
+#[tokio::test]
+async fn streams_by_login_asks_for_every_login_in_one_request() {
+    let server = MockServer::start().await;
+    Mock::given(path("/streams"))
+        .and(query_param("user_login", "brickby"))
+        .and(query_param("user_login", "tidewatch"))
+        .respond_with(ok("streams_page2.json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let api = client(&server);
+    let streams = api
+        .streams_by_login(&["tidewatch".into(), "brickby".into()])
+        .await
+        .unwrap();
+    assert_eq!(streams[0].user_login, "brickby");
+    // Nobody to look up: no request at all (`expect(1)` above).
+    assert!(api.streams_by_login(&[]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn followed_channels_passes_user_id_and_pages() {
     let server = MockServer::start().await;
     Mock::given(path("/channels/followed"))

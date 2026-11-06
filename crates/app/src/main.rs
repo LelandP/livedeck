@@ -15,6 +15,7 @@ mod mock;
 mod playback;
 mod power;
 mod provider;
+mod search;
 mod session;
 mod sleep;
 mod store;

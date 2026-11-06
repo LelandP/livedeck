@@ -488,6 +488,23 @@ impl TwitchApi for Flaky {
     async fn user(&self, _: Option<&str>) -> ApiResult<Option<UserInfo>> {
         unreachable!()
     }
+
+    async fn search_channels(
+        &self,
+        _: &str,
+        _: bool,
+        _: PageRequest,
+    ) -> ApiResult<Page<htpc_twitch_api::ChannelResult>> {
+        unreachable!()
+    }
+
+    async fn search_categories(&self, _: &str, _: PageRequest) -> ApiResult<Page<Game>> {
+        unreachable!()
+    }
+
+    async fn streams_by_login(&self, _: &[String]) -> ApiResult<Vec<StreamInfo>> {
+        unreachable!()
+    }
 }
 
 /// Signed in with a token the server will refuse, and a refresh token to repair it with.

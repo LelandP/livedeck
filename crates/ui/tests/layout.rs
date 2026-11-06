@@ -407,6 +407,64 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the hints bar hides during the sleep warning"
     );
 
+    // Search: the keyboard lays out under the text field with its focused key (`Theme.accent`, a
+    // strong violet) top left, and the first result row is fully in view under it. With the
+    // results focused, the keyboard slides away and the rows move up.
+    let user = htpc_core::User { login: "me".into() };
+    let (signed_in, _) = reduce(&init().0, Event::SignedIn(user));
+    let (search, _) = reduce(&signed_in, Intent::RailPick(htpc_core::RailEntry::Search));
+    let (search, _) = reduce(&search, Intent::Text('a'));
+    let (search, _) = reduce(&search, Intent::Text('b'));
+    let rows = vec![Row::new(
+        RowKind::SearchLive,
+        (0..4)
+            .map(|i| {
+                Tile::Stream(Stream {
+                    channel: format!("c{i}"),
+                    title: "t".into(),
+                    category: "cat".into(),
+                    viewers: 5,
+                    // Pure green, which nothing else on this screen uses.
+                    tint: Rgb::new(0, 255, 0),
+                    thumbnail: None,
+                })
+            })
+            .collect(),
+    )];
+    let id = search.search.id;
+    let (search, _) = reduce(&search, Event::SearchResults { id, rows });
+    Update::full(view_model(&search)).apply(&ui);
+    let image = render(&ui);
+    let key_focus = |p: &Rgba8Pixel| p.r > 100 && p.r < 170 && p.g < 120 && p.b > 220;
+    assert!(
+        count(&image, 96..220, 100..170, key_focus) > 500,
+        "the focused key is not drawn under the text field"
+    );
+    // Cards are dimmed while the keyboard has focus, so the green is darker.
+    let green = |p: &Rgba8Pixel| {
+        let (r, g, b) = (u16::from(p.r), u16::from(p.g), u16::from(p.b));
+        g > 80 && g > 3 * r && g > 3 * b
+    };
+    let green_cards = count(&image, 96..WIDTH, 420..HINTS_TOP, green);
+    assert!(
+        green_cards > 0,
+        "the first result row is not under the keyboard"
+    );
+    let (in_results, _) = reduce(&search, Intent::Menu);
+    assert!(in_results.search.in_results);
+    Update::full(view_model(&in_results)).apply(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    assert_eq!(
+        count(&image, 96..900, 100..400, key_focus),
+        0,
+        "the keyboard stays in view with the results focused"
+    );
+    assert!(
+        count(&image, 96..WIDTH, 0..400, green) > 0,
+        "the result row does not move up"
+    );
+
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
     // element that has a size but no position, which once put the heading strip mid-screen.
     let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));

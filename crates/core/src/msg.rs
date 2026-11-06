@@ -31,6 +31,11 @@ pub enum Intent {
     },
     /// Mouse fallback: a rail entry was clicked.
     RailPick(RailEntry),
+    /// A character typed on a physical keyboard. Search types it. Elsewhere `y` and `r` are the
+    /// chat and retry shortcuts and everything else is ignored (the reducer decides).
+    Text(char),
+    /// Backspace on a physical keyboard: deletes a character on Search, Back everywhere else.
+    Erase,
 }
 
 /// Side effects requested by the reducer. The app runs them off the UI thread.
@@ -97,6 +102,11 @@ pub enum Command {
     /// Open this web page in the system browser. Only sent where `AppState::can_open_browser`
     /// is set. There is no `Event`: failure is only logged.
     OpenUrl(String),
+    /// The search text changed: look for channels and categories matching `query` (already
+    /// trimmed). Sent on every change. The app waits for typing to pause and drops a search a
+    /// newer one replaced, and a `query` shorter than `SEARCH_MIN_CHARS` only cancels. Answered
+    /// with `Event::SearchResults` or `Event::SearchFailed` carrying `id`.
+    Search { id: u32, query: String },
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }
@@ -205,6 +215,16 @@ pub enum Event {
     /// The sleep timer `id` ran out (the sound has already faded).
     SleepTimerFired {
         id: u32,
+    },
+    /// The rows for search `id`. Ignored unless it is the latest search.
+    SearchResults {
+        id: u32,
+        rows: Vec<Row>,
+    },
+    /// Search `id` failed completely. Ignored unless it is the latest search.
+    SearchFailed {
+        id: u32,
+        message: String,
     },
 }
 

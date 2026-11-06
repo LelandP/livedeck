@@ -19,8 +19,8 @@ use serde_json::{json, Value};
 
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
-    Error, FollowedChannel, Game, Page, PageRequest, RateLimiter, Result, RetryPolicy, StreamInfo,
-    TwitchApi, UserInfo,
+    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, RateLimiter, Result,
+    RetryPolicy, StreamInfo, TwitchApi, UserInfo,
 };
 
 pub const GQL_URL: &str = "https://gql.twitch.tv/gql";
@@ -364,6 +364,27 @@ impl TwitchApi for GqlClient {
         let login = login.ok_or(Error::NotSignedIn)?;
         let data = self.query(USER_QUERY, json!({ "login": login })).await?;
         Ok(at::<UserNode>(&data, &["user"])?.map(UserInfo::from))
+    }
+
+    /// Search needs a sign-in in this app (Helix's `/search`), so the website's unofficial
+    /// `searchFor` query is never used.
+    async fn search_channels(
+        &self,
+        _query: &str,
+        _live_only: bool,
+        _page: PageRequest,
+    ) -> Result<Page<ChannelResult>> {
+        Err(Error::NotSignedIn)
+    }
+
+    /// See [`GqlClient::search_channels`].
+    async fn search_categories(&self, _query: &str, _page: PageRequest) -> Result<Page<Game>> {
+        Err(Error::NotSignedIn)
+    }
+
+    /// Only search uses it, and search needs a sign-in.
+    async fn streams_by_login(&self, _logins: &[String]) -> Result<Vec<StreamInfo>> {
+        Err(Error::NotSignedIn)
     }
 }
 

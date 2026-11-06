@@ -70,7 +70,8 @@ export component Rail inherits Rectangle {
 
         NavEntry {
             label: root.user-name == "" ? "Sign in" : root.user-name;
-            kind: 4;
+            // The account icon comes after the nav entries' (icons.slint).
+            kind: root.items.length;
             current: false;
             expanded: root.expanded;
             focused: root.expanded && root.selected == root.items.length;

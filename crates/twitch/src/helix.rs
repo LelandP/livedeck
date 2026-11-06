@@ -8,8 +8,8 @@ use serde::Deserialize;
 
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
-    Error, FollowedChannel, Game, Page, PageRequest, RateLimiter, Result, RetryPolicy, StreamInfo,
-    TwitchApi, UserInfo,
+    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, RateLimiter, Result,
+    RetryPolicy, StreamInfo, TwitchApi, UserInfo, MAX_LOGINS, MAX_PAGE_SIZE,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.twitch.tv/helix";
@@ -200,11 +200,85 @@ impl TwitchApi for HelixClient {
         let env = self.get::<UserInfo>("/users", &query).await?;
         Ok(env.data.into_iter().next())
     }
+
+    async fn search_channels(
+        &self,
+        query: &str,
+        live_only: bool,
+        page: PageRequest,
+    ) -> Result<Page<ChannelResult>> {
+        let params = vec![
+            ("query", query.to_owned()),
+            ("live_only", live_only.to_string()),
+        ];
+        self.get_page("/search/channels", params, &page).await
+    }
+
+    async fn search_categories(&self, query: &str, page: PageRequest) -> Result<Page<Game>> {
+        let params = vec![("query", query.to_owned())];
+        let mut found: Page<Game> = self.get_page("/search/categories", params, &page).await?;
+        // Unlike `/games/top`, search hands out box art at a fixed small size.
+        for game in &mut found.items {
+            game.box_art_url = box_art_template(&game.box_art_url);
+        }
+        Ok(found)
+    }
+
+    async fn streams_by_login(&self, logins: &[String]) -> Result<Vec<StreamInfo>> {
+        if logins.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut query: Vec<(&str, String)> = logins
+            .iter()
+            .take(MAX_LOGINS)
+            .map(|l| ("user_login", l.clone()))
+            .collect();
+        query.push(("first", MAX_PAGE_SIZE.to_string()));
+        Ok(self.get::<StreamInfo>("/streams", &query).await?.data)
+    }
+}
+
+/// Turns a sized box-art URL (`.../33214-52x72.jpg`) back into a `{width}x{height}` template, so
+/// search results can be sized like the directory's. Anything else passes through.
+fn box_art_template(url: &str) -> String {
+    let Some((stem, ext)) = url.rsplit_once('.') else {
+        return url.to_owned();
+    };
+    let Some((base, size)) = stem.rsplit_once('-') else {
+        return url.to_owned();
+    };
+    let sized = size.split_once('x').is_some_and(|(w, h)| {
+        !w.is_empty()
+            && !h.is_empty()
+            && w.bytes().all(|b| b.is_ascii_digit())
+            && h.bytes().all(|b| b.is_ascii_digit())
+    });
+    if sized && !ext.contains('/') {
+        format!("{base}-{{width}}x{{height}}.{ext}")
+    } else {
+        url.to_owned()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_box_art_becomes_a_template() {
+        assert_eq!(
+            box_art_template("https://cdn/ttv-boxart/33214-52x72.jpg"),
+            "https://cdn/ttv-boxart/33214-{width}x{height}.jpg"
+        );
+        // Already a template, or no size in it: unchanged.
+        let t = "https://cdn/ttv-boxart/1-{width}x{height}.jpg";
+        assert_eq!(box_art_template(t), t);
+        assert_eq!(
+            box_art_template("https://cdn/art.jpg"),
+            "https://cdn/art.jpg"
+        );
+        assert_eq!(box_art_template(""), "");
+    }
 
     #[test]
     fn credentials_debug_hides_the_token() {

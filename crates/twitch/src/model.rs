@@ -83,6 +83,25 @@ pub struct FollowedChannel {
     pub broadcaster_name: String,
 }
 
+/// A channel found by name (`GET /search/channels`), live or not. It has no viewer count or
+/// stream preview: the app looks the live ones up with [`crate::TwitchApi::streams_by_login`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ChannelResult {
+    pub id: String,
+    pub broadcaster_login: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub game_name: String,
+    #[serde(default)]
+    pub is_live: bool,
+    /// The stream title, or the last one while offline.
+    #[serde(default)]
+    pub title: String,
+    /// The profile image (a full URL, not a template).
+    #[serde(default)]
+    pub thumbnail_url: String,
+}
+
 /// A Twitch user (`GET /users`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UserInfo {

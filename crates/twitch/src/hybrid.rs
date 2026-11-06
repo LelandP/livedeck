@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use crate::{
-    Credentials, FollowedChannel, Game, GqlClient, HelixClient, Page, PageRequest, Result,
-    StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, Credentials, FollowedChannel, Game, GqlClient, HelixClient, Page, PageRequest,
+    Result, StreamInfo, TwitchApi, UserInfo,
 };
 
 #[derive(Debug)]
@@ -96,6 +96,38 @@ impl TwitchApi for HybridApi {
             self.parts.helix.user(login).await
         } else {
             self.parts.gql.user(login).await
+        }
+    }
+
+    async fn search_channels(
+        &self,
+        query: &str,
+        live_only: bool,
+        page: PageRequest,
+    ) -> Result<Page<ChannelResult>> {
+        if self.is_signed_in() {
+            self.parts
+                .helix
+                .search_channels(query, live_only, page)
+                .await
+        } else {
+            self.parts.gql.search_channels(query, live_only, page).await
+        }
+    }
+
+    async fn search_categories(&self, query: &str, page: PageRequest) -> Result<Page<Game>> {
+        if self.is_signed_in() {
+            self.parts.helix.search_categories(query, page).await
+        } else {
+            self.parts.gql.search_categories(query, page).await
+        }
+    }
+
+    async fn streams_by_login(&self, logins: &[String]) -> Result<Vec<StreamInfo>> {
+        if self.is_signed_in() {
+            self.parts.helix.streams_by_login(logins).await
+        } else {
+            self.parts.gql.streams_by_login(logins).await
         }
     }
 }
