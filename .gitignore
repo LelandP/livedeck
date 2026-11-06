@@ -2,3 +2,5 @@
 # Release packaging output and downloaded dependencies (packaging/windows, release.yml)
 /dist
 /deps
+# Local planning notes, not committed
+/plan
