@@ -37,8 +37,10 @@ export component GridContent inherits Rectangle {
         }
     }
 
-    // The heading sits on a solid strip so rows scrolling up pass underneath it.
+    // The heading sits on a solid strip so rows scrolling up pass underneath it. `y` is needed:
+    // Slint centres an element that has a height but no position, which put the strip mid-screen.
     Rectangle {
+        y: 0px;
         height: Theme.grid-top - 20px;
         background: Theme.bg;
         Text {

@@ -219,4 +219,22 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     if count(&image, 360..920, 260..540, text) == 0 {
         eprintln!("quit prompt: no text was rendered (no fonts?), skipping the title check");
     }
+
+    // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
+    // element that has a size but no position, which once put the heading strip mid-screen.
+    let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));
+    Update::full(view_model(&browse)).apply(&ui);
+    let image = render(&ui);
+    let top = count(&image, 96..WIDTH, 0..110, text);
+    let middle = count(&image, 96..WIDTH, 250..550, text);
+    eprintln!("browse heading: {top} text pixels at the top, {middle} mid-screen");
+    if top + middle == 0 {
+        eprintln!("browse: no text was rendered (no fonts?), skipping the heading check");
+    } else {
+        assert!(top > 0, "the Browse heading is not at the top");
+        assert_eq!(
+            middle, 0,
+            "the Browse heading is in the middle of the screen"
+        );
+    }
 }

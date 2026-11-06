@@ -35,6 +35,8 @@ export component HomeContent inherits Rectangle {
 
             Text {
                 x: Theme.safe-x - 24px;
+                // At the top of the row, above its cards (see the strip in grid.slint).
+                y: 0px;
                 text: r.title;
                 color: ri == root.sel-row ? Theme.accent-light : Theme.muted;
                 font-size: Theme.fs-title;

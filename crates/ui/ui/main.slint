@@ -137,8 +137,11 @@ export component MainWindow inherits Window {
         }
     }
 
+    // Every child shorter than the window sets `y: 0px`: without it Slint centres it vertically,
+    // which pushed these 36 px down, under the hints bar.
     if root.screen == 0 : HomeContent {
         x: Theme.rail-collapsed;
+        y: 0px;
         width: parent.width - Theme.rail-collapsed;
         height: parent.height - Theme.hints-h;
         rows: root.rows;
@@ -151,6 +154,7 @@ export component MainWindow inherits Window {
 
     if root.screen == 3 : GridContent {
         x: Theme.rail-collapsed;
+        y: 0px;
         width: parent.width - Theme.rail-collapsed;
         height: parent.height - Theme.hints-h;
         rows: root.rows;
@@ -192,6 +196,7 @@ export component MainWindow inherits Window {
 
     if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 : Rail {
         x: 0px;
+        y: 0px;
         height: parent.height - Theme.hints-h;
         items: root.rail-items;
         selected: root.rail-index;
