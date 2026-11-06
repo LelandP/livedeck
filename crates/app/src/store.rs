@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use htpc_core::{reduce, AppState, Command, Msg};
+use htpc_core::{reduce, AppState, Command, Msg, Playback as CorePlayback, Screen};
 use htpc_ui::{
     apply_chat_image, apply_thumbnail, view_model, MainWindow, Thumbnail, Update, ViewModel,
 };
@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 
 use htpc_resolver::StreamResolver;
 
+use crate::awake::KeepAwake;
 use crate::chat::Chat;
 use crate::playback::Playback;
 use crate::provider::Provider;
@@ -74,10 +75,24 @@ impl Sink for slint::Weak<MainWindow> {
 /// Writes the settings to the config file. Blocking, so the store runs it off the async workers.
 pub type SaveSettings = Arc<dyn Fn(htpc_core::Settings) + Send + Sync>;
 
+/// True while a stream is on screen and starting or playing: the time to keep the screen on.
+fn watching(state: &AppState) -> bool {
+    state.screen == Screen::Player
+        && matches!(
+            state.playback,
+            CorePlayback::Loading | CorePlayback::Playing
+        )
+        && !state.paused
+}
+
 pub struct Store<P, R, S> {
     state: AppState,
     /// `None` when there is nowhere to save (no config folder, tests, `--mock`).
     save_settings: Option<SaveSettings>,
+    /// Keeps the screen on during a stream. `None` in tests that do not care.
+    keep_awake: Option<KeepAwake>,
+    /// What `keep_awake` was last told.
+    awake: bool,
     shown: Option<ViewModel>,
     provider: Arc<P>,
     playback: Arc<Playback<R>>,
@@ -108,6 +123,8 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
         Self {
             state,
             save_settings: None,
+            keep_awake: None,
+            awake: false,
             shown: None,
             provider: Arc::new(provider),
             playback: Arc::new(playback),
@@ -123,6 +140,12 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     /// Persists changed settings with `save`.
     pub fn with_settings_saver(mut self, save: SaveSettings) -> Self {
         self.save_settings = Some(save);
+        self
+    }
+
+    /// Keeps the screen on with `keep_awake` while a stream plays.
+    pub fn with_keep_awake(mut self, keep_awake: KeepAwake) -> Self {
+        self.keep_awake = Some(keep_awake);
         self
     }
 
@@ -142,7 +165,21 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
         let (next, cmds) = reduce(&self.state, msg);
         self.state = next;
         self.publish();
+        self.update_awake();
         self.spawn_all(cmds);
+    }
+
+    /// Asks for the screen to stay on while a stream is starting or playing (not paused, not
+    /// failed or ended), and lets it sleep otherwise. Only changes are passed on.
+    fn update_awake(&mut self) {
+        let want = watching(&self.state);
+        if want == self.awake {
+            return;
+        }
+        self.awake = want;
+        if let Some(keep_awake) = &self.keep_awake {
+            keep_awake(want);
+        }
     }
 
     /// Sends a view-model to the UI if anything visible changed.
@@ -277,6 +314,8 @@ mod tests {
         Arc<Mutex<Vec<Update>>>,
         Arc<Mutex<Vec<String>>>,
         Arc<std::sync::atomic::AtomicBool>,
+        /// Every keep-awake switch, in order.
+        Arc<Mutex<Vec<bool>>>,
     );
 
     impl Sink for Recorder {
@@ -327,6 +366,7 @@ mod tests {
         );
         let session = fast_session(&tx, Viewer::default());
         let chat = Chat::new(Arc::new(fake_chat(false)), tx.clone());
+        let awake = Arc::clone(&rec.3);
         let store = Store::new(
             state,
             provider,
@@ -335,7 +375,8 @@ mod tests {
             session,
             rec.clone(),
             tx.clone(),
-        );
+        )
+        .with_keep_awake(Arc::new(move |want| awake.lock().unwrap().push(want)));
         tokio::spawn(store.run(startup, rx));
         (tx, rec)
     }
@@ -436,6 +477,44 @@ mod tests {
         tx.send(Intent::Back.into()).unwrap();
         let vm = rec.wait_for("home", |vm| vm.screen == ScreenId::Home).await;
         assert!(vm.chat.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_screen_stays_awake_while_a_stream_is_on_and_not_after() {
+        let (tx, rec) = start();
+        rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        assert!(
+            rec.3.lock().unwrap().is_empty(),
+            "browsing keeps nothing awake"
+        );
+
+        tx.send(Intent::Select.into()).unwrap();
+        rec.wait_for("player", |vm| vm.screen == ScreenId::Player)
+            .await;
+        tx.send(Intent::Back.into()).unwrap();
+        rec.wait_for("home", |vm| vm.screen == ScreenId::Home).await;
+        assert_eq!(*rec.3.lock().unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn pausing_or_a_failed_stream_lets_the_screen_sleep() {
+        let (mut s, _) = init();
+        s.screen = htpc_core::Screen::Player;
+        s.playback = CorePlayback::Playing;
+        assert!(watching(&s));
+        s.paused = true;
+        assert!(!watching(&s), "paused");
+        s.paused = false;
+        for ended in [
+            CorePlayback::Offline,
+            CorePlayback::Failed("x".into()),
+            CorePlayback::Idle,
+        ] {
+            s.playback = ended;
+            assert!(!watching(&s), "{:?}", s.playback);
+        }
+        s.playback = CorePlayback::Loading;
+        assert!(watching(&s), "starting counts");
     }
 
     #[tokio::test]

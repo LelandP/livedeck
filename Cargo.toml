@@ -53,6 +53,9 @@ gilrs = "0.11.2"
 # Already in the tree through twitch-irc and reqwest. The chat crate drives the IRC transport with it.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 qrcode = { version = "0.14.1", default-features = false }
+# Linux only: D-Bus, to keep the screen awake during a stream. Already in the tree through Slint and
+# keyring (same version), and used through its blocking API, so the runtime it uses is unchanged.
+zbus = "5.19.0"
 pico-args = "0.5.0"
 
 # Dev / test only

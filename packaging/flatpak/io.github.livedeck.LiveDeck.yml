@@ -26,6 +26,9 @@ finish-args:
   # Sign-in tokens go in the desktop keyring when there is one. Otherwise the app keeps them in a
   # private file inside ~/.var/app/io.github.livedeck.LiveDeck.
   - --talk-name=org.freedesktop.secrets
+  # Keeps the screen awake during a stream. The Inhibit portal needs no permission; this older
+  # interface is for sessions that only listen there.
+  - --talk-name=org.freedesktop.ScreenSaver
 
 cleanup:
   - '*.la'

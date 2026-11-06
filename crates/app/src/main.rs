@@ -8,6 +8,7 @@
 // keep the console for logs.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod awake;
 mod chat;
 mod mock;
 mod playback;
@@ -482,6 +483,10 @@ fn run_app<P: Provider, R: StreamResolver>(
     let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx);
     if let Some(save) = save_settings {
         store = store.with_settings_saver(save);
+    }
+    // Stops the screen dimming, locking or sleeping mid-stream.
+    if let Some(keep_awake) = awake::keep_awake() {
+        store = store.with_keep_awake(keep_awake);
     }
     runtime.spawn(store.run(startup, rx));
 
