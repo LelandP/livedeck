@@ -3,27 +3,27 @@ source: crates/ui/tests/snapshots.rs
 assertion_line: 291
 expression: out
 ---
-menu_open=false focus=0 select="Pause" values=["Best available", "Auto", "Low", "Fit", "Off", "Off", "Off"]
-menu_open=true focus=0 select="Change" values=["Best available", "Auto", "Low", "Fit", "Off", "Off", "Off"]
-menu_open=true focus=3 select="Change" values=["Best available", "Auto", "Low", "Fill (crop)", "Off", "Off", "Off"]
-menu_open=true focus=4 select="Change" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off"]
+menu_open=false focus=0 select="Pause" values=["Best available", "Auto", "Low", "Fit", "Off", "Off", "Off", ""]
+menu_open=true focus=0 select="Change" values=["Best available", "Auto", "Low", "Fit", "Off", "Off", "Off", ""]
+menu_open=true focus=3 select="Change" values=["Best available", "Auto", "Low", "Fill (crop)", "Off", "Off", "Off", ""]
+menu_open=true focus=4 select="Change" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off", ""]
   stats| Waiting for the player…
   stats| Asked for: Best available
-menu_open=true focus=4 select="Change" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off"]
+menu_open=true focus=4 select="Change" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off", ""]
   stats| Video: 1920×1080 · 59.94 fps
   stats| Codec: h264 · hardware (vaapi)
   stats| Bitrate: 6.2 Mb/s video · 160 kb/s audio
   stats| Buffer: 1.4 s
   stats| Dropped frames: 3 · decoder 0
   stats| Asked for: Best available
-menu_open=false focus=0 select="Pause" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off"]
+menu_open=false focus=0 select="Pause" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off", ""]
   stats| Video: 1920×1080 · 59.94 fps
   stats| Codec: h264 · hardware (vaapi)
   stats| Bitrate: 6.2 Mb/s video · 160 kb/s audio
   stats| Buffer: 1.4 s
   stats| Dropped frames: 3 · decoder 0
   stats| Asked for: Best available
-menu_open=false focus=0 select="Pause" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off"]
+menu_open=false focus=0 select="Pause" values=["Best available", "Auto", "Low", "Fill (crop)", "On", "Off", "Off", ""]
   stats| Video: —
   stats| Codec: — · software
   stats| Bitrate: — video · — audio

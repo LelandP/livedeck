@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use crate::domain::{grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RowKind, Stream, Tile};
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 use crate::state::{
-    AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen, SettingsRow,
-    SleepTimer,
+    subscribe_url, AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen,
+    SettingsRow, SleepTimer,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -175,6 +175,10 @@ fn open_following(s: &mut AppState, cmds: &mut Vec<Command>) {
 }
 
 fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    if s.subscribe_card {
+        subscribe_card_intent(s, intent, cmds);
+        return;
+    }
     if let Some(row) = s.player_menu {
         player_menu_intent(s, row, intent, cmds);
         return;
@@ -219,6 +223,9 @@ fn player_menu_intent(
     match intent {
         Intent::Up => s.player_menu = Some(row.prev()),
         Intent::Down => s.player_menu = Some(row.next()),
+        Intent::Select if row == PlayerMenuRow::Subscribe => s.subscribe_card = true,
+        // Action rows have no value to step through.
+        Intent::Right | Intent::Left if row.is_action() => {}
         Intent::Right | Intent::Select => change_player_option(s, row, true, cmds),
         Intent::Left => change_player_option(s, row, false, cmds),
         Intent::Back | Intent::Menu => s.player_menu = None,
@@ -280,7 +287,25 @@ fn change_player_option(
                 }
             }
         }
+        // An action row, handled in `player_menu_intent`.
+        PlayerMenuRow::Subscribe => {}
     }
+}
+
+/// Input while the subscribe card is open. A opens the page in a browser where there is one we
+/// can show, B (or Start) closes the card and returns to the menu. The stream keeps playing and
+/// every other button is ignored.
+fn subscribe_card_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    match intent {
+        Intent::Select if s.can_open_browser => {
+            if let Some(stream) = &s.now_playing {
+                cmds.push(Command::OpenUrl(subscribe_url(&stream.channel)));
+            }
+        }
+        Intent::Back | Intent::Menu => s.subscribe_card = false,
+        _ => {}
+    }
+    pulse_hud(s);
 }
 
 /// Sets a fresh sleep timer of `minutes` (replacing any running one) and asks the app to run it.
@@ -841,6 +866,7 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
             s.chat_status = ChatStatus::Idle;
             // The menu's choices stay for the next stream. Its numbers do not.
             s.player_menu = None;
+            s.subscribe_card = false;
             s.stats = None;
             cmds.push(Command::StopPlayback);
             if s.session.stats {

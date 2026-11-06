@@ -94,6 +94,9 @@ pub enum Command {
     CancelSleepTimer,
     /// Suspend the device (the sleep timer ran out). Failure is only logged.
     Suspend,
+    /// Open this web page in the system browser. Only sent where `AppState::can_open_browser`
+    /// is set. There is no `Event`: failure is only logged.
+    OpenUrl(String),
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }

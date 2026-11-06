@@ -10,9 +10,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
-    grid_cols, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus, Feed, FeedId,
-    LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen, SettingsRow, Stream,
-    Tile,
+    grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
+    Feed, FeedId, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen,
+    SettingsRow, Stream, Tile,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
@@ -206,6 +206,16 @@ pub struct ViewModel {
     pub sleep_label: String,
     /// "Still watching?" is up: any button keeps going.
     pub sleep_warning: bool,
+    /// The subscribe card is open over the stream.
+    pub subscribe_open: bool,
+    /// The channel's subscribe page as it is read out (no scheme), for typing. Empty while the
+    /// card is closed.
+    pub subscribe_url: String,
+    /// The QR code of the subscribe page, like `qr`. Empty while the card is closed.
+    pub subscribe_qr: Vec<bool>,
+    pub subscribe_qr_width: i32,
+    /// The card offers "A: Open in browser" (not in Game Mode).
+    pub subscribe_can_open: bool,
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
@@ -231,6 +241,8 @@ fn player_menu_values(state: &AppState) -> Vec<String> {
                     Some(t) if t.left_min == 0 => format!("{} min · ending", t.minutes),
                     Some(t) => format!("{} min · {} left", t.minutes, t.left_min),
                 },
+                // An action row: no value, A opens the card.
+                PlayerMenuRow::Subscribe => String::new(),
             }
         })
         .collect()
@@ -600,8 +612,9 @@ fn display_url(uri: &str) -> String {
     rest.split(['?', '#']).next().unwrap_or(rest).to_owned()
 }
 
-/// The QR code of `text` as dark/light modules, row by row, and its width. Empty if the text
-/// does not fit a QR code (it never does not, for a verification link).
+/// The QR code of `text` as dark/light modules, row by row, and its width. Shared by the sign-in
+/// screen and the subscribe card. Empty if the text does not fit a QR code (it never does not,
+/// for a link).
 fn qr_modules(text: &str) -> (Vec<bool>, i32) {
     match qrcode::QrCode::new(text.as_bytes()) {
         Ok(code) => {
@@ -657,6 +670,22 @@ pub fn view_model(state: &AppState) -> ViewModel {
         None => (String::new(), String::new(), Vec::new(), 0),
     };
     let login_status = login_status(state);
+    let on_player = state.screen == Screen::Player;
+    // Built only while the card is open, so the diff flags a new code when it opens or the
+    // channel changes, and never otherwise.
+    let subscribe_page = state
+        .now_playing
+        .as_ref()
+        .filter(|_| on_player && state.subscribe_card)
+        .map(|p| subscribe_url(&p.channel));
+    let (subscribe_url_text, subscribe_qr, subscribe_qr_width) = match &subscribe_page {
+        Some(url) => {
+            let (qr, width) = qr_modules(url);
+            (display_url(url), qr, width)
+        }
+        None => (String::new(), Vec::new(), 0),
+    };
+    let subscribe_open = subscribe_page.is_some();
 
     // The feed drawn is the current screen's, or the one under an overlay.
     let id = state.visible_feed_id();
@@ -683,7 +712,6 @@ pub fn view_model(state: &AppState) -> ViewModel {
     let selects_category = feed
         .and_then(Feed::focused_tile)
         .is_some_and(|t| matches!(t, Tile::Category(_)));
-    let on_player = state.screen == Screen::Player;
     let (playback, playback_error) = match &state.playback {
         Playback::Idle | Playback::Loading => (PlaybackId::Loading, String::new()),
         Playback::Playing => (PlaybackId::Playing, String::new()),
@@ -704,6 +732,16 @@ pub fn view_model(state: &AppState) -> ViewModel {
             SettingsRow::ChatLayout | SettingsRow::Quality => "Change",
         };
         (label, false)
+    } else if subscribe_open {
+        // Only B, in Game Mode.
+        let label = if state.can_open_browser {
+            "Open in browser"
+        } else {
+            ""
+        };
+        (label, false)
+    } else if on_player && state.player_menu.is_some_and(PlayerMenuRow::is_action) {
+        ("Open", false)
     } else if on_player && state.player_menu.is_some() {
         // The menu has the buttons: A changes the focused value.
         ("Change", false)
@@ -766,6 +804,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
         exit_prompt: state.exit_prompt,
         sleep_label: sleep_label(state),
         sleep_warning: state.sleep.is_some_and(|t| t.warning),
+        subscribe_open,
+        subscribe_url: subscribe_url_text,
+        subscribe_qr,
+        subscribe_qr_width,
+        subscribe_can_open: subscribe_open && state.can_open_browser,
         rows,
         chat: state
             .chat
@@ -848,6 +891,8 @@ pub struct Update {
     pub chat_changed: bool,
     /// The QR code changed, so its image is rebuilt.
     pub qr_changed: bool,
+    /// The same for the subscribe card's QR code.
+    pub subscribe_qr_changed: bool,
 }
 
 impl Update {
@@ -858,6 +903,7 @@ impl Update {
             rows_changed: true,
             chat_changed: true,
             qr_changed: true,
+            subscribe_qr_changed: true,
         }
     }
 
@@ -870,6 +916,7 @@ impl Update {
             rows_changed: prev.rows != next.rows,
             chat_changed: prev.chat != next.chat,
             qr_changed: prev.qr != next.qr,
+            subscribe_qr_changed: prev.subscribe_qr != next.subscribe_qr,
             vm: next,
         })
     }
@@ -932,6 +979,12 @@ impl Update {
         ui.set_exit_prompt(vm.exit_prompt);
         ui.set_sleep_label(vm.sleep_label.into());
         ui.set_sleep_warning(vm.sleep_warning);
+        if self.subscribe_qr_changed {
+            ui.set_subscribe_qr(qr_image(&vm.subscribe_qr, vm.subscribe_qr_width));
+        }
+        ui.set_subscribe_open(vm.subscribe_open);
+        ui.set_subscribe_url(vm.subscribe_url.into());
+        ui.set_subscribe_can_open(vm.subscribe_can_open);
     }
 }
 
@@ -1880,5 +1933,66 @@ mod tests {
         // Home keeps its own wording.
         let home = view_model(&loaded());
         assert_eq!(home.empty_text, "Nothing is live here right now");
+    }
+
+    /// Watching, with the player menu open on the Subscribe row.
+    fn on_subscribe_row(can_open_browser: bool) -> AppState {
+        let mut s = loaded();
+        s.can_open_browser = can_open_browser;
+        let (s, _) = reduce(&s, Intent::Select);
+        let s = reduce(&s, Event::PlaybackStarted).0;
+        (0..8).fold(reduce(&s, Intent::Menu).0, |s, _| {
+            reduce(&s, Intent::Down).0
+        })
+    }
+
+    #[test]
+    fn the_subscribe_row_is_an_action() {
+        let s = on_subscribe_row(true);
+        let vm = view_model(&s);
+        assert_eq!(vm.player_menu_focus, 7);
+        assert_eq!(vm.player_menu_values[7], "");
+        assert_eq!(vm.select_label, "Open");
+        assert!(!vm.subscribe_open && vm.subscribe_qr.is_empty());
+    }
+
+    #[test]
+    fn the_subscribe_qr_carries_the_channels_page() {
+        let s = reduce(&on_subscribe_row(true), Intent::Select).0;
+        let channel = s.now_playing.as_ref().unwrap().channel.clone();
+        let vm = view_model(&s);
+        assert!(vm.subscribe_open && vm.subscribe_can_open);
+        assert_eq!(vm.subscribe_url, format!("www.twitch.tv/subs/{channel}"));
+        let (expected, width) = qr_modules(&format!("https://www.twitch.tv/subs/{channel}"));
+        assert_eq!(vm.subscribe_qr, expected);
+        assert_eq!(vm.subscribe_qr_width, width);
+        assert!(width >= 21);
+        assert_eq!(vm.select_label, "Open in browser");
+    }
+
+    #[test]
+    fn game_mode_offers_no_browser() {
+        let s = reduce(&on_subscribe_row(false), Intent::Select).0;
+        let vm = view_model(&s);
+        assert!(vm.subscribe_open);
+        assert!(!vm.subscribe_can_open);
+        assert_eq!(vm.select_label, "");
+    }
+
+    #[test]
+    fn the_subscribe_qr_is_rebuilt_only_when_it_changes() {
+        let menu = on_subscribe_row(true);
+        let open = reduce(&menu, Intent::Select).0;
+        let u = Update::diff(&view_model(&menu), view_model(&open)).expect("the card opened");
+        assert!(u.subscribe_qr_changed);
+        // Pressing A again opens the browser, and the code stays.
+        let again = reduce(&open, Intent::Select).0;
+        if let Some(u) = Update::diff(&view_model(&open), view_model(&again)) {
+            assert!(!u.subscribe_qr_changed);
+        }
+        let closed = reduce(&open, Intent::Back).0;
+        let u = Update::diff(&view_model(&open), view_model(&closed)).expect("the card closed");
+        assert!(u.subscribe_qr_changed);
+        assert!(view_model(&closed).subscribe_qr.is_empty());
     }
 }

@@ -15,6 +15,7 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - A player menu (Start while watching) for quality, hardware decoding, latency and zoom, plus a stats box with resolution, codec, bitrate, buffer and dropped frames
 - Audio only, per stream from the player menu: plays just the sound to save bandwidth and battery, on a black screen with a slowly drifting watermark
 - A sleep timer in the player menu (15 to 120 minutes): asks "Still watching?" a minute before the end, then fades out, stops the stream and puts the device to sleep
+- Subscribe from the player menu: a QR code of the channel's subscribe page to finish on your phone, or (outside Game Mode) open it in a browser
 - Read-only chat with coloured names, badges and emotes, as a side panel or an overlay on the video
 - Sign in with a code and a QR code (no password typed on the TV), then a Followed row and a Following tab
 - Settings for chat layout and video quality, saved between runs
@@ -31,7 +32,6 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Subscribe button:** opens the channel's Twitch subscribe page in a browser. In Game Mode a browser may be awkward, so a QR code to scan with a phone (like the sign-in screen) may be the better fit
 - [ ] **Search:** find channels and categories by name, with a controller-friendly on-screen keyboard
 - [ ] **Live notifications:** a popup (and a sound) when another followed channel goes live, with a toggle in Settings to turn it off. Signed-in users only, as it needs Twitch EventSub
 - [ ] **Follow raids:** when the channel you are watching ends its stream with a raid, offer to follow it to the target channel (with a short countdown and a way to stay). Signed-in users only. Shares the EventSub client with live notifications

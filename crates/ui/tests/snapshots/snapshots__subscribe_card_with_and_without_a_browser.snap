@@ -1,0 +1,13 @@
+---
+source: crates/ui/tests/snapshots.rs
+assertion_line: 372
+expression: out
+---
+can_open_browser=true
+menu_open=true focus=7 select="Open" card=false url="" qr=0x0 can_open=false
+menu_open=true focus=7 select="Open in browser" card=true url="www.twitch.tv/subs/grandmaster_k" qr=29x29 can_open=true
+menu_open=true focus=7 select="Open" card=false url="" qr=0x0 can_open=false
+can_open_browser=false
+menu_open=true focus=7 select="Open" card=false url="" qr=0x0 can_open=false
+menu_open=true focus=7 select="" card=true url="www.twitch.tv/subs/grandmaster_k" qr=29x29 can_open=false
+menu_open=true focus=7 select="Open" card=false url="" qr=0x0 can_open=false

@@ -5,8 +5,8 @@
 
 use htpc_core::{
     grid_rows, init, reduce, AppState, Category, ChatKind, ChatLayout, ChatMessage, ChatSpan,
-    ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, PlayerStats, RailEntry,
-    Rgb, Row, RowKind, Stream, Tile,
+    ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, PlayerMenuRow, PlayerStats,
+    RailEntry, Rgb, Row, RowKind, Stream, Tile,
 };
 use htpc_ui::{view_model, CardVm, ViewModel};
 
@@ -330,10 +330,46 @@ fn sleep_lines(vm: &ViewModel) -> String {
         vm.sleep_label,
         vm.sleep_warning,
         vm.player_menu_values
-            .last()
+            .get(PlayerMenuRow::SleepTimer.index())
             .map(String::as_str)
             .unwrap_or("")
     )
+}
+
+fn subscribe_lines(vm: &ViewModel) -> String {
+    format!(
+        "menu_open={} focus={} select={:?} card={} url={:?} qr={}x{} can_open={}\n",
+        vm.player_menu_open,
+        vm.player_menu_focus,
+        vm.select_label,
+        vm.subscribe_open,
+        vm.subscribe_url,
+        vm.subscribe_qr_width,
+        vm.subscribe_qr_width,
+        vm.subscribe_can_open
+    )
+}
+
+#[test]
+fn subscribe_card_with_and_without_a_browser() {
+    let mut out = String::new();
+    for can_open_browser in [true, false] {
+        let mut s = home_loaded();
+        s.can_open_browser = can_open_browser;
+        out += &format!("can_open_browser={can_open_browser}\n");
+        let (s, _) = reduce(&s, Intent::Select);
+        let s = reduce(&s, Event::PlaybackStarted).0;
+        // Start, down to the last row.
+        let s = send(&s, &[Intent::Menu]);
+        let s = send(&s, &[Intent::Down; 7]);
+        out += &subscribe_lines(&view_model(&s));
+        // A opens the card, B closes it again.
+        let s = send(&s, &[Intent::Select]);
+        out += &subscribe_lines(&view_model(&s));
+        let s = send(&s, &[Intent::Back]);
+        out += &subscribe_lines(&view_model(&s));
+    }
+    insta::assert_snapshot!(out);
 }
 
 #[test]

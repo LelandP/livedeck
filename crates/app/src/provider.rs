@@ -384,6 +384,7 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::StartSleepTimer { .. }
             | Command::CancelSleepTimer
             | Command::Suspend
+            | Command::OpenUrl(_)
             | Command::Quit => Vec::new(),
         }
     }

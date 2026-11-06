@@ -28,6 +28,8 @@ component MenuRow inherits Rectangle {
     in property <bool> focused;
     // Cannot be changed right now (Quality while audio only is on): no arrows, dimmed value.
     in property <bool> locked: false;
+    // An action row (Subscribe): no value and no arrows, A runs it.
+    in property <bool> action: false;
 
     height: Theme.menu-row-h;
     border-radius: 6px;
@@ -49,7 +51,7 @@ component MenuRow inherits Rectangle {
             overflow: elide;
         }
         Text {
-            text: root.focused && !root.locked ? "◀  " + root.value + "  ▶" : root.value;
+            text: root.action ? (root.focused ? "Press A" : "") : root.focused && !root.locked ? "◀  " + root.value + "  ▶" : root.value;
             color: root.focused && !root.locked ? Theme.accent-light : Theme.muted;
             opacity: root.locked ? 0.6 : 1.0;
             font-size: Theme.fs-body;
@@ -171,7 +173,15 @@ export component PlayerScreen inherits Rectangle {
     in property <string> stats-text: "";
     // The sleep timer next to the channel name ("Sleep in 42 min"). Empty without one.
     in property <string> sleep-label: "";
-    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer"];
+    // The subscribe card (player menu): open, the page's QR code (one pixel per module, with its
+    // quiet zone), its address to type, and whether A opens it in a browser (not in Game Mode).
+    in property <bool> subscribe-open: false;
+    in property <image> subscribe-qr;
+    in property <string> subscribe-url: "";
+    in property <bool> subscribe-can-open: false;
+    // The index of the Subscribe row, the only action row (PlayerMenuRow::Subscribe).
+    property <int> subscribe-row: 7;
+    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer", "Subscribe to " + root.stream.channel];
     // What each row does, shown under the rows for the focused one. Same order as the titles.
     property <[string]> menu-help: [
         "Picture quality. Lower uses less data and battery. Reloads the stream.",
@@ -181,6 +191,7 @@ export component PlayerScreen inherits Rectangle {
         "A box with resolution, codec, bitrate, buffer and dropped frames.",
         "Sound only, on a dark screen. Saves data and battery. For this stream only.",
         "Stops the stream and puts the device to sleep after a while. Asks a minute before.",
+        "Shows a QR code of the channel's subscribe page, to finish on your phone.",
     ];
 
     // Skeleton pulse, 0..1 (only ticks while a skeleton is shown).
@@ -344,6 +355,7 @@ export component PlayerScreen inherits Rectangle {
                     value: root.menu-values[i];
                     focused: root.menu-focus == i;
                     locked: i == 0 && root.audio-only;
+                    action: i == root.subscribe-row;
                 }
                 Text {
                     text: root.menu-focus == 0 && root.audio-only ? "Locked while Audio only is on." : root.menu-help[root.menu-focus];
@@ -406,6 +418,70 @@ export component PlayerScreen inherits Rectangle {
                     color: Theme.muted;
                     font-size: Theme.fs-small;
                     overflow: elide;
+                }
+            }
+        }
+
+        // Subscribe card: over the video (and the menu) on a dark scrim, while the stream plays
+        // on. Chat is left as it is. The QR code is drawn like the sign-in screen's. The scrim
+        // swallows clicks; the hints bar has the buttons.
+        if root.subscribe-open : Rectangle {
+            background: #000000b8;
+            TouchArea { }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - Theme.hints-h - self.height) / 2;
+                width: 440px;
+                height: card-layout.preferred-height;
+                border-radius: 12px;
+                border-width: 2px;
+                border-color: Theme.surface-high;
+                background: Theme.surface;
+
+                card-layout := VerticalLayout {
+                    padding: 32px;
+                    spacing: 14px;
+                    alignment: center;
+                    Text {
+                        text: "Subscribe to " + root.stream.channel;
+                        color: Theme.text;
+                        font-size: Theme.fs-title;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: "Scan to subscribe on your phone";
+                        color: Theme.muted;
+                        font-size: Theme.fs-body;
+                        horizontal-alignment: center;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 240px;
+                            height: 240px;
+                            background: #ffffff;
+                            border-radius: 8px;
+                            clip: true;
+                            Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: root.subscribe-qr;
+                                image-fit: contain;
+                                image-rendering: pixelated;
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.subscribe-url;
+                        color: Theme.accent-light;
+                        font-size: Theme.fs-body;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
                 }
             }
         }

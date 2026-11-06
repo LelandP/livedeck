@@ -57,6 +57,9 @@ qrcode = { version = "0.14.1", default-features = false }
 # keyring (same version), and used through its blocking API, so the runtime it uses is unchanged.
 zbus = "5.19.0"
 pico-args = "0.5.0"
+# Opens a web page in the system browser (the subscribe card). ShellExecute on Windows, so no
+# console window flashes; xdg-open (or the OpenURI portal in a Flatpak) on Linux.
+open = { version = "5.4.5", features = ["shellexecute-on-windows"] }
 
 # Dev / test only
 wiremock = "0.6.5"

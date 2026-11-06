@@ -9,6 +9,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod awake;
+mod browser;
 mod chat;
 mod mock;
 mod playback;
@@ -470,6 +471,7 @@ fn run_app<P: Provider, R: StreamResolver>(
 
     let (mut state, startup) = htpc_core::init();
     state.settings = settings;
+    state.can_open_browser = browser::can_open_browser();
     // The account is in place before the first load, so Home already has its Followed row. A
     // token from the environment wins over a stored login.
     state.user = match env_token {

@@ -118,10 +118,12 @@ pub enum PlayerMenuRow {
     AudioOnly,
     /// Stop and suspend the device after a while (see `AppState::sleep`).
     SleepTimer,
+    /// An action row: A opens the subscribe card (see `AppState::subscribe_card`).
+    Subscribe,
 }
 
 impl PlayerMenuRow {
-    pub const ALL: [PlayerMenuRow; 7] = [
+    pub const ALL: [PlayerMenuRow; 8] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Hwdec,
         PlayerMenuRow::Latency,
@@ -129,10 +131,17 @@ impl PlayerMenuRow {
         PlayerMenuRow::Stats,
         PlayerMenuRow::AudioOnly,
         PlayerMenuRow::SleepTimer,
+        PlayerMenuRow::Subscribe,
     ];
 
     pub fn index(self) -> usize {
         self as usize
+    }
+
+    /// A runs it, Left and Right do nothing. The other rows are values that A, Left and Right
+    /// step through.
+    pub fn is_action(self) -> bool {
+        matches!(self, PlayerMenuRow::Subscribe)
     }
 
     /// The row above, stopping at the top.
@@ -359,6 +368,18 @@ pub struct AppState {
     pub sleep: Option<SleepTimer>,
     /// The id of the last sleep timer set, kept after it ends so ids never repeat.
     pub last_sleep_id: u32,
+    /// The subscribe card is open over the stream (player menu): a QR code of the channel's
+    /// subscribe page. It takes A and B and ignores the other buttons.
+    pub subscribe_card: bool,
+    /// The platform can open a web page in a browser the user will see. False in Game Mode on
+    /// the Deck, where a browser opens behind gamescope or not at all. Set once at startup.
+    pub can_open_browser: bool,
+}
+
+/// The Twitch page to subscribe to `channel`. The channel is a Twitch login (letters, digits and
+/// underscores), so it needs no escaping.
+pub fn subscribe_url(channel: &str) -> String {
+    format!("https://www.twitch.tv/subs/{channel}")
 }
 
 impl AppState {

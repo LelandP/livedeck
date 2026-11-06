@@ -247,6 +247,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 }
                 continue;
             }
+            if let Command::OpenUrl(url) = cmd {
+                // Starting the browser can block for a moment (ShellExecute, xdg-open).
+                tokio::task::spawn_blocking(move || crate::browser::open_url(&url));
+                continue;
+            }
             if let Command::FetchThumbnails { urls } = cmd {
                 self.spawn_images(urls, S::thumbnail);
                 continue;

@@ -98,6 +98,12 @@ export component MainWindow inherits Window {
     // during which any button only keeps going.
     in property <string> sleep-label: "";
     in property <bool> sleep-warning: false;
+    // The subscribe card over the stream (player menu): the QR code of the channel's subscribe
+    // page, its address, and whether A opens it in a browser (never in Game Mode).
+    in property <bool> subscribe-open: false;
+    in property <image> subscribe-qr;
+    in property <string> subscribe-url: "";
+    in property <bool> subscribe-can-open: false;
     // The area mpv renders into (logical px). Rust multiplies by the scale factor. Not animated
     // with the chat slide, so the texture is allocated once per layout change.
     out property <length> video-w: root.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
@@ -267,6 +273,10 @@ export component MainWindow inherits Window {
         audio-only: root.audio-only;
         stats-text: root.stats-text;
         sleep-label: root.sleep-label;
+        subscribe-open: root.subscribe-open;
+        subscribe-qr: root.subscribe-qr;
+        subscribe-url: root.subscribe-url;
+        subscribe-can-open: root.subscribe-can-open;
     }
 
     // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
@@ -370,7 +380,9 @@ export component MainWindow inherits Window {
             if root.screen == 0 || root.screen == 3 : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 1 && root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
-            if root.screen == 1 : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            // The subscribe card takes only A and B: "A Open in browser · B Close", or only B in
+            // Game Mode (`select-label` is empty there).
+            if root.screen == 1 && !root.subscribe-open : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
             // Start opens the player menu. With it open, B closes it instead of leaving the stream.
             if root.screen == 1 && !root.player-menu-open : Hint { glyph: "≡"; label: "Options"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 1 && root.player-menu-open : Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }

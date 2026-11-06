@@ -89,9 +89,9 @@ fn up_and_down_move_between_rows_and_stop_at_the_ends() {
     let (s, _) = run(&playing(), &[Intent::Menu, Intent::Up]);
     assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
     let (s, _) = run(&s, &[Intent::Down; 10]);
-    assert_eq!(s.player_menu, Some(PlayerMenuRow::SleepTimer));
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::Subscribe));
     let (s, _) = reduce(&s, Intent::Up);
-    assert_eq!(s.player_menu, Some(PlayerMenuRow::AudioOnly));
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::SleepTimer));
 }
 
 #[test]

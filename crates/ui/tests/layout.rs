@@ -301,6 +301,49 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the hints bar hides while the menu is open"
     );
 
+    // The menu's eighth row (Subscribe) still fits: the menu's top edge stays on screen, so a
+    // focused last row is drawn in the bottom half, above the HUD.
+    let (on_last, _) = reduce(&menu, Intent::Menu);
+    let (on_last, _) = reduce(&on_last, Intent::Menu);
+    let on_last = (0..7).fold(on_last, |s, _| reduce(&s, Intent::Down).0);
+    assert_eq!(
+        on_last.player_menu,
+        Some(htpc_core::PlayerMenuRow::Subscribe)
+    );
+    Update::full(view_model(&on_last)).apply(&ui);
+    let image = render(&ui);
+    assert!(
+        count(&image, 0..560, 300..HINTS_TOP, accent) > 0,
+        "the Subscribe row is not drawn"
+    );
+
+    // The subscribe card: its QR code is drawn in the middle of the video (white with dark
+    // modules), and in Game Mode the hints bar offers only B (no green A).
+    for can_open_browser in [true, false] {
+        let mut card = on_last.clone();
+        card.can_open_browser = can_open_browser;
+        let (card, _) = reduce(&card, Intent::Select);
+        assert!(card.subscribe_card);
+        Update::full(view_model(&card)).apply(&ui);
+        let image = render(&ui);
+        let white = |p: &Rgba8Pixel| p.r > 240 && p.g > 240 && p.b > 240;
+        let black = |p: &Rgba8Pixel| p.r < 20 && p.g < 20 && p.b < 20;
+        let (qr_x, qr_y) = (520..760, 220..500);
+        assert!(
+            count(&image, qr_x.clone(), qr_y.clone(), white) > 5_000,
+            "the subscribe QR code has no white background"
+        );
+        assert!(
+            count(&image, qr_x, qr_y, black) > 5_000,
+            "the subscribe QR code has no modules"
+        );
+        let a_in_hints = count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0;
+        assert_eq!(
+            a_in_hints, can_open_browser,
+            "A is offered only where a browser can open"
+        );
+    }
+
     // Audio only: the screen lays out, stays nearly all black once the HUD has faded, and the
     // watermark glides to a new spot after its 30 s timer (and only then).
     let mut audio = watching_a_busy_chat(ChatLayout::Side);
