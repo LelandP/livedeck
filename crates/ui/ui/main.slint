@@ -16,7 +16,7 @@ import { SettingsScreen } from "settings.slint";
 export { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem }
 
 // Hint-bar actions (mouse fallback). Rust maps them to core Intents.
-export enum UiAction { select, back, toggle-chat, menu, retry }
+export enum UiAction { select, back, toggle-chat, menu, retry, page-right }
 
 // Pure view of `htpc_core::AppState`. Rust (crates/ui/src/view_model.rs) sets every property.
 // Navigation logic lives in `htpc_core::reduce`. This file only renders and animates.
@@ -127,10 +127,25 @@ export component MainWindow inherits Window {
     in property <string> raid-title: "";
     in property <string> raid-viewers: "";
     in property <int> raid-seconds: 0;
+    // Writing in chat over the stream (see player.slint's PlayerScreen).
+    in property <bool> compose-open: false;
+    in property <bool> compose-needs-sign-in: false;
+    in property <string> compose-text: "";
+    in property <string> compose-count: "";
+    in property <[SearchKey]> compose-keys;
+    in property <int> compose-key-focus: 0;
+    in property <int> compose-shift: 0;
+    in property <[string]> compose-chips;
+    in property <int> compose-chip-focus: -1;
+    in property <string> compose-status: "";
+    in property <bool> compose-problem: false;
+    in property <string> room-mode: "";
+    in property <string> compose-hint: "";
     // The area mpv renders into (logical px). Rust multiplies by the scale factor. Not animated
-    // with the chat slide, so the texture is allocated once per layout change.
+    // with the chat slide, so the texture is allocated once per layout change. In the side
+    // layout the chat keyboard takes the bottom of the video's strip.
     out property <length> video-w: root.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
-    out property <length> video-h: root.height;
+    out property <length> video-h: root.height - (root.compose-open && !root.chat-overlay ? Theme.compose-h + Theme.hints-h : 0px);
     property <bool> hud-visible: true;
 
     // The window size in logical px. The layout is drawn for 1280x800 (theme.slint), so Rust picks
@@ -325,6 +340,19 @@ export component MainWindow inherits Window {
         raid-title: root.raid-title;
         raid-viewers: root.raid-viewers;
         raid-seconds: root.raid-seconds;
+        compose-open: root.compose-open;
+        compose-needs-sign-in: root.compose-needs-sign-in;
+        compose-text: root.compose-text;
+        compose-count: root.compose-count;
+        compose-keys: root.compose-keys;
+        compose-key-focus: root.compose-key-focus;
+        compose-shift: root.compose-shift;
+        compose-chips: root.compose-chips;
+        compose-chip-focus: root.compose-chip-focus;
+        compose-status: root.compose-status;
+        compose-problem: root.compose-problem;
+        room-mode: root.room-mode;
+        compose-hint: root.compose-hint;
     }
 
     // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
@@ -429,7 +457,7 @@ export component MainWindow inherits Window {
         background: #0e0e10f0;
         // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
         // comes back on any button. Loading, paused and error screens keep it.
-        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open ? 0.0 : 1.0;
+        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open && !root.compose-open ? 0.0 : 1.0;
         animate opacity { duration: Theme.t-med; }
 
         // During the sleep warning every button does the same thing.
@@ -450,8 +478,31 @@ export component MainWindow inherits Window {
             Hint { glyph: "B"; label: "Stay"; clicked => { root.action(UiAction.back); } }
         }
 
+        // Writing in chat: the keyboard's buttons. LB and RB both turn the page (the glyph shows
+        // one of them), and clicking it goes forward.
+        if root.screen == 1 && root.compose-open && !root.compose-needs-sign-in && !root.sleep-warning && !root.raid-open : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 28px;
+            alignment: end;
+            Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            Hint { glyph: "X"; label: "Delete"; clicked => { root.action(UiAction.retry); } }
+            Hint { glyph: "Y"; label: "Space"; clicked => { root.action(UiAction.toggle-chat); } }
+            Hint { glyph: "≡"; label: "Send"; clicked => { root.action(UiAction.menu); } }
+            Hint { glyph: "RB"; label: "LB/RB Page"; clicked => { root.action(UiAction.page-right); } }
+            Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
+        }
+        if root.screen == 1 && root.compose-open && root.compose-needs-sign-in && !root.sleep-warning && !root.raid-open : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 36px;
+            alignment: end;
+            Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
+        }
+
         // Empty while the quit prompt is open: the prompt shows its own buttons.
-        if !root.exit-prompt && !root.sleep-warning && !root.raid-open : HorizontalLayout {
+        if !root.exit-prompt && !root.sleep-warning && !root.raid-open && !(root.screen == 1 && root.compose-open) : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 36px;

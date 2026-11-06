@@ -7,9 +7,12 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::{
-    AuthApi, DeviceGrant, Error, Identity, PollOutcome, Result, TokenGrant, SCOPE_READ_FOLLOWS,
-};
+use crate::{AuthApi, DeviceGrant, Error, Identity, PollOutcome, Result, TokenGrant, SCOPES};
+
+/// Every scope the app asks for, as the fake grants them.
+fn all_scopes() -> Vec<String> {
+    SCOPES.iter().map(|s| (*s).to_owned()).collect()
+}
 
 /// A request the fake received, for assertions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +60,7 @@ impl FakeAuth {
             identity: Identity {
                 user_id: "1000".into(),
                 login: "nightowl_dev".into(),
-                scopes: vec![SCOPE_READ_FOLLOWS.into()],
+                scopes: all_scopes(),
             },
             polls: Arc::default(),
             refreshes: Arc::default(),
@@ -79,7 +82,7 @@ impl FakeAuth {
             access_token: format!("{name}-access"),
             refresh_token: Some(format!("{name}-refresh")),
             expires_in: Some(Duration::from_secs(4 * 3600)),
-            scopes: vec![SCOPE_READ_FOLLOWS.into()],
+            scopes: all_scopes(),
         }
     }
 

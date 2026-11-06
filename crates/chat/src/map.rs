@@ -1,11 +1,12 @@
 //! Turns the chat server's messages into the core's chat types.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use htpc_core::{ChatKind, ChatMessage, ChatSpan, Moderation, Rgb};
+use htpc_core::{ChatKind, ChatMessage, ChatSpan, Moderation, Rgb, RoomModeChange};
 use twitch_irc::message::{
-    Badge, ClearChatAction, ClearChatMessage, ClearMsgMessage, Emote, NoticeMessage,
-    PrivmsgMessage, RGBColor, ServerMessage, UserNoticeMessage,
+    Badge, ClearChatAction, ClearChatMessage, ClearMsgMessage, Emote, FollowersOnlyMode,
+    NoticeMessage, PrivmsgMessage, RGBColor, RoomStateMessage, ServerMessage, UserNoticeMessage,
 };
 
 use crate::badges::BadgeBook;
@@ -18,6 +19,8 @@ pub enum Mapped {
     Line(ChatMessage),
     /// Lines to remove.
     Moderation(Moderation),
+    /// The room's rules for who may write (slow mode, followers only, ...) changed.
+    RoomMode(RoomModeChange),
 }
 
 /// Maps the messages of one channel. Messages for any other channel are ignored.
@@ -40,8 +43,8 @@ impl Mapper {
         login.eq_ignore_ascii_case(&self.channel)
     }
 
-    /// The effect of `message`: usually one line, none for traffic that is not chat (pings,
-    /// joins, room settings).
+    /// The effect of `message`: usually one line, the room's settings for a `ROOMSTATE`, none for
+    /// traffic that is not chat (pings, joins).
     pub fn map(&self, message: ServerMessage) -> Vec<Mapped> {
         match message {
             ServerMessage::Privmsg(m) if self.is_ours(&m.channel_login) => {
@@ -58,6 +61,9 @@ impl Mapper {
             }
             ServerMessage::ClearChat(m) if self.is_ours(&m.channel_login) => clear_chat(m),
             ServerMessage::ClearMsg(m) if self.is_ours(&m.channel_login) => clear_msg(m),
+            ServerMessage::RoomState(m) if self.is_ours(&m.channel_login) => {
+                vec![Mapped::RoomMode(room_mode(&m))]
+            }
             _ => Vec::new(),
         }
     }
@@ -119,6 +125,20 @@ fn clear_chat(m: ClearChatMessage) -> Vec<Mapped> {
         | ClearChatAction::UserTimedOut { user_login, .. } => Moderation::ClearUser(user_login),
     };
     vec![Mapped::Moderation(action)]
+}
+
+/// The settings a `ROOMSTATE` names. Joining sends all of them, a change only its own.
+fn room_mode(m: &RoomStateMessage) -> RoomModeChange {
+    let secs = |d: Duration| u32::try_from(d.as_secs()).unwrap_or(u32::MAX);
+    RoomModeChange {
+        slow_secs: m.slow_mode.map(secs),
+        followers_min: m.followers_only.as_ref().map(|f| match f {
+            FollowersOnlyMode::Disabled => None,
+            FollowersOnlyMode::Enabled(d) => Some(secs(*d) / 60),
+        }),
+        subs_only: m.subscribers_only,
+        emote_only: m.emote_only,
+    }
 }
 
 fn clear_msg(m: ClearMsgMessage) -> Vec<Mapped> {

@@ -17,6 +17,9 @@ pub fn map_button(button: Button) -> Option<Intent> {
         Button::North => Intent::ToggleChat,
         Button::West => Intent::Retry,
         Button::Start => Intent::Menu,
+        // gilrs calls the bumpers (LB, RB) triggers, and the triggers `LeftTrigger2`.
+        Button::LeftTrigger => Intent::PageLeft,
+        Button::RightTrigger => Intent::PageRight,
         _ => return None,
     };
     Some(intent)
@@ -189,11 +192,17 @@ mod tests {
     }
 
     #[test]
+    fn the_bumpers_turn_keyboard_pages() {
+        assert_eq!(map_button(Button::LeftTrigger), Some(Intent::PageLeft));
+        assert_eq!(map_button(Button::RightTrigger), Some(Intent::PageRight));
+    }
+
+    #[test]
     fn other_buttons_are_ignored() {
         for b in [
             Button::Mode,
             Button::Select,
-            Button::LeftTrigger,
+            Button::LeftTrigger2,
             Button::Unknown,
         ] {
             assert_eq!(map_button(b), None, "{b:?}");

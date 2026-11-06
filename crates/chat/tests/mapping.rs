@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use htpc_chat::{BadgeBook, BadgeSet, EmoteProvider, Mapped, Mapper, TwitchCdn};
-use htpc_core::{ChatKind, ChatMessage, ChatSpan, Moderation, Rgb};
+use htpc_core::{ChatKind, ChatMessage, ChatSpan, Moderation, Rgb, RoomMode, RoomModeChange};
 use twitch_irc::message::{IRCMessage, ServerMessage};
 
 fn fixture(name: &str) -> ServerMessage {
@@ -151,6 +151,61 @@ fn moderation_messages_name_who_or_what_to_remove() {
 #[test]
 fn traffic_that_is_not_chat_maps_to_nothing() {
     assert!(mapper().map(fixture("ping")).is_empty());
+}
+
+fn only_room_mode(mapped: Vec<Mapped>) -> RoomModeChange {
+    match &mapped[..] {
+        [Mapped::RoomMode(change)] => *change,
+        other => panic!("expected one room mode, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_room_state_on_joining_names_every_rule() {
+    let change = only_room_mode(mapper().map(fixture("roomstate_join")));
+    assert_eq!(
+        change,
+        RoomModeChange {
+            slow_secs: Some(30),
+            followers_min: Some(Some(10)),
+            subs_only: Some(false),
+            emote_only: Some(false),
+        }
+    );
+    let mut mode = RoomMode::default();
+    mode.apply(change);
+    assert_eq!(mode.slow_secs, 30);
+    assert_eq!(mode.followers_min, Some(10));
+}
+
+#[test]
+fn a_room_state_change_names_only_what_changed() {
+    let change = only_room_mode(mapper().map(fixture("roomstate_change")));
+    assert_eq!(
+        change,
+        RoomModeChange {
+            slow_secs: None,
+            followers_min: Some(None),
+            subs_only: Some(true),
+            emote_only: None,
+        }
+    );
+    // Applied over the state from joining: slow mode stays, followers-only goes.
+    let mut mode = RoomMode::default();
+    mode.apply(only_room_mode(mapper().map(fixture("roomstate_join"))));
+    mode.apply(change);
+    assert_eq!(
+        mode,
+        RoomMode {
+            slow_secs: 30,
+            followers_min: None,
+            subs_only: true,
+            emote_only: false,
+        }
+    );
+    // Another channel's room is none of ours.
+    let other = Mapper::new("someone_else", Arc::new(TwitchCdn), badges());
+    assert!(other.map(fixture("roomstate_change")).is_empty());
 }
 
 /// A stand-in for a 7TV-style set: words that are emotes, found by name.

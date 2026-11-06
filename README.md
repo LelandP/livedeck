@@ -1,6 +1,6 @@
 # LiveDeck: an unofficial Twitch client for Steam Deck, SteamOS and Windows, made for a TV and a controller
 
-LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: browse live streams and categories, watch with read-only chat, and sign in to see who you follow. It is built for the couch and for SteamOS Game Mode on the **Steam Deck**, and it also runs on **Windows** (and Linux) with a controller or keyboard. Written in Rust with [Slint](https://slint.dev), [libmpv](https://mpv.io) and [Streamlink](https://streamlink.github.io).
+LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: browse live streams and categories, watch with chat, and sign in to see who you follow and write in chat. It is built for the couch and for SteamOS Game Mode on the **Steam Deck**, and it also runs on **Windows** (and Linux) with a controller or keyboard. Written in Rust with [Slint](https://slint.dev), [libmpv](https://mpv.io) and [Streamlink](https://streamlink.github.io).
 
 > **This is not an official Twitch or Valve product, and it is not affiliated with or endorsed by either.** Twitch and Steam are trademarks of their owners.
 >
@@ -16,17 +16,18 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Audio only, per stream from the player menu: plays just the sound to save bandwidth and battery, on a black screen with a slowly drifting watermark
 - A sleep timer in the player menu (15 to 120 minutes): asks "Still watching?" a minute before the end, then fades out, stops the stream and puts the device to sleep
 - Subscribe from the player menu: a QR code of the channel's subscribe page to finish on your phone, or (outside Game Mode) open it in a browser
-- Read-only chat with coloured names, badges and emotes, as a side panel or an overlay on the video
+- Chat with coloured names, badges and emotes, as a side panel or an overlay on the video
+- Write in chat (signed in) with an on-screen keyboard (letters, punctuation, common emotes) or one-press quick messages, while the stream keeps playing
 - Sign in with a code and a QR code (no password typed on the TV), then a Followed row and a Following tab
 - Search for channels and categories by name with an on-screen keyboard (signed in)
 - Live notifications: a silent popup when a channel you follow goes live, on any screen (signed in, can be turned off)
 - Follow raids: when the channel you watch raids another one, a card counts down 10 seconds and takes you there (A goes now, B stays). Signed in
 - Settings for chat layout, video quality and live notifications, saved between runs
-- Everything controllable with a gamepad (D-pad, A/B/X/Y, Start)
+- Everything controllable with a gamepad (D-pad, A/B/X/Y, Start, LB/RB)
 
 **What does not**
 
-- No chat sending (chat is read-only), no VODs or clips, no 7TV/BTTV/FFZ emotes yet
+- No VODs or clips, no 7TV/BTTV/FFZ emotes yet
 - Signed out, each row shows only its first page (about 30 items), because Twitch's anonymous API allows no more. Sign in for full paging
 - It does not block or skip ads
 - Linux/Steam Deck builds are new and **not yet tested on a real Deck**
@@ -35,7 +36,6 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Chat sending:** write in chat with the on-screen keyboard from Search, and perhaps quick canned messages. Needs the `chat:edit` permission, so users sign in again
 - [ ] **Hype train:** show progress and level while watching, if Twitch lets a viewer read it. Like predictions, it may need the broadcaster's own permission, so this needs checking first
 - [ ] **Predictions and polls:** show them while watching, if Twitch lets a viewer read them. Their EventSub topics may need the broadcaster's own permission, so this needs checking first
 
@@ -92,17 +92,19 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
 | D-pad / left stick / arrow keys | Move focus |
 | A / Enter | Select, watch, change a setting |
 | B / Esc / Backspace | Back (on Search: delete a character first) |
-| X / `r` | Retry a failed load |
+| X / `r` | Retry a failed load (while watching with chat shown: write in chat) |
 | Y / `y` | Show or hide chat |
 | Start / Menu key | Open or close the left menu (while watching: the player menu) |
+| LB / RB / Page Up / Page Down | Change the page of the chat keyboard |
 
 - **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
 - **Search:** in the left menu (sign in first). Type with the on-screen keyboard: the D-pad moves, A types, X deletes, Y adds a space, Start jumps to the results. Results update as you type, from two characters on: live channels, categories, then offline channels. Up from the first row (or B) goes back to the keyboard. On a PC you can also just type.
+- **Write in chat:** while signed in, press X with chat shown (or choose *Write in chat* in the player menu). A keyboard opens under the video (side panel) or over its bottom (overlay), and the stream keeps playing. The D-pad moves and A types; LB/RB switch between letters, digits and punctuation, and common emotes (typed as their codes, which Twitch turns into emotes). Shift capitalises the next letter, pressed twice it locks. X deletes, Y adds a space, Start sends, B closes the keyboard (the text waits until you send it or change channel). Up from the top row reaches the quick messages: A sends one at once. Slow mode, followers-only and subscribers-only show above the box, and if Twitch refuses a message the reason shows there and the text stays. On a PC, or with Steam's keyboard (STEAM + X), you can also just type. Messages go through Twitch's official API with the `user:write:chat` permission. If you signed in before this feature, LiveDeck asks you to sign in once more. The quick messages are `quick_messages` in `config.toml`. LiveDeck keeps to Twitch's limit of 20 messages in 30 seconds.
 - **Settings:** chat layout (side panel or over the video), video quality (applies to the next stream you open) and live notifications.
 - **Live notifications:** while signed in, LiveDeck checks every 30 seconds which channels you follow are live, and shows a popup at the top right for each one that just went live (not the one you are watching, and not after a quick stream restart). Popups stay 8 seconds and take no buttons. Turning them off in Settings stops the checks.
 - **Follow raids:** while signed in, LiveDeck listens through Twitch EventSub (a WebSocket, one subscription for the channel on screen) for that channel raiding another one. A card shows who is raiding whom and counts down 10 seconds; then, or when you press A, the player switches to the raided channel with its chat, keeping your player-menu choices, the sleep timer and audio only. B keeps you where you are. Back from the new channel returns to the browse screens.
 - **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. *Sleep timer* counts down whatever you watch (switching channels does not reset it); a minute before the end any button keeps going for the same length again, otherwise the sound fades, the stream stops and the device suspends. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
-- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `image_cache_max_mb` and an optional `client_id`.
+- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `image_cache_max_mb`, `quick_messages` and an optional `client_id`.
 - **Try it offline:** `livedeck --mock` runs with fixture data and no network.
 - **Logs:** set `RUST_LOG=livedeck=debug`. `livedeck --help` lists every option and environment variable.
 
@@ -118,7 +120,7 @@ Bug reports, testing on real hardware (especially a Steam Deck), fixes and featu
 
 - Test the Flatpak on a Steam Deck / under Gamescope and report what breaks or fix it (`packaging/flatpak`)
 - Resume from sleep, 4K and ultrawide behaviour
-- 7TV / BTTV / FFZ emotes, VODs and clips, chat sending with the on-screen keyboard
+- 7TV / BTTV / FFZ emotes, VODs and clips
 - Translations, accessibility, controller glyphs for other pads
 
 **Setup**
@@ -145,8 +147,8 @@ cargo deny check        # optional locally, needs cargo-deny (see deny.toml)
 | `crates/core` (`htpc-core`) | Pure state: `AppState`, `Intent`, `Event`, `Command` and the `reduce` function. No UI, network or IO, fully unit-tested |
 | `crates/ui` (`htpc-ui`) | The Slint files (a pure view) and the view-model that turns `AppState` into Slint models |
 | `crates/input` | Keyboard and gamepad (`gilrs`) to `Intent` |
-| `crates/twitch` (`htpc-twitch-api`) | Helix client, anonymous GQL client, device-code login |
-| `crates/chat` | Anonymous IRC-over-WebSocket chat, emotes, badges |
+| `crates/twitch` (`htpc-twitch-api`) | Helix client (including sending chat), anonymous GQL client, device-code login |
+| `crates/chat` | Anonymous IRC-over-WebSocket chat for reading, emotes, badges, room modes |
 | `crates/resolver` | Stream URL lookup through Streamlink |
 | `crates/player` | libmpv rendering into the Slint window (feature `mpv`) |
 | `crates/storage` | Config, token storage (keyring or private file), image cache |
@@ -160,7 +162,7 @@ By contributing you agree your work is released under the project's licence (GPL
 
 **Is this the official Twitch app for Steam Deck?** No. It is an independent hobby project.
 
-**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with read-only permission to see your follows. Stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
+**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with permission to see your follows and to write chat messages as you (only when you send one). Stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
 
 **Does it block ads?** No, and it does not try to.
 

@@ -17,7 +17,7 @@ use htpc_core::{Command, DeviceCode, Event, LoginProblem, User};
 use htpc_storage::{TokenStore, Tokens};
 use htpc_twitch_api::{
     AuthApi, Credentials, DeviceGrant, Error, FakeAuth, HttpAuth, Identity, PollOutcome, Refresher,
-    TokenGrant, TokenSource, SCOPE_READ_FOLLOWS,
+    TokenGrant, TokenSource, SCOPES, SCOPE_WRITE_CHAT,
 };
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -151,6 +151,15 @@ fn problem_text(err: &Error) -> String {
     }
 }
 
+/// The user as the store sees them: who, and whether the token's scopes let them write in chat.
+/// Tokens from before chat sending were granted `user:read:follows` only.
+fn user_of(login: &str, scopes: &[String]) -> User {
+    User {
+        login: login.to_owned(),
+        can_chat: scopes.iter().any(|s| s == SCOPE_WRITE_CHAT),
+    }
+}
+
 /// Failures that say nothing about the login itself: keep polling until the code runs out.
 fn is_transient(err: &Error) -> bool {
     matches!(
@@ -231,9 +240,7 @@ impl Session {
                 return None;
             }
         };
-        let user = User {
-            login: who.login.clone(),
-        };
+        let user = user_of(&who.login, &who.scopes);
         let tokens = Tokens {
             access_token,
             refresh_token: None,
@@ -320,7 +327,7 @@ impl Session {
         // Tokens from before the user id was stored cannot ask for follows. Sign in again.
         tokens.user_id.as_ref()?;
         tracing::info!(%login, "restored the stored sign-in");
-        let user = User { login };
+        let user = user_of(&login, &tokens.scopes);
         // Not written back: they were just read from there.
         let creds = Credentials {
             client_id: self.client_id.clone(),
@@ -427,7 +434,8 @@ impl Session {
     }
 
     async fn run_login(&self) {
-        let grant = match self.auth.request_device_code(&[SCOPE_READ_FOLLOWS]).await {
+        // Every scope at once, so a later feature needs no new sign-in.
+        let grant = match self.auth.request_device_code(SCOPES).await {
             Ok(grant) => grant,
             Err(err) => {
                 tracing::warn!(%err, "could not start the login");
@@ -454,10 +462,7 @@ impl Session {
             if Instant::now() >= deadline {
                 return Err(LoginProblem::Expired);
             }
-            let answer = self
-                .auth
-                .poll_token(&grant.device_code, &[SCOPE_READ_FOLLOWS])
-                .await;
+            let answer = self.auth.poll_token(&grant.device_code, SCOPES).await;
             match answer {
                 Ok(PollOutcome::Pending) => {}
                 Ok(PollOutcome::SlowDown) => interval += self.timing.slow_down_step,
@@ -485,10 +490,8 @@ impl Session {
                 return;
             }
         };
-        let user = User {
-            login: who.login.clone(),
-        };
         let tokens = self.tokens_from(&grant, &who, None);
+        let user = user_of(&who.login, &tokens.scopes);
         tracing::info!(login = %user.login, "signed in");
         self.install(tokens).await;
         (self.notify)(Event::SignedIn(user));

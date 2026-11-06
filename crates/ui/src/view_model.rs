@@ -11,8 +11,9 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
-    Feed, FeedId, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen,
-    SearchState, SettingsRow, Stream, Tile, Toast, TOASTS_SHOWN,
+    Feed, FeedId, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, RoomMode, Row, RowKind,
+    Screen, SearchState, SendProblem, SettingsRow, Shift, Stream, Tile, Toast, CHAT_MAX,
+    TOASTS_SHOWN,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
@@ -258,9 +259,173 @@ pub struct ViewModel {
     /// What Search says where the results go when there are none: type more, searching,
     /// nothing found, or the error. Empty while results are shown.
     pub search_status: String,
+    /// The chat compose panel is open over the stream.
+    pub compose_open: bool,
+    /// It is open on "Chat needs a new Twitch sign-in" (the token may not chat).
+    pub compose_needs_sign_in: bool,
+    /// The message so far. Shown at the bottom of the chat while composing, and while closed
+    /// when there is a draft.
+    pub compose_text: String,
+    /// "12/500".
+    pub compose_count: String,
+    /// The chat keyboard's current page, letters in capitals while shift is on.
+    pub compose_keys: Vec<KeyVm>,
+    /// The focused key, as an index into `compose_keys`. -1 while a quick message has focus.
+    pub compose_key_focus: i32,
+    /// 0 off, 1 the next letter, 2 locked (`htpc_core::Shift`), for the shift key's look.
+    pub compose_shift: i32,
+    /// The quick messages, in order.
+    pub compose_chips: Vec<String>,
+    /// The focused quick message, or -1.
+    pub compose_chip_focus: i32,
+    /// "Sending…", or why the last message was not posted. Empty otherwise.
+    pub compose_status: String,
+    /// `compose_status` is a problem (drawn as a warning).
+    pub compose_problem: bool,
+    /// The room's rules, e.g. "Slow mode 30 s · Followers only". Empty when anyone may write.
+    pub room_mode: String,
+    /// Under the chat while not composing: how to write, or that signing in is needed. Empty
+    /// off the Player screen.
+    pub compose_hint: String,
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
+}
+
+/// One key of an on-screen keyboard: its text and where it sits on the 10-column grid.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KeyVm {
+    pub label: String,
+    pub row: i32,
+    pub col: i32,
+    pub span: i32,
+}
+
+/// The chat keyboard's page as drawn: letters follow the shift key.
+fn compose_keys(state: &AppState) -> Vec<KeyVm> {
+    let shift = state.compose.shift;
+    htpc_core::keyboard::layout_of(state.compose.keys.board())
+        .into_iter()
+        .map(|k| KeyVm {
+            label: match k.key {
+                Key::Char(c) => shift.apply(c).to_string(),
+                other => other.label(),
+            },
+            row: i32::from(k.row),
+            col: i32::from(k.col),
+            span: i32::from(k.span),
+        })
+        .collect()
+}
+
+/// What A does on the focused key of the chat keyboard.
+fn compose_key_label(key: Key) -> &'static str {
+    match key {
+        Key::Char(_) | Key::Emote(_) => "Type",
+        Key::Space => "Space",
+        Key::Backspace => "Delete",
+        Key::Clear => "Clear",
+        Key::Shift => "Shift",
+        Key::Page(_) => "Page",
+        Key::Send | Key::Done => "Send",
+    }
+}
+
+/// The room's rules, as far as they keep someone from writing.
+pub fn room_mode_text(mode: &RoomMode) -> String {
+    let mut parts = Vec::new();
+    if mode.slow_secs > 0 {
+        parts.push(format!("Slow mode {} s", mode.slow_secs));
+    }
+    match mode.followers_min {
+        None => {}
+        Some(0) => parts.push("Followers only".to_owned()),
+        Some(min) => parts.push(format!("Followers only ({})", minutes(min))),
+    }
+    if mode.subs_only {
+        parts.push("Subscribers only".to_owned());
+    }
+    if mode.emote_only {
+        parts.push("Emote only".to_owned());
+    }
+    parts.join(" · ")
+}
+
+/// A followers-only wait in the largest whole unit: "10 min", "3 h", "1 day", "7 days".
+fn minutes(min: u32) -> String {
+    const DAY: u32 = 60 * 24;
+    match min {
+        DAY => "1 day".to_owned(),
+        m if m >= DAY && m % DAY == 0 => format!("{} days", m / DAY),
+        m if m >= 60 && m % 60 == 0 => format!("{} h", m / 60),
+        m => format!("{m} min"),
+    }
+}
+
+/// Why a message was not posted, in a few words. Twitch's codes are the IRC NOTICE ids; the room's
+/// rules fill in the numbers where Twitch's own sentence is long. Anything else shows Twitch's
+/// sentence.
+pub fn send_problem_text(problem: &SendProblem, mode: &RoomMode) -> String {
+    match problem {
+        SendProblem::TooFast => "Sending too fast: wait a few seconds".to_owned(),
+        SendProblem::Failed(why) => format!("Could not send: {why}"),
+        SendProblem::Dropped { code, message } => match code.as_str() {
+            c if c.starts_with("msg_followersonly") => match mode.followers_min {
+                Some(min) if min > 0 => format!("Followers-only chat ({})", minutes(min)),
+                _ => "Followers-only chat".to_owned(),
+            },
+            "msg_slowmode" if mode.slow_secs > 0 => {
+                format!("Slow mode: wait {} s", mode.slow_secs)
+            }
+            "msg_slowmode" => "Slow mode: wait a moment".to_owned(),
+            "msg_subsonly" => "Subscribers-only chat".to_owned(),
+            "msg_emoteonly" => "Emote-only chat: emotes only".to_owned(),
+            "msg_duplicate" => "Same as your last message: change it a little".to_owned(),
+            c if c.starts_with("msg_rejected") => "Held by AutoMod for the moderators".to_owned(),
+            "msg_banned" => "You are banned from this chat".to_owned(),
+            _ if !message.trim().is_empty() => message.trim().to_owned(),
+            _ => "Twitch did not post it".to_owned(),
+        },
+    }
+}
+
+/// The compose line's status: sending, or why the last message did not go.
+fn compose_status(state: &AppState) -> (String, bool) {
+    let c = &state.compose;
+    if c.sending.is_some() {
+        return ("Sending…".to_owned(), false);
+    }
+    match &c.problem {
+        Some(p) => (send_problem_text(p, &state.room_mode), true),
+        None => (String::new(), false),
+    }
+}
+
+/// Characters of a long message shown in the box: its end, where the typing happens. The counter
+/// still counts all of it.
+const COMPOSE_SHOWN: usize = 120;
+
+/// The end of `text`, behind an ellipsis when it is longer than [`COMPOSE_SHOWN`].
+fn text_tail(text: &str) -> String {
+    let len = text.chars().count();
+    if len <= COMPOSE_SHOWN {
+        return text.to_owned();
+    }
+    let tail: String = text.chars().skip(len - COMPOSE_SHOWN).collect();
+    format!("…{tail}")
+}
+
+/// The line under the chat while not composing.
+fn compose_hint(state: &AppState) -> &'static str {
+    if state.screen != Screen::Player || state.composing() {
+        ""
+    } else if !state.is_signed_in() {
+        "Sign in to Twitch to chat"
+    } else if !state.can_chat() {
+        "Chat needs a new Twitch sign-in: press X"
+    } else {
+        "Press X to write in chat"
+    }
 }
 
 /// The values the player menu shows, in `PlayerMenuRow` order.
@@ -283,8 +448,13 @@ fn player_menu_values(state: &AppState) -> Vec<String> {
                     Some(t) if t.left_min == 0 => format!("{} min · ending", t.minutes),
                     Some(t) => format!("{} min · {} left", t.minutes, t.left_min),
                 },
-                // An action row: no value, A opens the card.
+                // Action rows: no value, A opens the card or the keyboard. Signed out, the chat
+                // row says what it needs instead.
                 PlayerMenuRow::Subscribe => String::new(),
+                PlayerMenuRow::WriteChat if !state.is_signed_in() => {
+                    "Sign in to Twitch to chat".into()
+                }
+                PlayerMenuRow::WriteChat => String::new(),
             }
         })
         .collect()
@@ -715,6 +885,8 @@ fn key_label(key: Key) -> &'static str {
         Key::Backspace => "Delete",
         Key::Clear => "Clear",
         Key::Done => "Results",
+        // Chat keys: never on the Search board.
+        Key::Shift | Key::Page(_) | Key::Emote(_) | Key::Send => "",
     }
 }
 
@@ -814,6 +986,14 @@ pub fn view_model(state: &AppState) -> ViewModel {
     };
     let subscribe_open = subscribe_page.is_some();
     let raid = state.raid.as_ref().filter(|_| on_player);
+    let composing = state.composing();
+    let (compose_status, compose_problem) = compose_status(state);
+    // The keys are only built while they are on screen, so the diff stays quiet otherwise.
+    let compose_keys = if composing && state.can_chat() {
+        compose_keys(state)
+    } else {
+        Vec::new()
+    };
 
     // The feed drawn is the current screen's, or the one under an overlay.
     let id = state.visible_feed_id();
@@ -875,6 +1055,15 @@ pub fn view_model(state: &AppState) -> ViewModel {
             "Open in browser"
         } else {
             ""
+        };
+        (label, false)
+    } else if composing && !state.can_chat() {
+        ("Sign in again", false)
+    } else if composing {
+        // On a quick message A sends it, on the keys it presses the focused one.
+        let label = match state.compose.chip {
+            Some(_) => "Send",
+            None => compose_key_label(state.compose.keys.key()),
         };
         (label, false)
     } else if on_player && state.player_menu.is_some_and(PlayerMenuRow::is_action) {
@@ -961,6 +1150,34 @@ pub fn view_model(state: &AppState) -> ViewModel {
         search_on_keys,
         search_in_results: on_search && state.search.in_results,
         search_status: search_status(state),
+        compose_open: composing,
+        compose_needs_sign_in: composing && !state.can_chat(),
+        compose_text: if on_player {
+            text_tail(&state.compose.text)
+        } else {
+            String::new()
+        },
+        compose_count: format!("{}/{CHAT_MAX}", state.compose.text.chars().count()),
+        compose_keys,
+        compose_key_focus: match state.compose.chip {
+            Some(_) => -1,
+            None => to_i32(state.compose.keys.index()),
+        },
+        compose_shift: match state.compose.shift {
+            Shift::Off => 0,
+            Shift::Once => 1,
+            Shift::Lock => 2,
+        },
+        compose_chips: state.quick_messages.clone(),
+        compose_chip_focus: state.compose.chip.map_or(-1, to_i32),
+        compose_status,
+        compose_problem,
+        room_mode: if on_player {
+            room_mode_text(&state.room_mode)
+        } else {
+            String::new()
+        },
+        compose_hint: compose_hint(state).to_owned(),
         rows,
         chat: state
             .chat
@@ -1046,6 +1263,9 @@ pub struct Update {
     /// The same for the subscribe card's QR code.
     pub subscribe_qr_changed: bool,
     pub toasts_changed: bool,
+    /// The chat keyboard's keys changed (another page, shift), so its model is rebuilt.
+    pub compose_keys_changed: bool,
+    pub compose_chips_changed: bool,
 }
 
 impl Update {
@@ -1058,6 +1278,8 @@ impl Update {
             qr_changed: true,
             subscribe_qr_changed: true,
             toasts_changed: true,
+            compose_keys_changed: true,
+            compose_chips_changed: true,
         }
     }
 
@@ -1072,6 +1294,8 @@ impl Update {
             qr_changed: prev.qr != next.qr,
             subscribe_qr_changed: prev.subscribe_qr != next.subscribe_qr,
             toasts_changed: prev.toasts != next.toasts,
+            compose_keys_changed: prev.compose_keys != next.compose_keys,
+            compose_chips_changed: prev.compose_chips != next.compose_chips,
             vm: next,
         })
     }
@@ -1160,6 +1384,35 @@ impl Update {
         ui.set_search_on_keys(vm.search_on_keys);
         ui.set_search_in_results(vm.search_in_results);
         ui.set_search_status(vm.search_status.into());
+        if self.compose_keys_changed {
+            let keys: Vec<SearchKey> = vm.compose_keys.iter().map(to_key).collect();
+            ui.set_compose_keys(ModelRc::new(VecModel::from(keys)));
+        }
+        if self.compose_chips_changed {
+            let chips: Vec<slint::SharedString> =
+                vm.compose_chips.iter().map(|c| c.as_str().into()).collect();
+            ui.set_compose_chips(ModelRc::new(VecModel::from(chips)));
+        }
+        ui.set_compose_open(vm.compose_open);
+        ui.set_compose_needs_sign_in(vm.compose_needs_sign_in);
+        ui.set_compose_text(vm.compose_text.into());
+        ui.set_compose_count(vm.compose_count.into());
+        ui.set_compose_key_focus(vm.compose_key_focus);
+        ui.set_compose_shift(vm.compose_shift);
+        ui.set_compose_chip_focus(vm.compose_chip_focus);
+        ui.set_compose_status(vm.compose_status.into());
+        ui.set_compose_problem(vm.compose_problem);
+        ui.set_room_mode(vm.room_mode.into());
+        ui.set_compose_hint(vm.compose_hint.into());
+    }
+}
+
+fn to_key(k: &KeyVm) -> SearchKey {
+    SearchKey {
+        label: k.label.as_str().into(),
+        row: k.row,
+        col: k.col,
+        span: k.span,
     }
 }
 
@@ -1781,6 +2034,7 @@ mod tests {
         let mut s = loaded();
         s.user = Some(User {
             login: "nightowl_dev".into(),
+            can_chat: true,
         });
         let line = |user: &str, color| ChatMessage {
             color,
@@ -2091,6 +2345,7 @@ mod tests {
     fn signed_in(s: &AppState) -> AppState {
         let user = User {
             login: "nightowl_dev".into(),
+            can_chat: true,
         };
         reduce(s, Event::SignedIn(user)).0
     }
@@ -2184,7 +2439,7 @@ mod tests {
         s.can_open_browser = can_open_browser;
         let (s, _) = reduce(&s, Intent::Select);
         let s = reduce(&s, Event::PlaybackStarted).0;
-        (0..8).fold(reduce(&s, Intent::Menu).0, |s, _| {
+        (0..7).fold(reduce(&s, Intent::Menu).0, |s, _| {
             reduce(&s, Intent::Down).0
         })
     }
@@ -2220,6 +2475,127 @@ mod tests {
         assert!(vm.subscribe_open);
         assert!(!vm.subscribe_can_open);
         assert_eq!(vm.select_label, "");
+    }
+
+    #[test]
+    fn room_rules_read_short() {
+        assert_eq!(room_mode_text(&RoomMode::default()), "");
+        let all = RoomMode {
+            slow_secs: 120,
+            followers_min: Some(0),
+            subs_only: true,
+            emote_only: true,
+        };
+        assert_eq!(
+            room_mode_text(&all),
+            "Slow mode 120 s · Followers only · Subscribers only · Emote only"
+        );
+        let wait = |min| {
+            room_mode_text(&RoomMode {
+                followers_min: Some(min),
+                ..RoomMode::default()
+            })
+        };
+        assert_eq!(wait(10), "Followers only (10 min)");
+        assert_eq!(wait(90), "Followers only (90 min)");
+        assert_eq!(wait(180), "Followers only (3 h)");
+        assert_eq!(wait(1440), "Followers only (1 day)");
+        assert_eq!(wait(7 * 1440), "Followers only (7 days)");
+    }
+
+    #[test]
+    fn drop_reasons_read_short_and_use_the_rooms_numbers() {
+        let dropped = |code: &str, message: &str| SendProblem::Dropped {
+            code: code.into(),
+            message: message.into(),
+        };
+        let room = RoomMode {
+            slow_secs: 30,
+            followers_min: Some(10),
+            ..RoomMode::default()
+        };
+        let text = |p: &SendProblem| send_problem_text(p, &room);
+        assert_eq!(
+            text(&dropped("msg_followersonly", "long")),
+            "Followers-only chat (10 min)"
+        );
+        assert_eq!(
+            text(&dropped("msg_followersonly_followed", "")),
+            "Followers-only chat (10 min)"
+        );
+        assert_eq!(text(&dropped("msg_slowmode", "")), "Slow mode: wait 30 s");
+        assert_eq!(
+            send_problem_text(&dropped("msg_slowmode", ""), &RoomMode::default()),
+            "Slow mode: wait a moment"
+        );
+        assert_eq!(text(&dropped("msg_subsonly", "")), "Subscribers-only chat");
+        assert_eq!(
+            text(&dropped("msg_rejected_mandatory", "")),
+            "Held by AutoMod for the moderators"
+        );
+        assert_eq!(
+            text(&dropped("msg_banned", "")),
+            "You are banned from this chat"
+        );
+        // Unknown codes show Twitch's own sentence, or a plain one without it.
+        assert_eq!(
+            text(&dropped(
+                "msg_timedout",
+                " You are timed out for 9 more seconds. "
+            )),
+            "You are timed out for 9 more seconds."
+        );
+        assert_eq!(text(&dropped("", "")), "Twitch did not post it");
+        assert_eq!(
+            text(&SendProblem::TooFast),
+            "Sending too fast: wait a few seconds"
+        );
+        assert_eq!(
+            text(&SendProblem::Failed("network error".into())),
+            "Could not send: network error"
+        );
+    }
+
+    #[test]
+    fn a_long_message_shows_its_end_and_counts_all_of_it() {
+        let mut s = loaded();
+        s.user = Some(User {
+            login: "me".into(),
+            can_chat: true,
+        });
+        let (mut s, _) = reduce(&s, Intent::Select);
+        s.compose.text = format!("start {}", "x".repeat(200));
+        let vm = view_model(&s);
+        assert_eq!(vm.compose_count, "206/500");
+        assert!(vm.compose_text.starts_with('…'));
+        assert_eq!(vm.compose_text.chars().count(), COMPOSE_SHOWN + 1);
+        assert!(!vm.compose_text.contains("start"));
+    }
+
+    #[test]
+    fn the_keys_are_rebuilt_only_when_the_page_or_shift_changes() {
+        let mut s = loaded();
+        s.user = Some(User {
+            login: "me".into(),
+            can_chat: true,
+        });
+        let (s, _) = reduce(&s, Intent::Select);
+        let (s, _) = reduce(&s, Event::PlaybackStarted);
+        let (s, _) = reduce(&s, Intent::ToggleChat);
+        let (open, _) = reduce(&s, Intent::Retry);
+        let u = Update::diff(&view_model(&s), view_model(&open)).expect("opened");
+        assert!(u.compose_keys_changed);
+        // Moving and typing keep the keys.
+        let (moved, _) = reduce(&open, Intent::Right);
+        let (typed, _) = reduce(&moved, Intent::Select);
+        let u = Update::diff(&view_model(&open), view_model(&typed)).expect("typed");
+        assert!(!u.compose_keys_changed);
+        assert_eq!(view_model(&typed).compose_text, "b");
+        // A new page does not.
+        let (paged, _) = reduce(&typed, Intent::PageRight);
+        let u = Update::diff(&view_model(&typed), view_model(&paged)).expect("paged");
+        assert!(u.compose_keys_changed);
+        assert_eq!(view_model(&paged).compose_keys[0].label, "1");
     }
 
     #[test]

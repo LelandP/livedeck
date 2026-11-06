@@ -304,6 +304,60 @@ pub enum ChatStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub login: String,
+    /// The token may write in chat (`user:write:chat`). Tokens from before chat sending lack it,
+    /// and the user has to sign in again for it.
+    pub can_chat: bool,
+}
+
+/// Who may write in the chat on screen, as the chat server last said (`ROOMSTATE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoomMode {
+    /// Seconds a chatter waits between messages. 0 is off.
+    pub slow_secs: u32,
+    /// Followers only, for those who have followed at least this many minutes (0: any follower).
+    /// `None` is off.
+    pub followers_min: Option<u32>,
+    pub subs_only: bool,
+    pub emote_only: bool,
+}
+
+/// A `ROOMSTATE` from the chat server. Joining sends every setting, later ones only what
+/// changed: `None` leaves a setting as it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoomModeChange {
+    pub slow_secs: Option<u32>,
+    /// `Some(None)` turns followers-only off.
+    pub followers_min: Option<Option<u32>>,
+    pub subs_only: Option<bool>,
+    pub emote_only: Option<bool>,
+}
+
+impl RoomMode {
+    pub fn apply(&mut self, change: RoomModeChange) {
+        if let Some(v) = change.slow_secs {
+            self.slow_secs = v;
+        }
+        if let Some(v) = change.followers_min {
+            self.followers_min = v;
+        }
+        if let Some(v) = change.subs_only {
+            self.subs_only = v;
+        }
+        if let Some(v) = change.emote_only {
+            self.emote_only = v;
+        }
+    }
+}
+
+/// Why a chat message was not posted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendProblem {
+    /// Twitch refused it: its code (`msg_slowmode`, `msg_followersonly`, ...) and its sentence.
+    Dropped { code: String, message: String },
+    /// The app's own limit: too many messages in a short time.
+    TooFast,
+    /// The request failed (no network, Twitch error), with what went wrong.
+    Failed(String),
 }
 
 /// Why a device-code login ended without signing in. Shown on the sign-in screen.

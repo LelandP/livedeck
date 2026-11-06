@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::{
     ChannelResult, Credentials, FollowedChannel, Game, GqlClient, HelixClient, Page, PageRequest,
-    Result, StreamInfo, TwitchApi, UserInfo,
+    Result, SendOutcome, StreamInfo, TwitchApi, UserInfo,
 };
 
 #[derive(Debug)]
@@ -128,6 +128,25 @@ impl TwitchApi for HybridApi {
             self.parts.helix.streams_by_login(logins).await
         } else {
             self.parts.gql.streams_by_login(logins).await
+        }
+    }
+
+    async fn send_chat(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        text: &str,
+    ) -> Result<SendOutcome> {
+        if self.is_signed_in() {
+            self.parts
+                .helix
+                .send_chat(broadcaster_id, sender_id, text)
+                .await
+        } else {
+            self.parts
+                .gql
+                .send_chat(broadcaster_id, sender_id, text)
+                .await
         }
     }
 }

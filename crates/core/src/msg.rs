@@ -1,8 +1,8 @@
 //! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
 
 use crate::domain::{
-    ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, PlayerStats, Row,
-    RowKind, Stream, Tile, User,
+    ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, PlayerStats,
+    RoomModeChange, Row, RowKind, SendProblem, Stream, Tile, User,
 };
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
@@ -36,6 +36,10 @@ pub enum Intent {
     Text(char),
     /// Backspace on a physical keyboard: deletes a character on Search, Back everywhere else.
     Erase,
+    /// LB / Page Up: the previous page of an on-screen keyboard (chat compose).
+    PageLeft,
+    /// RB / Page Down: the next page of an on-screen keyboard (chat compose).
+    PageRight,
 }
 
 /// Side effects requested by the reducer. The app runs them off the UI thread.
@@ -132,6 +136,16 @@ pub enum Command {
     /// Look up the live stream of `channel` (title, category, viewers) and its user id. Answered
     /// with `Event::StreamInfo`, or nothing if the lookup fails.
     FetchStreamInfo { channel: String },
+    /// Write `text` in the chat of `channel` as the signed-in user. `broadcaster_id` is the
+    /// channel's user id, or empty when it is not known yet (the app looks it up). The app keeps
+    /// to Twitch's rate limit itself. Answered with `Event::ChatSent` or `Event::ChatDropped`
+    /// carrying `id`; the message itself comes back over the chat connection like any other line.
+    SendChat {
+        id: u32,
+        channel: String,
+        broadcaster_id: String,
+        text: String,
+    },
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }
@@ -283,6 +297,21 @@ pub enum Event {
     /// The answer to `FetchStreamInfo`: what Twitch knows of the channel. A channel that is not
     /// live has an empty title and category. Ignored unless it is the channel on screen.
     StreamInfo(Stream),
+    /// Twitch posted the chat message `id`.
+    ChatSent {
+        id: u32,
+    },
+    /// The chat message `id` was not posted, and why.
+    ChatDropped {
+        id: u32,
+        problem: SendProblem,
+    },
+    /// The chat room's rules changed (or were sent on joining). Ignored unless `channel` is the
+    /// one being watched.
+    ChatRoomMode {
+        channel: String,
+        change: RoomModeChange,
+    },
 }
 
 /// Anything the reducer accepts.

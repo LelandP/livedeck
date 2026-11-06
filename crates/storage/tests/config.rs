@@ -31,6 +31,7 @@ fn round_trip_survives_a_restart() {
         },
         client_id: Some("abc123".to_owned()),
         image_cache_max_mb: 64,
+        quick_messages: vec!["hello".to_owned(), "gg wp".to_owned()],
     };
     store.save(&config).unwrap();
     // A new store on the same path stands in for the next app start.
@@ -52,6 +53,25 @@ fn an_older_file_without_live_notifications_turns_them_on() {
     assert!(!config.settings.background_play);
     let off = Config::from_toml("live_notifications = false\n").unwrap();
     assert!(!off.settings.live_notifications);
+}
+
+#[test]
+fn quick_messages_default_and_are_tidied() {
+    let missing = Config::from_toml("quality = \"best\"\n").unwrap();
+    assert_eq!(
+        missing.quick_messages,
+        ["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"]
+    );
+    let mine = Config::from_toml("quick_messages = [\" hi \", \"\", \"o7\"]\n").unwrap();
+    assert_eq!(mine.quick_messages, ["hi", "o7"]);
+    // An empty list means none, not the defaults.
+    let none = Config::from_toml("quick_messages = []\n").unwrap();
+    assert!(none.quick_messages.is_empty());
+    let long = format!("quick_messages = [\"{}\"]\n", "x".repeat(600));
+    assert_eq!(
+        Config::from_toml(&long).unwrap().quick_messages[0].len(),
+        500
+    );
 }
 
 #[test]

@@ -109,6 +109,8 @@ pub fn fake_api() -> FakeApi {
             display_name: MOCK_USER.into(),
             profile_image_url: String::new(),
         }),
+        // Messages are "posted" and kept, but nothing echoes them back into the mock chat.
+        ..FakeApi::new()
     }
 }
 

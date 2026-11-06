@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use htpc_core::{ChatMessage, ChatStatus, Moderation};
+use htpc_core::{ChatMessage, ChatStatus, Moderation, RoomModeChange};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
@@ -19,6 +19,8 @@ pub enum ChatEvent {
     /// New lines, oldest first. Several arrive together when chat is busy.
     Messages(Vec<ChatMessage>),
     Moderated(Moderation),
+    /// The room's rules for who may write (sent on joining, then on every change).
+    RoomMode(RoomModeChange),
 }
 
 /// Joined channel. The connection lives as long as this does: dropping it leaves the channel.

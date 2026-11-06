@@ -23,6 +23,10 @@ pub const DEFAULT_AUTH_URL: &str = "https://id.twitch.tv/oauth2";
 pub const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// The scope behind both `/streams/followed` and `/channels/followed`.
 pub const SCOPE_READ_FOLLOWS: &str = "user:read:follows";
+/// The scope behind `POST /chat/messages` (writing in chat).
+pub const SCOPE_WRITE_CHAT: &str = "user:write:chat";
+/// Every scope the app asks for when the user signs in.
+pub const SCOPES: &[&str] = &[SCOPE_READ_FOLLOWS, SCOPE_WRITE_CHAT];
 /// Twitch's documented polling interval, used if the response has none.
 const DEFAULT_INTERVAL_SECS: u64 = 5;
 

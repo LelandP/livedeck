@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
     ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, RateLimiter, Result,
-    RetryPolicy, StreamInfo, TwitchApi, UserInfo, MAX_LOGINS, MAX_PAGE_SIZE,
+    RetryPolicy, SendOutcome, StreamInfo, TwitchApi, UserInfo, MAX_LOGINS, MAX_PAGE_SIZE,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.twitch.tv/helix";
@@ -143,6 +143,40 @@ impl HelixClient {
         }
     }
 
+    /// POST `body` as JSON to `path` and decode the envelope. Never retried: a request that
+    /// timed out or hit a server error may still have done its work (a chat message posted
+    /// twice is worse than one that failed). Only the bucket wait applies.
+    async fn post<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<Envelope<T>> {
+        let creds = self.credentials().ok_or(Error::NotSignedIn)?;
+        let url = format!("{}{}", self.base_url, path);
+        let wait = self.limiter.wait_before_request();
+        if !wait.is_zero() {
+            tracing::debug!(?wait, "Helix bucket empty, waiting for reset");
+            tokio::time::sleep(wait).await;
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .header("Client-Id", &creds.client_id)
+            .bearer_auth(&creds.access_token)
+            .json(body)
+            .send()
+            .await
+            .map_err(Error::Network)?;
+        self.limiter.observe(resp.headers());
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.bytes().await.map_err(Error::Network)?;
+            return serde_json::from_slice(&body).map_err(|e| Error::Decode(e.to_string()));
+        }
+        let message = error_message(resp).await;
+        Err(map_status(status, message))
+    }
+
     async fn get_page<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -235,6 +269,24 @@ impl TwitchApi for HelixClient {
             .collect();
         query.push(("first", MAX_PAGE_SIZE.to_string()));
         Ok(self.get::<StreamInfo>("/streams", &query).await?.data)
+    }
+
+    async fn send_chat(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        text: &str,
+    ) -> Result<SendOutcome> {
+        let body = serde_json::json!({
+            "broadcaster_id": broadcaster_id,
+            "sender_id": sender_id,
+            "message": text,
+        });
+        let env = self.post::<SendOutcome>("/chat/messages", &body).await?;
+        env.data
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Decode("no answer for the chat message".to_owned()))
     }
 }
 

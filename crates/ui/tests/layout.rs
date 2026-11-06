@@ -457,7 +457,10 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     // Search: the keyboard lays out under the text field with its focused key (`Theme.accent`, a
     // strong violet) top left, and the first result row is fully in view under it. With the
     // results focused, the keyboard slides away and the rows move up.
-    let user = htpc_core::User { login: "me".into() };
+    let user = htpc_core::User {
+        login: "me".into(),
+        can_chat: true,
+    };
     let (signed_in, _) = reduce(&init().0, Event::SignedIn(user));
     let (search, _) = reduce(&signed_in, Intent::RailPick(htpc_core::RailEntry::Search));
     let (search, _) = reduce(&search, Intent::Text('a'));
@@ -519,7 +522,10 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     let mut toasted = watching_a_busy_chat(ChatLayout::Side);
     toasted.chat_open = false;
     toasted.playback = htpc_core::Playback::Playing;
-    toasted.user = Some(htpc_core::User { login: "me".into() });
+    toasted.user = Some(htpc_core::User {
+        login: "me".into(),
+        can_chat: true,
+    });
     toasted.hud_pulse += 1;
     let went_live: Vec<Stream> = (0..4)
         .map(|i| Stream {
@@ -559,6 +565,99 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     assert!(
         count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
         "the toasts hide the hints bar"
+    );
+
+    // The player menu's ninth row (Write in chat) fits too: focused, it is drawn above the HUD,
+    // and with the first row focused that row sits well below the top edge (the menu does not
+    // run off the screen).
+    let mut menu9 = watching_a_busy_chat(ChatLayout::Side);
+    menu9.chat_open = false;
+    menu9.playback = htpc_core::Playback::Playing;
+    let (menu9, _) = reduce(&menu9, Intent::Menu);
+    Update::full(view_model(&menu9)).apply(&ui);
+    let image = render(&ui);
+    let first_accent_row = (0..HINTS_TOP)
+        .find(|&y| count(&image, 0..560, y..y + 1, accent) > 0)
+        .expect("the focused first row is drawn");
+    assert!(
+        first_accent_row >= 40,
+        "the menu runs off the top: its first row is at y={first_accent_row}"
+    );
+    let last = (0..8).fold(menu9, |s, _| reduce(&s, Intent::Down).0);
+    assert_eq!(last.player_menu, Some(htpc_core::PlayerMenuRow::WriteChat));
+    Update::full(view_model(&last)).apply(&ui);
+    let image = render(&ui);
+    assert!(
+        count(&image, 0..560, 300..HINTS_TOP, accent) > 0,
+        "the Write in chat row is not drawn"
+    );
+
+    // Writing in chat. Side layout: the video shrinks to the top, the keyboard sits under it with
+    // its focused key (`Theme.accent`) on `a`, the box at the bottom of the chat panel has its
+    // focus border (`Theme.accent-light`), and the hints bar stays. Overlay: the video keeps its
+    // full height and the keyboard is drawn over its bottom, left of the chat.
+    let compose_h = 366;
+    for (layout, keys_x) in [(ChatLayout::Side, 90..170), (ChatLayout::Overlay, 50..130)] {
+        let mut writing = watching_a_busy_chat(layout);
+        writing.user = Some(htpc_core::User {
+            login: "me".into(),
+            can_chat: true,
+        });
+        writing.playback = htpc_core::Playback::Playing;
+        let (writing, _) = reduce(&writing, Intent::Retry);
+        assert!(writing.composing());
+        let writing = "hello chat"
+            .chars()
+            .fold(writing, |s, c| reduce(&s, Intent::Text(c)).0);
+        Update::full(view_model(&writing)).apply(&ui);
+        render(&ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        let image = render(&ui);
+        let want_video_h = match layout {
+            ChatLayout::Side => (HEIGHT - 72 - compose_h) as f32,
+            ChatLayout::Overlay => HEIGHT as f32,
+        };
+        assert_eq!(ui.get_video_h(), want_video_h, "{layout:?}: video height");
+        // The first key row: 16 px padding, the chips, a 12 px gap.
+        let key_top = HEIGHT - 72 - compose_h + 16 + 40 + 12;
+        assert!(
+            count(&image, keys_x, key_top..key_top + 50, key_focus) > 500,
+            "{layout:?}: the focused key is not drawn on the keyboard"
+        );
+        let chat_x = match layout {
+            ChatLayout::Side => (WIDTH - 380)..WIDTH,
+            ChatLayout::Overlay => (WIDTH - 460)..WIDTH,
+        };
+        assert!(
+            count(&image, chat_x, 560..HINTS_TOP, accent) > 0,
+            "{layout:?}: the message box is not at the bottom of the chat"
+        );
+        assert!(
+            count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+            "{layout:?}: the hints bar hides while writing"
+        );
+        // Turning the page swaps the keys in place (no binding loop, focus kept).
+        let (paged, _) = reduce(&writing, Intent::PageRight);
+        Update::diff(&view_model(&writing), view_model(&paged))
+            .expect("the page changed")
+            .apply(&ui);
+        render(&ui);
+    }
+
+    // A sign-in from before chat sending: the panel lays out its message instead of keys.
+    let mut old_token = watching_a_busy_chat(ChatLayout::Side);
+    old_token.user = Some(htpc_core::User {
+        login: "me".into(),
+        can_chat: false,
+    });
+    let (old_token, _) = reduce(&old_token, Intent::Retry);
+    assert!(old_token.composing());
+    Update::full(view_model(&old_token)).apply(&ui);
+    let image = render(&ui);
+    assert_eq!(
+        count(&image, 0..900, 362..HINTS_TOP, key_focus),
+        0,
+        "no keys are drawn for a token that may not chat"
     );
 
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an

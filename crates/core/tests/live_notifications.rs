@@ -31,6 +31,7 @@ fn home() -> AppState {
 fn sign_in(s: &AppState) -> (AppState, Vec<Command>) {
     let user = User {
         login: "nightowl_dev".into(),
+        can_chat: true,
     };
     reduce(s, Event::SignedIn(user))
 }

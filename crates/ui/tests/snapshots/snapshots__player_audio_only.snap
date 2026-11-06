@@ -1,17 +1,16 @@
 ---
 source: crates/ui/tests/snapshots.rs
-assertion_line: 323
 expression: out
 ---
 audio_only=true
-menu_open=true focus=5 select="Change" values=["Audio only", "Auto", "Low", "Fit", "On", "On", "Off", ""]
+menu_open=true focus=5 select="Change" values=["Audio only", "Auto", "Low", "Fit", "On", "On", "Off", "", "Sign in to Twitch to chat"]
   stats| Waiting for the player…
   stats| Asked for: Audio only
-menu_open=true focus=5 select="Change" values=["Audio only", "Auto", "Low", "Fit", "On", "On", "Off", ""]
+menu_open=true focus=5 select="Change" values=["Audio only", "Auto", "Low", "Fit", "On", "On", "Off", "", "Sign in to Twitch to chat"]
   stats| Audio: aac · 160 kb/s
   stats| Buffer: 2.0 s
   stats| Asked for: Audio only
-menu_open=true focus=0 select="Change" values=["Audio only", "Auto", "Low", "Fit", "On", "On", "Off", ""]
+menu_open=true focus=0 select="Change" values=["Audio only", "Auto", "Low", "Fit", "On", "On", "Off", "", "Sign in to Twitch to chat"]
   stats| Audio: aac · 160 kb/s
   stats| Buffer: 2.0 s
   stats| Asked for: Audio only

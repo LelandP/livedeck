@@ -419,6 +419,7 @@ fn raid_lines(vm: &ViewModel) -> String {
 fn raid_card_counts_down_then_follows() {
     let user = htpc_core::User {
         login: "viewer".into(),
+        can_chat: true,
     };
     let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
     let (s, _) = reduce(&s, Intent::Select);
@@ -468,6 +469,7 @@ fn search_lines(vm: &ViewModel) -> String {
 fn search_empty_typing_and_results() {
     let user = htpc_core::User {
         login: "nightowl_dev".into(),
+        can_chat: true,
     };
     let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
     let s = send(&s, &[Intent::RailPick(RailEntry::Search)]);
@@ -555,6 +557,7 @@ fn toast_lines(vm: &ViewModel) -> String {
 fn live_notification_toasts_one_three_and_more() {
     let user = htpc_core::User {
         login: "nightowl_dev".into(),
+        can_chat: true,
     };
     let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
     let went_live = |s: &AppState, channels: &[&str]| {
@@ -679,5 +682,122 @@ fn chat_connecting_live_busy_moderated_and_reconnecting() {
     s.chat_open = true;
     s.settings.chat_layout = ChatLayout::Overlay;
     out += &chat_lines(&view_model(&s));
+    insta::assert_snapshot!(out);
+}
+
+fn compose_lines(vm: &ViewModel) -> String {
+    let keys: Vec<&str> = vm.compose_keys.iter().map(|k| k.label.as_str()).collect();
+    let focused = usize::try_from(vm.compose_key_focus)
+        .ok()
+        .and_then(|i| vm.compose_keys.get(i))
+        .map_or("-", |k| k.label.as_str());
+    format!(
+        "open={} needs_sign_in={} overlay={} select={:?} text={:?} count={:?} status={:?} problem={} room={:?} hint={:?}\n  chips={:?} chip_focus={} shift={} key={:?} keys={}\n",
+        vm.compose_open,
+        vm.compose_needs_sign_in,
+        vm.chat_overlay,
+        vm.select_label,
+        vm.compose_text,
+        vm.compose_count,
+        vm.compose_status,
+        vm.compose_problem,
+        vm.room_mode,
+        vm.compose_hint,
+        vm.compose_chips,
+        vm.compose_chip_focus,
+        vm.compose_shift,
+        focused,
+        keys.join(" ")
+    )
+}
+
+#[test]
+fn chat_compose_side_overlay_and_a_drop() {
+    let viewer = |can_chat| htpc_core::User {
+        login: "viewer".into(),
+        can_chat,
+    };
+    let watching = |user: Option<htpc_core::User>| {
+        let mut s = home_loaded();
+        s.user = user;
+        let (s, _) = reduce(&s, Intent::Select);
+        let mut s = reduce(&s, Event::PlaybackStarted).0;
+        s.chat_open = true;
+        s
+    };
+    let mut out = String::from("-- signed out\n");
+    out += &compose_lines(&view_model(&watching(None)));
+    out += "-- signed in, not writing\n";
+    let s = watching(Some(viewer(true)));
+    out += &compose_lines(&view_model(&s));
+
+    out += "-- side panel, typing with shift on\n";
+    let s = send(&s, &[Intent::Retry, Intent::Text('G'), Intent::Text('G')]);
+    let s = send(
+        &s,
+        &[Intent::Down, Intent::Down, Intent::Down, Intent::Select],
+    );
+    out += &compose_lines(&view_model(&s));
+
+    out += "-- overlay, the emote page\n";
+    let mut overlay = send(&s, &[Intent::PageLeft]);
+    overlay.settings.chat_layout = ChatLayout::Overlay;
+    out += &compose_lines(&view_model(&overlay));
+
+    out += "-- a quick message focused\n";
+    let chips = send(
+        &s,
+        &[
+            Intent::Up,
+            Intent::Up,
+            Intent::Up,
+            Intent::Up,
+            Intent::Right,
+        ],
+    );
+    out += &compose_lines(&view_model(&chips));
+
+    out += "-- sending, in slow mode\n";
+    let s = reduce(
+        &s,
+        Event::ChatRoomMode {
+            channel: "grandmaster_k".into(),
+            change: htpc_core::RoomModeChange {
+                slow_secs: Some(30),
+                followers_min: Some(Some(10)),
+                subs_only: Some(false),
+                emote_only: Some(false),
+            },
+        },
+    )
+    .0;
+    let s = send(&s, &[Intent::Menu]);
+    out += &compose_lines(&view_model(&s));
+
+    out += "-- dropped by slow mode\n";
+    let id = s.compose.sending.as_ref().unwrap().id;
+    let s = reduce(
+        &s,
+        Event::ChatDropped {
+            id,
+            problem: htpc_core::SendProblem::Dropped {
+                code: "msg_slowmode".into(),
+                message: "This room is in slow mode and you are sending messages too quickly."
+                    .into(),
+            },
+        },
+    )
+    .0;
+    out += &compose_lines(&view_model(&s));
+
+    out += "-- closed with a draft\n";
+    let s = send(&s, &[Intent::Back]);
+    out += &compose_lines(&view_model(&s));
+
+    out += "-- a sign-in from before chat sending\n";
+    let s = send(&watching(Some(viewer(false))), &[]);
+    out += &compose_lines(&view_model(&s));
+    let s = send(&s, &[Intent::Retry]);
+    out += &compose_lines(&view_model(&s));
     insta::assert_snapshot!(out);
 }

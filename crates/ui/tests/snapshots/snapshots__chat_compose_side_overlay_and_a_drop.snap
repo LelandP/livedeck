@@ -1,0 +1,33 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- signed out
+open=false needs_sign_in=false overlay=false select="Pause" text="" count="0/500" status="" problem=false room="" hint="Sign in to Twitch to chat"
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=0 key="-" keys=
+-- signed in, not writing
+open=false needs_sign_in=false overlay=false select="Pause" text="" count="0/500" status="" problem=false room="" hint="Press X to write in chat"
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=0 key="-" keys=
+-- side panel, typing with shift on
+open=true needs_sign_in=false overlay=false select="Shift" text="GG" count="2/500" status="" problem=false room="" hint=""
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=1 key="shift" keys=A B C D E F G H I J K L M N O P Q R S T U V W X Y Z . , ! ? shift ' " @ # : - delete 123 space emotes send
+-- overlay, the emote page
+open=true needs_sign_in=false overlay=true select="Type" text="GG" count="2/500" status="" problem=false room="" hint=""
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=1 key="FailFish" keys=LUL Kappa PogChamp o7 <3 Kreygasm BibleThump SeemsGood NotLikeThis 4Head VoHiYo HeyGuys WutFace DansGame CoolCat FailFish PJSalt SMOrc MingLee delete abc space 123 send
+-- a quick message focused
+open=true needs_sign_in=false overlay=false select="Send" text="GG" count="2/500" status="" problem=false room="" hint=""
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=1 shift=1 key="-" keys=A B C D E F G H I J K L M N O P Q R S T U V W X Y Z . , ! ? shift ' " @ # : - delete 123 space emotes send
+-- sending, in slow mode
+open=true needs_sign_in=false overlay=false select="Shift" text="GG" count="2/500" status="Sending…" problem=false room="Slow mode 30 s · Followers only (10 min)" hint=""
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=1 key="shift" keys=A B C D E F G H I J K L M N O P Q R S T U V W X Y Z . , ! ? shift ' " @ # : - delete 123 space emotes send
+-- dropped by slow mode
+open=true needs_sign_in=false overlay=false select="Shift" text="GG" count="2/500" status="Slow mode: wait 30 s" problem=true room="Slow mode 30 s · Followers only (10 min)" hint=""
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=1 key="shift" keys=A B C D E F G H I J K L M N O P Q R S T U V W X Y Z . , ! ? shift ' " @ # : - delete 123 space emotes send
+-- closed with a draft
+open=false needs_sign_in=false overlay=false select="Pause" text="GG" count="2/500" status="Slow mode: wait 30 s" problem=true room="Slow mode 30 s · Followers only (10 min)" hint="Press X to write in chat"
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=1 key="-" keys=
+-- a sign-in from before chat sending
+open=false needs_sign_in=false overlay=false select="Pause" text="" count="0/500" status="" problem=false room="" hint="Chat needs a new Twitch sign-in: press X"
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=0 key="-" keys=
+open=true needs_sign_in=true overlay=false select="Sign in again" text="" count="0/500" status="" problem=false room="" hint=""
+  chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=0 key="-" keys=

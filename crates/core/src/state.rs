@@ -2,9 +2,10 @@
 
 use crate::chat::ChatBuffer;
 use crate::domain::{
-    ChatStatus, DeviceCode, FeedId, LoginProblem, PlayerStats, Row, Stream, Tile, User,
+    ChatStatus, DeviceCode, FeedId, LoginProblem, PlayerStats, RoomMode, Row, SendProblem, Stream,
+    Tile, User,
 };
-use crate::keyboard::KeyboardState;
+use crate::keyboard::{Board, KeyboardState, Shift};
 use crate::msg::StreamKind;
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 
@@ -136,10 +137,12 @@ pub enum PlayerMenuRow {
     SleepTimer,
     /// An action row: A opens the subscribe card (see `AppState::subscribe_card`).
     Subscribe,
+    /// An action row: A opens the chat compose panel (see `AppState::compose`). Signed in only.
+    WriteChat,
 }
 
 impl PlayerMenuRow {
-    pub const ALL: [PlayerMenuRow; 8] = [
+    pub const ALL: [PlayerMenuRow; 9] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Hwdec,
         PlayerMenuRow::Latency,
@@ -148,6 +151,7 @@ impl PlayerMenuRow {
         PlayerMenuRow::AudioOnly,
         PlayerMenuRow::SleepTimer,
         PlayerMenuRow::Subscribe,
+        PlayerMenuRow::WriteChat,
     ];
 
     pub fn index(self) -> usize {
@@ -157,7 +161,7 @@ impl PlayerMenuRow {
     /// A runs it, Left and Right do nothing. The other rows are values that A, Left and Right
     /// step through.
     pub fn is_action(self) -> bool {
-        matches!(self, PlayerMenuRow::Subscribe)
+        matches!(self, PlayerMenuRow::Subscribe | PlayerMenuRow::WriteChat)
     }
 
     /// The row above, stopping at the top.
@@ -233,6 +237,62 @@ pub struct RaidOffer {
     pub viewers: u64,
     /// Whole seconds left before following.
     pub seconds_left: u8,
+}
+
+/// The quick messages offered while composing when `config.toml` names none.
+pub const DEFAULT_QUICK_MESSAGES: [&str; 5] = ["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"];
+
+/// The quick messages as `AppState::quick_messages` starts.
+pub fn default_quick_messages() -> Vec<String> {
+    DEFAULT_QUICK_MESSAGES
+        .iter()
+        .map(|m| (*m).to_owned())
+        .collect()
+}
+
+/// A chat message on its way to Twitch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sending {
+    /// The id of its `Command::SendChat`, which the answer carries.
+    pub id: u32,
+    /// What was sent (trimmed). The box is cleared on success only while it still holds this, so
+    /// a quick message, or words typed meanwhile, are not lost.
+    pub text: String,
+}
+
+/// Writing in the chat of the stream on screen: the text, the keyboard and the quick messages.
+/// Signed in only. The text is kept while the panel is closed, until it is sent or the channel
+/// changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compose {
+    /// The panel is open over the stream. It takes the D-pad, A, B, X, Y, Start and the shoulder
+    /// buttons; the video keeps playing.
+    pub open: bool,
+    /// The message so far.
+    pub text: String,
+    /// The chat keyboard (one of `Board::CHAT`) and its cursor.
+    pub keys: KeyboardState,
+    pub shift: Shift,
+    /// Focus is on the quick-message row above the keys, on this one.
+    pub chip: Option<usize>,
+    /// The message waiting for Twitch's answer. One at a time.
+    pub sending: Option<Sending>,
+    /// Why the last message was not posted. Shown above the box until the next edit or send.
+    pub problem: Option<SendProblem>,
+}
+
+impl Default for Compose {
+    fn default() -> Self {
+        Self {
+            open: false,
+            text: String::new(),
+            keys: KeyboardState::on(Board::Letters),
+            shift: Shift::Off,
+            chip: None,
+            sending: None,
+            problem: None,
+        }
+    }
 }
 
 /// A "<channel> is live" popup. It only informs: no button acts on it, and the app removes it
@@ -477,6 +537,14 @@ pub struct AppState {
     pub raid: Option<RaidOffer>,
     /// The id of the last raid offer, kept so ids never repeat.
     pub last_raid_id: u32,
+    /// Writing in chat on the Player screen.
+    pub compose: Compose,
+    /// The id of the last chat message sent, kept so ids never repeat.
+    pub last_send_id: u32,
+    /// The chat room's rules (slow mode, followers only, ...) of the channel on screen.
+    pub room_mode: RoomMode,
+    /// The ready-made messages offered while composing (`quick_messages` in `config.toml`).
+    pub quick_messages: Vec<String>,
 }
 
 /// The Twitch page to subscribe to `channel`. The channel is a Twitch login (letters, digits and
@@ -488,6 +556,16 @@ pub fn subscribe_url(channel: &str) -> String {
 impl AppState {
     pub fn is_signed_in(&self) -> bool {
         self.user.is_some()
+    }
+
+    /// Signed in with a token that may write in chat.
+    pub fn can_chat(&self) -> bool {
+        self.user.as_ref().is_some_and(|u| u.can_chat)
+    }
+
+    /// The compose panel is open over the stream on screen.
+    pub fn composing(&self) -> bool {
+        self.screen == Screen::Player && self.compose.open
     }
 
     /// The app should be watching for followed channels going live: signed in, with the

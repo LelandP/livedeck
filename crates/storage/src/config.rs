@@ -6,6 +6,7 @@
 //! live_notifications = true   # a popup when a followed channel goes live
 //! background_play = false     # keep playing while another app has focus
 //! image_cache_max_mb = 256
+//! quick_messages = ["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"]   # chips while writing in chat
 //! # client_id = "..."         # public Twitch client ID (TWITCH_CLIENT_ID overrides it)
 //! ```
 //!
@@ -16,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use htpc_core::{ChatLayout, Quality, Settings};
+use htpc_core::{default_quick_messages, ChatLayout, Quality, Settings, CHAT_MAX};
 use serde::{Deserialize, Serialize};
 
 use crate::fs_util::{self, Access};
@@ -34,6 +35,8 @@ pub struct Config {
     pub client_id: Option<String>,
     /// Image cache size cap in MiB.
     pub image_cache_max_mb: u64,
+    /// The ready-made chat messages offered while writing in chat. Edited in the file only.
+    pub quick_messages: Vec<String>,
 }
 
 impl Default for Config {
@@ -42,6 +45,7 @@ impl Default for Config {
             settings: Settings::default(),
             client_id: None,
             image_cache_max_mb: DEFAULT_IMAGE_CACHE_MB,
+            quick_messages: default_quick_messages(),
         }
     }
 }
@@ -72,6 +76,7 @@ struct ConfigFile {
     live_notifications: Option<bool>,
     background_play: Option<bool>,
     image_cache_max_mb: Option<u64>,
+    quick_messages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_id: Option<String>,
 }
@@ -109,6 +114,17 @@ impl From<ConfigFile> for Config {
                 .image_cache_max_mb
                 .unwrap_or(DEFAULT_IMAGE_CACHE_MB)
                 .max(MIN_IMAGE_CACHE_MB),
+            // An empty list is kept: no quick messages. Blank entries are dropped and the rest
+            // cut to what Twitch takes.
+            quick_messages: f
+                .quick_messages
+                .map_or_else(default_quick_messages, |list| {
+                    list.iter()
+                        .map(|m| m.trim())
+                        .filter(|m| !m.is_empty())
+                        .map(|m| m.chars().take(CHAT_MAX).collect())
+                        .collect()
+                }),
         }
     }
 }
@@ -121,6 +137,7 @@ impl From<&Config> for ConfigFile {
             live_notifications: Some(c.settings.live_notifications),
             background_play: Some(c.settings.background_play),
             image_cache_max_mb: Some(c.image_cache_max_mb),
+            quick_messages: Some(c.quick_messages.clone()),
             client_id: c.client_id.clone(),
         }
     }

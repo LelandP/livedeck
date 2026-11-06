@@ -264,6 +264,11 @@ impl Driver<'_> {
                         return Flow::Gone;
                     }
                 }
+                Mapped::RoomMode(change) => {
+                    if !self.out.send(ChatEvent::RoomMode(change)) {
+                        return Flow::Gone;
+                    }
+                }
             }
         }
         Flow::Continue

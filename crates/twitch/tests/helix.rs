@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use htpc_twitch_api::{Credentials, HelixClient, PageRequest, RetryPolicy, TwitchApi};
-use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
+use wiremock::matchers::{body_json, header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn fixture(name: &str) -> serde_json::Value {
@@ -264,6 +264,86 @@ async fn streams_by_login_asks_for_every_login_in_one_request() {
     assert_eq!(streams[0].user_login, "brickby");
     // Nobody to look up: no request at all (`expect(1)` above).
     assert!(api.streams_by_login(&[]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn send_chat_posts_the_message_and_reads_that_it_was_sent() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/messages"))
+        .and(header("Client-Id", "test-client"))
+        .and(header("Authorization", "Bearer test-token"))
+        .and(body_json(serde_json::json!({
+            "broadcaster_id": "12826",
+            "sender_id": "141981764",
+            "message": "GG o7",
+        })))
+        .respond_with(ok("chat_sent.json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let outcome = client(&server)
+        .send_chat("12826", "141981764", "GG o7")
+        .await
+        .unwrap();
+    assert!(outcome.sent);
+    assert_eq!(outcome.message_id, "abc-123-def");
+    assert_eq!(outcome.drop_reason, None);
+}
+
+#[tokio::test]
+async fn send_chat_reads_why_a_message_was_dropped() {
+    let cases = fixture("chat_dropped.json")["cases"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let want = [
+        "msg_followersonly",
+        "msg_subsonly",
+        "msg_slowmode",
+        "msg_rejected",
+        "msg_banned",
+    ];
+    assert_eq!(cases.len(), want.len());
+    for (case, code) in cases.into_iter().zip(want) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(case))
+            .mount(&server)
+            .await;
+        let outcome = client(&server).send_chat("1", "2", "hi").await.unwrap();
+        assert!(!outcome.sent, "{code}");
+        let reason = outcome.drop_reason.expect("a reason");
+        assert_eq!(reason.code, code);
+        assert!(!reason.message.is_empty(), "{code}");
+    }
+}
+
+#[tokio::test]
+async fn send_chat_is_never_repeated_after_a_server_error() {
+    // The message may have been posted before the server failed: a retry could post it twice.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/messages"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let err = client(&server).send_chat("1", "2", "hi").await.unwrap_err();
+    assert!(
+        matches!(err, htpc_twitch_api::Error::Server { status: 503, .. }),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn send_chat_needs_credentials() {
+    let server = MockServer::start().await;
+    let anonymous = HelixClient::with_base_url(server.uri(), None, policy()).unwrap();
+    let err = anonymous.send_chat("1", "2", "hi").await.unwrap_err();
+    assert!(matches!(err, htpc_twitch_api::Error::NotSignedIn));
 }
 
 #[tokio::test]

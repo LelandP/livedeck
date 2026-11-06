@@ -4,19 +4,21 @@
 
 use std::collections::HashSet;
 use std::future::Future;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{
     grid_rows, Category, Channel, Command, Event, FeedId, PageOutcome, Paging, Rgb, Row, RowKind,
-    Stream, Tile,
+    SendProblem, Stream, Tile,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
-    ChannelResult, FollowedChannel, Game, Page, PageRequest, StreamInfo, TwitchApi,
+    ChannelResult, DropReason, FollowedChannel, Game, Page, PageRequest, StreamInfo, TwitchApi,
 };
 use htpc_ui::Thumbnail;
 use tokio::sync::OnceCell;
 
+use crate::chat_limit::SendLimit;
 use crate::session::Viewer;
 
 /// Cards fetched per page of a Home row.
@@ -63,6 +65,8 @@ pub struct ApiProvider<A> {
     account: Option<Viewer>,
     /// Thumbnail source. `None` (mock mode, or the cache folder is unusable) means tints only.
     images: Option<ImageCache>,
+    /// Keeps chat messages within Twitch's rate limit.
+    send_limit: Mutex<SendLimit>,
 }
 
 impl<A: TwitchApi> ApiProvider<A> {
@@ -72,6 +76,7 @@ impl<A: TwitchApi> ApiProvider<A> {
             viewer: OnceCell::new(),
             account: None,
             images: None,
+            send_limit: Mutex::new(SendLimit::default()),
         }
     }
 
@@ -437,6 +442,56 @@ impl<A: TwitchApi> ApiProvider<A> {
         }
     }
 
+    /// Writes `text` in `channel`'s chat as the signed-in user, within the app's own rate limit.
+    async fn send_chat(
+        &self,
+        channel: &str,
+        broadcaster_id: &str,
+        text: &str,
+    ) -> Result<(), SendProblem> {
+        let allowed = self
+            .send_limit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_take(Instant::now());
+        if !allowed {
+            tracing::info!("chat message held back: the rate limit is reached");
+            return Err(SendProblem::TooFast);
+        }
+        let Some(sender) = self.viewer_id().await else {
+            return Err(SendProblem::Failed("Not signed in".to_owned()));
+        };
+        // Cards made from a login only carry no user id. Signed in, `FetchStreamInfo` usually
+        // has filled it by now; if not, it is looked up here.
+        let broadcaster = if broadcaster_id.is_empty() {
+            match self.api.user(Some(channel)).await {
+                Ok(Some(user)) => user.id,
+                Ok(None) => return Err(SendProblem::Failed("Channel not found".to_owned())),
+                Err(err) => return Err(SendProblem::Failed(err.to_string())),
+            }
+        } else {
+            broadcaster_id.to_owned()
+        };
+        match self.api.send_chat(&broadcaster, &sender, text).await {
+            Ok(outcome) if outcome.sent => Ok(()),
+            Ok(outcome) => {
+                let reason = outcome.drop_reason.unwrap_or(DropReason {
+                    code: String::new(),
+                    message: String::new(),
+                });
+                tracing::info!(code = %reason.code, message = %reason.message, "chat message dropped");
+                Err(SendProblem::Dropped {
+                    code: reason.code,
+                    message: reason.message,
+                })
+            }
+            Err(err) => {
+                tracing::warn!(%err, channel, "could not send the chat message");
+                Err(SendProblem::Failed(err.to_string()))
+            }
+        }
+    }
+
     /// One more page of a row. `IntegrityRequired` is the anonymous GQL API's answer to every
     /// page after the first, so it ends the row instead of failing it.
     async fn load_more(&self, feed: FeedId, kind: RowKind, cursor: String) -> Event {
@@ -531,6 +586,17 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             Command::FetchStreamInfo { channel } => {
                 self.stream_info(&channel).await.into_iter().collect()
             }
+            Command::SendChat {
+                id,
+                channel,
+                broadcaster_id,
+                text,
+            } => vec![
+                match self.send_chat(&channel, &broadcaster_id, &text).await {
+                    Ok(()) => Event::ChatSent { id },
+                    Err(problem) => Event::ChatDropped { id, problem },
+                },
+            ],
             // Playback commands run in `playback.rs`, chat in `chat.rs`, the login ones in
             // `session.rs`, the sleep timer in `sleep.rs`, raids in `raids.rs`, and thumbnails
             // and chat images are delivered through `Provider::thumbnail`, so none of them
@@ -1412,5 +1478,106 @@ mod tests {
         assert!(s.title.is_empty() && s.viewers == 0);
         // Nobody by that name: nothing to report.
         assert!(provider.execute(fetch_info("nobody")).await.is_empty());
+    }
+
+    fn send(id: u32, broadcaster_id: &str, text: &str) -> Command {
+        Command::SendChat {
+            id,
+            channel: "sable".into(),
+            broadcaster_id: broadcaster_id.into(),
+            text: text.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_chat_posts_as_the_signed_in_user() {
+        let api = fake_api();
+        let sent = std::sync::Arc::clone(&api.chat_sent);
+        let provider = ApiProvider::new(api);
+        let events = provider.execute(send(7, "id-sable", "gg")).await;
+        assert_eq!(events, [Event::ChatSent { id: 7 }]);
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [("id-sable".to_owned(), "gg".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_broadcaster_id_is_looked_up_first() {
+        let mut api = fake_api();
+        api.users = vec![htpc_twitch_api::UserInfo {
+            id: "777".into(),
+            login: "sable".into(),
+            display_name: "Sable".into(),
+            profile_image_url: String::new(),
+        }];
+        let sent = std::sync::Arc::clone(&api.chat_sent);
+        let provider = ApiProvider::new(api);
+        let events = provider.execute(send(1, "", "hi")).await;
+        assert_eq!(events, [Event::ChatSent { id: 1 }]);
+        assert_eq!(sent.lock().unwrap()[0].0, "777");
+    }
+
+    #[tokio::test]
+    async fn a_dropped_message_carries_twitchs_reason() {
+        let mut api = fake_api();
+        api.chat_drop = Some(htpc_twitch_api::DropReason {
+            code: "msg_followersonly".into(),
+            message: "This room is in followers-only mode.".into(),
+        });
+        let provider = ApiProvider::new(api);
+        let events = provider.execute(send(3, "id-sable", "hello")).await;
+        assert_eq!(
+            events,
+            [Event::ChatDropped {
+                id: 3,
+                problem: SendProblem::Dropped {
+                    code: "msg_followersonly".into(),
+                    message: "This room is in followers-only mode.".into(),
+                },
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_twenty_first_message_in_thirty_seconds_is_held_back() {
+        let api = fake_api();
+        let sent = std::sync::Arc::clone(&api.chat_sent);
+        let provider = ApiProvider::new(api);
+        for id in 0..20 {
+            let events = provider.execute(send(id, "id-sable", "LUL")).await;
+            assert_eq!(events, [Event::ChatSent { id }]);
+        }
+        let events = provider.execute(send(20, "id-sable", "LUL")).await;
+        assert_eq!(
+            events,
+            [Event::ChatDropped {
+                id: 20,
+                problem: SendProblem::TooFast,
+            }]
+        );
+        assert_eq!(sent.lock().unwrap().len(), 20, "the 21st never left");
+    }
+
+    #[tokio::test]
+    async fn sending_signed_out_fails_without_a_request() {
+        let api = FakeApi {
+            me: None,
+            ..fake_api()
+        };
+        let sent = std::sync::Arc::clone(&api.chat_sent);
+        let provider = ApiProvider::new(api);
+        let events = provider.execute(send(1, "id-sable", "hi")).await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Event::ChatDropped {
+                    id: 1,
+                    problem: SendProblem::Failed(_)
+                }]
+            ),
+            "{events:?}"
+        );
+        assert!(sent.lock().unwrap().is_empty());
     }
 }

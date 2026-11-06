@@ -11,6 +11,7 @@
 mod awake;
 mod browser;
 mod chat;
+mod chat_limit;
 mod live_watch;
 mod mock;
 mod playback;
@@ -82,9 +83,11 @@ PLAYBACK:
   Video needs a build with `--features mpv` and libmpv installed.
 
 CHAT:
-  Chat is anonymous and read-only, over IRC on a WebSocket (irc-ws.chat.twitch.tv), so it
-  works signed out. Y shows or hides it. chat_layout in config.toml is `side` (a panel the
-  video shrinks for) or `overlay` (lines over the video).
+  Chat is read anonymously, over IRC on a WebSocket (irc-ws.chat.twitch.tv), so it works
+  signed out. Y shows or hides it. chat_layout in config.toml is `side` (a panel the video
+  shrinks for) or `overlay` (lines over the video). Signed in, X (or Write in chat in the
+  player menu) writes in chat with the on-screen keyboard, through Helix (user:write:chat).
+  quick_messages in config.toml lists the ready-made messages offered there.
 
 RAIDS:
   Signed in, the channel on screen is watched for raids over Twitch EventSub
@@ -92,7 +95,7 @@ RAIDS:
 
 CONFIG:
   config.toml (chat_layout, quality, live_notifications, background_play, image_cache_max_mb,
-  client_id) is
+  quick_messages, client_id) is
   created with defaults on the first run in the platform config folder
   (Linux: ~/.config/livedeck, Windows: %APPDATA%\\livedeck\\config).
 
@@ -431,6 +434,8 @@ struct Wiring {
     power: Arc<dyn Suspend>,
     /// Opens the EventSub connection that watches for raids. A fake that never raids in `--mock`.
     raid_connect: raids::Connect,
+    /// The ready-made chat messages from `config.toml`.
+    quick_messages: Vec<String>,
 }
 
 /// The real raid watch: EventSub with the session's token.
@@ -468,6 +473,7 @@ fn run_app<P: Provider, R: StreamResolver>(
         fullscreen,
         power,
         raid_connect,
+        quick_messages,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -498,6 +504,7 @@ fn run_app<P: Provider, R: StreamResolver>(
 
     let (mut state, mut startup) = htpc_core::init();
     state.settings = settings;
+    state.quick_messages = quick_messages;
     state.can_open_browser = browser::can_open_browser();
     // The account is in place before the first load, so Home already has its Followed row. A
     // token from the environment wins over a stored login.
@@ -577,6 +584,7 @@ fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
             UiAction::ToggleChat => Intent::ToggleChat,
             UiAction::Menu => Intent::Menu,
             UiAction::Retry => Intent::Retry,
+            UiAction::PageRight => Intent::PageRight,
         };
         send(&t, intent);
     });
@@ -691,6 +699,7 @@ fn main() -> Result<()> {
                 Some(Box::new(htpc_twitch_api::FakeEventSub::new())
                     as Box<dyn htpc_twitch_api::RaidWatch>)
             }),
+            quick_messages: config.quick_messages,
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -735,6 +744,7 @@ fn main() -> Result<()> {
         fullscreen,
         power: Arc::new(power::SystemSuspend),
         raid_connect,
+        quick_messages: config.quick_messages,
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

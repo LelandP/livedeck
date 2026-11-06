@@ -68,6 +68,7 @@ fn signed_in(s: AppState) -> (AppState, Vec<Command>) {
         &s,
         Event::SignedIn(User {
             login: "nightowl_dev".into(),
+            can_chat: true,
         }),
     )
 }

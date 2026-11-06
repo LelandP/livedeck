@@ -18,6 +18,7 @@ fn stream(channel: &str, user_id: &str) -> Tile {
 fn user() -> User {
     User {
         login: "viewer".into(),
+        can_chat: true,
     }
 }
 

@@ -5,12 +5,15 @@
 
 use std::collections::HashSet;
 
-use crate::domain::{grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RowKind, Stream, Tile};
+use crate::domain::{
+    grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RoomMode, RowKind, Stream, Tile,
+};
 use crate::keyboard::{self, Key};
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 use crate::state::{
-    subscribe_url, AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RaidOffer, RailEntry,
-    Screen, SearchState, SettingsRow, SleepTimer, Toast, RAID_SECONDS, TOASTS_KEPT,
+    default_quick_messages, subscribe_url, AppState, CategoryFeed, Compose, Feed, Playback,
+    PlayerMenuRow, RaidOffer, RailEntry, Screen, SearchState, Sending, SettingsRow, SleepTimer,
+    Toast, RAID_SECONDS, TOASTS_KEPT,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -23,6 +26,7 @@ pub const PREFETCH_ROWS: usize = 1;
 pub fn init() -> (AppState, Vec<Command>) {
     let state = AppState {
         home: Feed::loading(),
+        quick_messages: default_quick_messages(),
         ..AppState::default()
     };
     (state, vec![Command::LoadFeed { feed: FeedId::Home }])
@@ -67,14 +71,14 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     }
 }
 
-/// What a physical keyboard's typing means here. Only the Search keyboard takes text (while it
-/// has focus and nothing is in front of it). Everywhere else `y` and `r` stay the chat and retry
-/// shortcuts, Backspace is Back, and other characters do nothing.
+/// What a physical keyboard's typing means here. Only the Search keyboard and the chat compose
+/// panel take text (while they have focus and nothing is in front of them). Everywhere else `y`
+/// and `r` stay the chat and retry shortcuts, Backspace is Back, and other characters do nothing.
 fn typed_key(s: &AppState, intent: Intent) -> Option<Intent> {
-    let typing = s.screen == Screen::Search
-        && !s.rail.focused
-        && !s.exit_prompt
-        && !s.sleep.is_some_and(|t| t.warning);
+    let in_front = s.exit_prompt || s.sleep.is_some_and(|t| t.warning);
+    let searching = s.screen == Screen::Search && !s.rail.focused;
+    let composing = s.composing() && s.can_chat() && s.raid.is_none() && !s.subscribe_card;
+    let typing = (searching || composing) && !in_front;
     match intent {
         Intent::Text(_) | Intent::Erase if typing => Some(intent),
         Intent::Text('y' | 'Y') => Some(Intent::ToggleChat),
@@ -226,6 +230,10 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         subscribe_card_intent(s, intent, cmds);
         return;
     }
+    if s.compose.open {
+        compose_intent(s, intent, cmds);
+        return;
+    }
     if let Some(row) = s.player_menu {
         player_menu_intent(s, row, intent, cmds);
         return;
@@ -247,16 +255,181 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             Playback::Playing => toggle_pause(s, cmds),
             Playback::Idle | Playback::Loading => {}
         },
+        // X tries a failed or ended stream again. Otherwise, with chat shown, it writes in chat.
         Intent::Retry => {
             if matches!(s.playback, Playback::Failed(_) | Playback::Offline) {
                 start_playback(s, cmds);
+            } else if s.chat_open {
+                open_compose(s);
             }
         }
         // Any other button only brings the HUD back.
         Intent::Up | Intent::Down | Intent::Left | Intent::Right => pulse_hud(s),
         // Typing never reaches the player (see `typed_key`).
-        Intent::Pick { .. } | Intent::RailPick(_) | Intent::Text(_) | Intent::Erase => {}
+        Intent::Pick { .. }
+        | Intent::RailPick(_)
+        | Intent::Text(_)
+        | Intent::Erase
+        | Intent::PageLeft
+        | Intent::PageRight => {}
     }
+}
+
+/// Opens the compose panel (and chat with it: the box is at the bottom of the chat). Signed out
+/// there is nothing to open: the chat panel says to sign in. A token without the chat scope
+/// opens it too, on the "sign in again" message.
+fn open_compose(s: &mut AppState) {
+    if !s.is_signed_in() || s.now_playing.is_none() {
+        return;
+    }
+    s.player_menu = None;
+    s.compose.open = true;
+    s.chat_open = true;
+    pulse_hud(s);
+}
+
+/// Input while the compose panel is open. The keyboard has the D-pad and A; Up from its top row
+/// goes to the quick messages, where A sends one at once. X deletes, Y types a space, Start sends,
+/// LB and RB change the page, and B closes the panel (the text stays for later).
+///
+/// With a token that may not chat, the panel only says so: A signs in again, B closes it.
+fn compose_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    if !s.can_chat() {
+        match intent {
+            Intent::Select => {
+                s.compose.open = false;
+                open_login(s, Some(Screen::Player), cmds);
+            }
+            Intent::Back => s.compose.open = false,
+            _ => {}
+        }
+        return;
+    }
+    if let Some(chip) = s.compose.chip {
+        match intent {
+            Intent::Left => s.compose.chip = Some(chip.saturating_sub(1)),
+            Intent::Right => {
+                let last = s.quick_messages.len().saturating_sub(1);
+                s.compose.chip = Some((chip + 1).min(last));
+            }
+            Intent::Down => s.compose.chip = None,
+            Intent::Select => {
+                if let Some(text) = s.quick_messages.get(chip).cloned() {
+                    send_chat(s, text, cmds);
+                }
+            }
+            Intent::Up | Intent::Pick { .. } | Intent::RailPick(_) => {}
+            other => compose_common(s, other, cmds),
+        }
+        return;
+    }
+    match intent {
+        Intent::Up => {
+            if !s.compose.keys.up() && !s.quick_messages.is_empty() {
+                s.compose.chip = Some(0);
+            }
+        }
+        Intent::Down => {
+            s.compose.keys.down();
+        }
+        Intent::Left => {
+            s.compose.keys.left();
+        }
+        Intent::Right => {
+            s.compose.keys.right();
+        }
+        Intent::Select => press_compose_key(s, cmds),
+        Intent::Pick { .. } | Intent::RailPick(_) => {}
+        other => compose_common(s, other, cmds),
+    }
+}
+
+/// The buttons that do the same on the keys and on the quick messages.
+fn compose_common(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    match intent {
+        Intent::Retry | Intent::Erase => edit_compose(s, keyboard::backspace),
+        Intent::ToggleChat => edit_compose(s, |t| keyboard::chat_type(t, ' ')),
+        Intent::Menu => {
+            let text = s.compose.text.clone();
+            send_chat(s, text, cmds);
+        }
+        Intent::Back => s.compose.open = false,
+        Intent::PageLeft | Intent::PageRight => {
+            let board = s.compose.keys.board().cycled(intent == Intent::PageRight);
+            s.compose.keys.set_board(board);
+        }
+        Intent::Text(c) => edit_compose(s, |t| keyboard::chat_type(t, c)),
+        Intent::Up
+        | Intent::Down
+        | Intent::Left
+        | Intent::Right
+        | Intent::Select
+        | Intent::Pick { .. }
+        | Intent::RailPick(_) => {}
+    }
+}
+
+/// A on the focused key of the chat keyboard.
+fn press_compose_key(s: &mut AppState, cmds: &mut Vec<Command>) {
+    match s.compose.keys.key() {
+        Key::Char(c) => {
+            let shift = s.compose.shift;
+            let typed = shift.apply(c);
+            if c.is_ascii_alphabetic() {
+                s.compose.shift = shift.after_letter();
+            }
+            edit_compose(s, |t| keyboard::chat_type(t, typed));
+        }
+        Key::Emote(code) => edit_compose(s, |t| keyboard::chat_type_word(t, code)),
+        Key::Space => edit_compose(s, |t| keyboard::chat_type(t, ' ')),
+        Key::Backspace => edit_compose(s, keyboard::backspace),
+        Key::Clear => edit_compose(s, |t| {
+            let had = !t.is_empty();
+            t.clear();
+            had
+        }),
+        Key::Shift => s.compose.shift = s.compose.shift.pressed(),
+        Key::Page(board) => s.compose.keys.set_board(board),
+        Key::Send | Key::Done => {
+            let text = s.compose.text.clone();
+            send_chat(s, text, cmds);
+        }
+    }
+}
+
+/// Applies `edit` to the message. A change clears the reason the last one was dropped.
+fn edit_compose(s: &mut AppState, edit: impl FnOnce(&mut String) -> bool) {
+    if edit(&mut s.compose.text) {
+        s.compose.problem = None;
+    }
+}
+
+/// Sends `text` (trimmed) to the chat on screen, unless it is empty or a message is still on its
+/// way. The box is cleared once Twitch has posted it (`Event::ChatSent`).
+fn send_chat(s: &mut AppState, text: String, cmds: &mut Vec<Command>) {
+    let text = text.trim().to_owned();
+    if text.is_empty() || s.compose.sending.is_some() {
+        return;
+    }
+    let Some(stream) = &s.now_playing else {
+        return;
+    };
+    s.last_send_id = s.last_send_id.wrapping_add(1);
+    let id = s.last_send_id;
+    cmds.push(Command::SendChat {
+        id,
+        channel: stream.channel.clone(),
+        broadcaster_id: stream.user_id.clone(),
+        text: text.clone(),
+    });
+    s.compose.sending = Some(Sending { id, text });
+    s.compose.problem = None;
+}
+
+/// The channel on screen changed or was left: what was being written belongs to the old one.
+fn reset_chat_room(s: &mut AppState) {
+    s.compose = Compose::default();
+    s.room_mode = RoomMode::default();
 }
 
 /// Input while the player menu is open. Up and Down pick a row, Left and Right (and A) change its
@@ -272,6 +445,8 @@ fn player_menu_intent(
         Intent::Up => s.player_menu = Some(row.prev()),
         Intent::Down => s.player_menu = Some(row.next()),
         Intent::Select if row == PlayerMenuRow::Subscribe => s.subscribe_card = true,
+        // Signed out the row only says to sign in.
+        Intent::Select if row == PlayerMenuRow::WriteChat => open_compose(s),
         // Action rows have no value to step through.
         Intent::Right | Intent::Left if row.is_action() => {}
         Intent::Right | Intent::Select => change_player_option(s, row, true, cmds),
@@ -282,7 +457,9 @@ fn player_menu_intent(
         | Intent::Pick { .. }
         | Intent::RailPick(_)
         | Intent::Text(_)
-        | Intent::Erase => {}
+        | Intent::Erase
+        | Intent::PageLeft
+        | Intent::PageRight => {}
     }
     pulse_hud(s);
 }
@@ -339,8 +516,8 @@ fn change_player_option(
                 }
             }
         }
-        // An action row, handled in `player_menu_intent`.
-        PlayerMenuRow::Subscribe => {}
+        // Action rows, handled in `player_menu_intent`.
+        PlayerMenuRow::Subscribe | PlayerMenuRow::WriteChat => {}
     }
 }
 
@@ -443,6 +620,7 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.subscribe_card = false;
     s.chat.clear();
     s.chat_status = ChatStatus::Connecting;
+    reset_chat_room(s);
     // The old channel's subscription. The new one follows once its user id is known.
     if s.is_signed_in() {
         cmds.push(Command::StopRaids);
@@ -715,6 +893,8 @@ fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
                 had
             }),
             Key::Done => search_done(s, cmds),
+            // Chat keys: never on the Search board.
+            Key::Shift | Key::Page(_) | Key::Emote(_) | Key::Send => {}
         },
         Intent::Retry => edit_search(s, cmds, keyboard::backspace),
         Intent::ToggleChat => edit_search(s, cmds, |q| keyboard::type_char(q, ' ')),
@@ -722,7 +902,8 @@ fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Intent::Back | Intent::Erase if s.search.query.is_empty() => s.exit_prompt = true,
         Intent::Back | Intent::Erase => edit_search(s, cmds, keyboard::backspace),
         Intent::Text(c) => type_on_search(s, c, cmds),
-        Intent::Pick { .. } | Intent::RailPick(_) => {}
+        // Search has one page of keys.
+        Intent::Pick { .. } | Intent::RailPick(_) | Intent::PageLeft | Intent::PageRight => {}
     }
 }
 
@@ -981,6 +1162,13 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 match s.after_login.take() {
                     Some(Screen::Following) => open_following(s, cmds),
                     Some(Screen::Search) => open_root(s, Screen::Search, cmds),
+                    // Signed in again for chat: back on the stream, ready to write.
+                    Some(Screen::Player) => {
+                        pop_screen(s);
+                        if s.screen == Screen::Player && s.can_chat() {
+                            open_compose(s);
+                        }
+                    }
                     _ => pop_screen(s),
                 }
             }
@@ -994,6 +1182,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             // Raids need the account's token.
             s.raid = None;
             cmds.push(Command::DisconnectRaids);
+            // So does writing in chat. The room's rules still apply to what is on screen.
+            s.compose = Compose::default();
             // The results came from the account. The id carries on, so a late answer to an
             // old search can never pass for a new one.
             s.search = SearchState {
@@ -1052,6 +1242,26 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::StreamInfo(info) => stream_info(s, info, cmds),
+        Event::ChatSent { id } => {
+            if let Some(sent) = s.compose.sending.take_if(|m| m.id == id) {
+                // Words typed (or a quick message sent) meanwhile are not thrown away.
+                if s.compose.text.trim() == sent.text {
+                    s.compose.text.clear();
+                    s.compose.shift = keyboard::Shift::Off;
+                }
+            }
+        }
+        Event::ChatDropped { id, problem } => {
+            if s.compose.sending.take_if(|m| m.id == id).is_some() {
+                // The text stays, to try again once the reason has passed.
+                s.compose.problem = Some(problem);
+            }
+        }
+        Event::ChatRoomMode { channel, change } => {
+            if watching(s, &channel) {
+                s.room_mode.apply(change);
+            }
+        }
         Event::WentLive(streams) => went_live(s, streams, cmds),
         Event::ToastExpired(id) => s.toasts.retain(|t| t.id != id),
         Event::SleepTimerTick { id, left_min } => {
@@ -1309,6 +1519,7 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.rail.focused = false;
     s.chat.clear();
     s.chat_status = ChatStatus::Connecting;
+    reset_chat_room(s);
     cmds.push(Command::JoinChat {
         channel: stream.channel.clone(),
     });
@@ -1388,6 +1599,7 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
             s.background_paused = false;
             s.chat.clear();
             s.chat_status = ChatStatus::Idle;
+            reset_chat_room(s);
             // The menu's choices stay for the next stream. Its numbers do not.
             s.player_menu = None;
             s.subscribe_card = false;

@@ -170,6 +170,7 @@ async fn a_login_shows_the_code_then_signs_in_when_approved() {
     assert_eq!(events[0], Event::DeviceCodeIssued(code));
     let user = User {
         login: "nightowl_dev".into(),
+        can_chat: true,
     };
     assert_eq!(events[1], Event::SignedIn(user));
     assert_eq!(h.polls(), 2);
@@ -312,6 +313,37 @@ async fn a_stored_login_is_restored_without_the_network() {
     assert_eq!(h.last_applied().as_deref(), Some("old-access"));
     assert_eq!(h.viewer.lock().unwrap().as_deref(), Some("1000"));
     assert!(h.auth.calls().is_empty(), "no request at startup");
+}
+
+#[tokio::test]
+async fn a_token_from_before_chat_sending_cannot_chat_and_a_new_login_can() {
+    // `stored` was granted `user:read:follows` only, like every sign-in before chat sending.
+    let old = stored(Some("1000"), Some("r"), Some(now_secs() + 3600));
+    let h = restarted(&old, FakeAuth::new());
+    let user = h.session.restore().expect("restored");
+    assert!(!user.can_chat, "needs a new sign-in for chat");
+
+    let mut chatty = old.clone();
+    chatty.scopes.push("user:write:chat".into());
+    let h = restarted(&chatty, FakeAuth::new());
+    assert!(h.session.restore().expect("restored").can_chat);
+}
+
+#[tokio::test]
+async fn a_login_asks_for_every_scope_and_can_chat() {
+    let auth = FakeAuth::new()
+        .with_grant(grant(Duration::from_secs(30)))
+        .then_poll(Ok(PollOutcome::Granted(FakeAuth::token("a"))));
+    let h = harness(auth);
+    h.session.start_login();
+    h.wait("sign-in", signed_in).await;
+    let user = h.events().into_iter().find_map(|e| match e {
+        Event::SignedIn(u) => Some(u),
+        _ => None,
+    });
+    assert!(user.expect("signed in").can_chat);
+    let kept = h.store.load().unwrap().unwrap();
+    assert!(kept.scopes.iter().any(|s| s == "user:write:chat"));
 }
 
 #[tokio::test]

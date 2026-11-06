@@ -23,6 +23,8 @@ pub fn map_key(text: &str) -> Option<Intent> {
         c if c == char::from(Key::Escape) => Intent::Back,
         c if c == char::from(Key::Backspace) => Intent::Erase,
         c if c == char::from(Key::Menu) => Intent::Menu,
+        c if c == char::from(Key::PageUp) => Intent::PageLeft,
+        c if c == char::from(Key::PageDown) => Intent::PageRight,
         c if is_printable(c) => Intent::Text(c),
         _ => return None,
     };
@@ -59,6 +61,8 @@ mod tests {
         assert_eq!(map_key(&key(Key::Escape)), Some(Intent::Back));
         assert_eq!(map_key(&key(Key::Backspace)), Some(Intent::Erase));
         assert_eq!(map_key(&key(Key::Menu)), Some(Intent::Menu));
+        assert_eq!(map_key(&key(Key::PageUp)), Some(Intent::PageLeft));
+        assert_eq!(map_key(&key(Key::PageDown)), Some(Intent::PageRight));
     }
 
     #[test]

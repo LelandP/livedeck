@@ -102,6 +102,31 @@ pub struct ChannelResult {
     pub thumbnail_url: String,
 }
 
+/// The answer to `POST /chat/messages`: whether Twitch posted the message, and if not, why.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SendOutcome {
+    /// Empty when the message was dropped.
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(rename = "is_sent")]
+    pub sent: bool,
+    /// Why Twitch dropped the message (followers-only, slow mode, AutoMod, banned, ...).
+    #[serde(default)]
+    pub drop_reason: Option<DropReason>,
+}
+
+/// Why Twitch did not post a chat message.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DropReason {
+    /// A machine-readable code, the same as the IRC NOTICE `msg-id` (`msg_slowmode`,
+    /// `msg_followersonly`, ...).
+    #[serde(default)]
+    pub code: String,
+    /// Twitch's own sentence for the user.
+    #[serde(default)]
+    pub message: String,
+}
+
 /// A Twitch user (`GET /users`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UserInfo {

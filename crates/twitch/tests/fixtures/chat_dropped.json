@@ -1,0 +1,65 @@
+{
+  "_comment": "Drop answers of POST /chat/messages, one per kind, shaped like Twitch's API reference. Not captured live yet: the spike in plan/00-spikes.md replaces them with real samples.",
+  "cases": [
+    {
+      "data": [
+        {
+          "message_id": "",
+          "is_sent": false,
+          "drop_reason": {
+            "code": "msg_followersonly",
+            "message": "This room is in 10 minutes followers-only mode. Follow chan to join the community!"
+          }
+        }
+      ]
+    },
+    {
+      "data": [
+        {
+          "message_id": "",
+          "is_sent": false,
+          "drop_reason": {
+            "code": "msg_subsonly",
+            "message": "This room is in subscribers only mode. To talk, purchase a channel subscription."
+          }
+        }
+      ]
+    },
+    {
+      "data": [
+        {
+          "message_id": "",
+          "is_sent": false,
+          "drop_reason": {
+            "code": "msg_slowmode",
+            "message": "This room is in slow mode and you are sending messages too quickly. You will be able to talk again in 30 seconds."
+          }
+        }
+      ]
+    },
+    {
+      "data": [
+        {
+          "message_id": "",
+          "is_sent": false,
+          "drop_reason": {
+            "code": "msg_rejected",
+            "message": "Your message is being checked by mods and has not been sent."
+          }
+        }
+      ]
+    },
+    {
+      "data": [
+        {
+          "message_id": "",
+          "is_sent": false,
+          "drop_reason": {
+            "code": "msg_banned",
+            "message": "You are permanently banned from talking in chan."
+          }
+        }
+      ]
+    }
+  ]
+}

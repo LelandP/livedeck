@@ -39,6 +39,7 @@ fn home() -> AppState {
 fn signed_in(s: &AppState) -> AppState {
     let user = User {
         login: "nightowl_dev".into(),
+        can_chat: true,
     };
     reduce(s, Event::SignedIn(user)).0
 }

@@ -9,8 +9,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::{
-    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi,
-    UserInfo,
+    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, Result, SendOutcome,
+    StreamInfo, TwitchApi, UserInfo,
 };
 
 /// Renews the credentials of the inner API. The app's session implements it.
@@ -112,6 +112,17 @@ impl<A: TwitchApi, R: Refresher> TwitchApi for RefreshingApi<A, R> {
 
     async fn streams_by_login(&self, logins: &[String]) -> Result<Vec<StreamInfo>> {
         self.with_refresh(|| self.inner.streams_by_login(logins))
+            .await
+    }
+
+    /// A 401 means Twitch did not take the message, so repeating it cannot post it twice.
+    async fn send_chat(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        text: &str,
+    ) -> Result<SendOutcome> {
+        self.with_refresh(|| self.inner.send_chat(broadcaster_id, sender_id, text))
             .await
     }
 }

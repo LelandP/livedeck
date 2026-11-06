@@ -3,9 +3,11 @@
 //! It pages through its lists like Helix does: the cursor is the index of the next item as a
 //! string, and the last page has no cursor.
 
+use std::sync::{Arc, Mutex};
+
 use crate::{
-    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, Result, StreamInfo, TwitchApi,
-    UserInfo,
+    ChannelResult, DropReason, Error, FollowedChannel, Game, Page, PageRequest, Result,
+    SendOutcome, StreamInfo, TwitchApi, UserInfo,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -19,6 +21,10 @@ pub struct FakeApi {
     pub users: Vec<UserInfo>,
     /// The token owner returned by `user(None)`. `None` behaves as signed out.
     pub me: Option<UserInfo>,
+    /// Every chat message posted, as `(broadcaster_id, text)`. Shared between clones.
+    pub chat_sent: Arc<Mutex<Vec<(String, String)>>>,
+    /// Drop every chat message with this reason instead of posting it.
+    pub chat_drop: Option<DropReason>,
 }
 
 impl FakeApi {
@@ -169,6 +175,39 @@ impl TwitchApi for FakeApi {
             .filter(|s| logins.iter().any(|l| l.eq_ignore_ascii_case(&s.user_login)))
             .cloned()
             .collect())
+    }
+
+    /// Posts as the token owner only, like Helix. Nothing echoes back into a chat.
+    async fn send_chat(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        text: &str,
+    ) -> Result<SendOutcome> {
+        match &self.me {
+            Some(me) if me.id == sender_id => {}
+            Some(_) => {
+                return Err(Error::Api {
+                    status: 403,
+                    message: "sender_id must match the token owner".into(),
+                })
+            }
+            None => return Err(Error::NotSignedIn),
+        }
+        if let Some(reason) = &self.chat_drop {
+            return Ok(SendOutcome {
+                message_id: String::new(),
+                sent: false,
+                drop_reason: Some(reason.clone()),
+            });
+        }
+        let mut sent = self.chat_sent.lock().unwrap_or_else(|e| e.into_inner());
+        sent.push((broadcaster_id.to_owned(), text.to_owned()));
+        Ok(SendOutcome {
+            message_id: format!("fake-{}", sent.len()),
+            sent: true,
+            drop_reason: None,
+        })
     }
 }
 

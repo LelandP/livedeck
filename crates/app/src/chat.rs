@@ -66,6 +66,7 @@ fn to_event(channel: &str, event: ChatEvent) -> Event {
         ChatEvent::Status(status) => Event::ChatStatus { channel, status },
         ChatEvent::Messages(messages) => Event::ChatMessages { channel, messages },
         ChatEvent::Moderated(action) => Event::ChatModerated { channel, action },
+        ChatEvent::RoomMode(change) => Event::ChatRoomMode { channel, change },
     }
 }
 

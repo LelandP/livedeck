@@ -10,8 +10,9 @@ pub mod view_model;
 
 pub use view_model::{
     apply_chat_image, apply_thumbnail, format_bitrate, format_fps, format_viewers,
-    readable_name_colour, view_model, CardVm, ChatLineKind, ChatLineVm, PieceVm, PlaybackId, RowVm,
-    ScreenId, Shape, Thumbnail, ToastVm, Update, ViewModel, CHAT_LINES_SHOWN,
+    readable_name_colour, room_mode_text, send_problem_text, view_model, CardVm, ChatLineKind,
+    ChatLineVm, KeyVm, PieceVm, PlaybackId, RowVm, ScreenId, Shape, Thumbnail, ToastVm, Update,
+    ViewModel, CHAT_LINES_SHOWN,
 };
 
 /// The size the layout is designed for, in logical px (`Theme` in `theme.slint`).

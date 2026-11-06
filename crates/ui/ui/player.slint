@@ -1,6 +1,170 @@
 import { Theme } from "theme.slint";
-import { StreamItem, ChatMsg } from "types.slint";
+import { StreamItem, ChatMsg, SearchKey } from "types.slint";
 import { ChatLine } from "components.slint";
+
+// The bottom of the chat: the room's rules, why the last message did not go, the message being
+// written (with a caret and a counter) and, while not writing, how to start.
+component ComposeLine inherits VerticalLayout {
+    in property <bool> open;
+    in property <string> text;
+    in property <string> count;
+    in property <string> status;
+    in property <bool> problem;
+    in property <string> room-mode;
+    in property <string> hint;
+    property <bool> caret-on: true;
+
+    spacing: 6px;
+
+    Timer {
+        interval: 530ms;
+        running: root.open;
+        triggered => { root.caret-on = !root.caret-on; }
+    }
+
+    if root.room-mode != "" : Text {
+        text: root.room-mode;
+        color: Theme.muted;
+        font-size: Theme.fs-small;
+        wrap: word-wrap;
+    }
+    if root.status != "" : Text {
+        text: root.status;
+        color: root.problem ? Theme.btn-b : Theme.muted;
+        font-size: Theme.fs-small;
+        font-weight: root.problem ? 700 : 400;
+        wrap: word-wrap;
+    }
+    // While closed, a draft stays visible (dimmed) until it is sent or the channel changes.
+    if root.open || root.text != "" : Rectangle {
+        border-radius: 8px;
+        background: Theme.surface-high;
+        border-width: 2px;
+        border-color: root.open ? Theme.accent-light : transparent;
+        opacity: root.open ? 1.0 : 0.6;
+        height: box.preferred-height;
+        box := VerticalLayout {
+            padding: 10px;
+            spacing: 2px;
+            Text {
+                text: root.text == "" ? "Write in chat" : root.text + (root.open && root.caret-on ? "|" : " ");
+                color: root.text == "" ? Theme.muted : Theme.text;
+                font-size: Theme.fs-chat;
+                wrap: word-wrap;
+            }
+            if root.open : Text {
+                text: root.count;
+                color: Theme.muted;
+                font-size: 13px;
+                horizontal-alignment: right;
+            }
+        }
+    }
+    if root.hint != "" : Text {
+        text: root.hint;
+        color: Theme.muted;
+        font-size: Theme.fs-small;
+        wrap: word-wrap;
+    }
+}
+
+// The chat keyboard with the quick messages above it. Which key or message has focus is decided in
+// Rust (htpc_core::reduce); this only draws it. With a token that may not chat it shows what to do
+// instead.
+component ComposeKeys inherits Rectangle {
+    in property <[SearchKey]> keys;
+    in property <int> key-focus;
+    // 0 off, 1 the next letter, 2 locked.
+    in property <int> shift;
+    in property <[string]> chips;
+    in property <int> chip-focus;
+    in property <bool> needs-sign-in;
+    property <length> key-w: Theme.compose-key-w;
+    property <length> key-h: Theme.compose-key-h;
+    property <length> gap: Theme.compose-key-gap;
+    property <length> keys-top: 16px + Theme.compose-chip-h + 12px;
+
+    width: 10 * root.key-w + 9 * root.gap;
+    height: Theme.compose-h;
+    clip: true;
+
+    if root.needs-sign-in : VerticalLayout {
+        alignment: center;
+        spacing: 12px;
+        Text {
+            text: "Chat needs a new Twitch sign-in";
+            color: Theme.text;
+            font-size: Theme.fs-title;
+            font-weight: 800;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Your sign-in is from before LiveDeck could write in chat. Sign in again to allow it: it takes a minute, and you come back to this stream.";
+            color: Theme.muted;
+            font-size: Theme.fs-body;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "A: Sign in again";
+            color: Theme.accent-light;
+            font-size: Theme.fs-body;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+    }
+
+    if !root.needs-sign-in : HorizontalLayout {
+        y: 16px;
+        height: Theme.compose-chip-h;
+        spacing: 8px;
+        alignment: start;
+        for chip[i] in root.chips : Rectangle {
+            width: chip-text.preferred-width + 28px;
+            border-radius: self.height / 2;
+            background: i == root.chip-focus ? Theme.accent : Theme.surface-high;
+            animate background { duration: Theme.t-fast; }
+            chip-text := Text {
+                text: chip;
+                color: i == root.chip-focus ? Theme.text : Theme.muted;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if !root.needs-sign-in : Rectangle {
+        y: root.keys-top;
+        height: 5 * root.key-h + 4 * root.gap;
+        for key[i] in root.keys : Rectangle {
+            property <bool> focused: i == root.key-focus;
+            property <bool> lit: key.label == "shift" && root.shift > 0;
+            x: key.col * (root.key-w + root.gap);
+            y: key.row * (root.key-h + root.gap);
+            width: key.span * root.key-w + (key.span - 1) * root.gap;
+            height: root.key-h;
+            border-radius: 6px;
+            background: self.focused ? Theme.accent : Theme.surface;
+            border-width: self.lit ? 2px : 0px;
+            // Locked shift is drawn brighter than a one-letter shift.
+            border-color: root.shift == 2 ? Theme.text : Theme.accent-light;
+            animate background { duration: Theme.t-fast; }
+
+            Text {
+                text: key.label;
+                color: parent.focused || parent.lit ? Theme.text : Theme.muted;
+                // Emote codes and the page keys are words: smaller, so they fit two columns.
+                font-size: key.span > 1 ? Theme.fs-small : Theme.fs-body;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
 
 // The chat lines, newest at the bottom. Older ones are pushed up and clipped at the top.
 component ChatList inherits Rectangle {
@@ -51,7 +215,8 @@ component MenuRow inherits Rectangle {
             overflow: elide;
         }
         Text {
-            text: root.action ? (root.focused ? "Press A" : "") : root.focused && !root.locked ? "◀  " + root.value + "  ▶" : root.value;
+            // An action row with a value says why A does nothing (signed out).
+            text: root.action ? (root.value != "" ? root.value : (root.focused ? "Press A" : "")) : root.focused && !root.locked ? "◀  " + root.value + "  ▶" : root.value;
             color: root.focused && !root.locked ? Theme.accent-light : Theme.muted;
             opacity: root.locked ? 0.6 : 1.0;
             font-size: Theme.fs-body;
@@ -185,9 +350,27 @@ export component PlayerScreen inherits Rectangle {
     in property <string> raid-title: "";
     in property <string> raid-viewers: "";
     in property <int> raid-seconds: 0;
-    // The index of the Subscribe row, the only action row (PlayerMenuRow::Subscribe).
+    // Writing in chat (view_model.rs `compose_*`): the panel, its keys and quick messages, the
+    // message so far, its state, the room's rules, and the line shown under the chat otherwise.
+    in property <bool> compose-open: false;
+    in property <bool> compose-needs-sign-in: false;
+    in property <string> compose-text: "";
+    in property <string> compose-count: "";
+    in property <[SearchKey]> compose-keys;
+    in property <int> compose-key-focus: 0;
+    in property <int> compose-shift: 0;
+    in property <[string]> compose-chips;
+    in property <int> compose-chip-focus: -1;
+    in property <string> compose-status: "";
+    in property <bool> compose-problem: false;
+    in property <string> room-mode: "";
+    in property <string> compose-hint: "";
+    // The index of the first action row (PlayerMenuRow::Subscribe). The ones after it (Write in
+    // chat) are action rows too.
     property <int> subscribe-row: 7;
-    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer", "Subscribe to " + root.stream.channel];
+    // The side layout gives the keyboard the bottom of the video's strip.
+    property <length> compose-cut: root.compose-open && !root.chat-overlay ? Theme.compose-h + Theme.hints-h : 0px;
+    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer", "Subscribe to " + root.stream.channel, "Write in chat"];
     // What each row does, shown under the rows for the focused one. Same order as the titles.
     property <[string]> menu-help: [
         "Picture quality. Lower uses less data and battery. Reloads the stream.",
@@ -198,6 +381,7 @@ export component PlayerScreen inherits Rectangle {
         "Sound only, on a dark screen. Saves data and battery. For this stream only.",
         "Stops the stream and puts the device to sleep after a while. Asks a minute before.",
         "Shows a QR code of the channel's subscribe page, to finish on your phone.",
+        "Write in this channel's chat with the on-screen keyboard or quick messages. X does it too while chat is shown.",
     ];
 
     // Skeleton pulse, 0..1 (only ticks while a skeleton is shown).
@@ -209,8 +393,8 @@ export component PlayerScreen inherits Rectangle {
         x: 0px;
         y: 0px;
         width: parent.width - (root.chat-open && !root.chat-overlay ? Theme.chat-w : 0px);
-        height: parent.height;
-        animate width { duration: Theme.t-med; easing: ease-out; }
+        height: parent.height - root.compose-cut;
+        animate width, height { duration: Theme.t-med; easing: ease-out; }
         background: #000000;
         clip: true;
 
@@ -371,7 +555,7 @@ export component PlayerScreen inherits Rectangle {
                     value: root.menu-values[i];
                     focused: root.menu-focus == i;
                     locked: i == 0 && root.audio-only;
-                    action: i == root.subscribe-row;
+                    action: i >= root.subscribe-row;
                 }
                 Text {
                     text: root.menu-focus == 0 && root.audio-only ? "Locked while Audio only is on." : root.menu-help[root.menu-focus];
@@ -388,11 +572,11 @@ export component PlayerScreen inherits Rectangle {
         }
 
         // HUD: channel, title and viewers. Fades out on its own while playing, never while the
-        // menu is open.
+        // menu is open. The keyboard takes its place while writing in chat.
         Rectangle {
             y: parent.height - 190px;
             height: 190px;
-            opacity: (root.hud-visible || root.menu-open || root.playback != 1 || root.paused) ? 1.0 : 0.0;
+            opacity: root.compose-open ? 0.0 : (root.hud-visible || root.menu-open || root.playback != 1 || root.paused) ? 1.0 : 0.0;
             animate opacity { duration: Theme.t-med; }
             background: @linear-gradient(180deg, #00000000, #000000d0);
 
@@ -565,6 +749,28 @@ export component PlayerScreen inherits Rectangle {
         }
     }
 
+    // The chat keyboard. Side layout: in the strip under the shrunk video. Overlay: over the
+    // bottom of the video, left of the chat. Either way above the hints bar.
+    if root.compose-open : Rectangle {
+        property <length> area-w: parent.width - (root.chat-overlay ? Theme.chat-overlay-w : Theme.chat-w);
+        x: 0px;
+        y: parent.height - Theme.hints-h - Theme.compose-h;
+        width: self.area-w;
+        height: Theme.compose-h;
+        background: root.chat-overlay ? #000000c8 : Theme.bg;
+
+        ComposeKeys {
+            x: (parent.width - self.width) / 2;
+            y: 0px;
+            keys: root.compose-keys;
+            key-focus: root.compose-key-focus;
+            shift: root.compose-shift;
+            chips: root.compose-chips;
+            chip-focus: root.compose-chip-focus;
+            needs-sign-in: root.compose-needs-sign-in;
+        }
+    }
+
     // Side panel: slides in from the right, over the strip the video made room for.
     if !root.chat-overlay : Rectangle {
         x: parent.width - (root.chat-open ? Theme.chat-w : 0px);
@@ -598,6 +804,15 @@ export component PlayerScreen inherits Rectangle {
                 chat: root.chat;
                 vertical-stretch: 1;
             }
+            ComposeLine {
+                open: root.compose-open && !root.compose-needs-sign-in;
+                text: root.compose-text;
+                count: root.compose-count;
+                status: root.compose-status;
+                problem: root.compose-problem;
+                room-mode: root.room-mode;
+                hint: root.compose-hint;
+            }
         }
     }
 
@@ -625,6 +840,15 @@ export component PlayerScreen inherits Rectangle {
             ChatList {
                 chat: root.chat;
                 vertical-stretch: 1;
+            }
+            ComposeLine {
+                open: root.compose-open && !root.compose-needs-sign-in;
+                text: root.compose-text;
+                count: root.compose-count;
+                status: root.compose-status;
+                problem: root.compose-problem;
+                room-mode: root.room-mode;
+                hint: root.compose-hint;
             }
         }
     }

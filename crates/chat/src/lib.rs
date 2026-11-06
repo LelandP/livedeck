@@ -1,4 +1,4 @@
-//! Read-only Twitch chat.
+//! Reading Twitch chat. (Writing goes through Helix, in `htpc-twitch-api`.)
 //!
 //! `IrcChat` joins a channel anonymously over IRC on a WebSocket, maps what the server sends to
 //! the core's chat types, and reports status, batched lines and moderation through [`ChatEvent`]s.

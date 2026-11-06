@@ -26,7 +26,7 @@ use std::future::Future;
 
 pub use auth::{
     AuthApi, DeviceGrant, HttpAuth, Identity, PollOutcome, TokenGrant, DEFAULT_AUTH_URL,
-    DEVICE_GRANT_TYPE, SCOPE_READ_FOLLOWS,
+    DEVICE_GRANT_TYPE, SCOPES, SCOPE_READ_FOLLOWS, SCOPE_WRITE_CHAT,
 };
 pub use error::{Error, Result};
 pub use eventsub::{
@@ -39,7 +39,8 @@ pub use gql::{GqlClient, GQL_MAX_PAGE_SIZE, GQL_URL, WEB_CLIENT_ID};
 pub use helix::{Credentials, HelixClient, DEFAULT_BASE_URL};
 pub use hybrid::HybridApi;
 pub use model::{
-    ChannelResult, FollowedChannel, Game, Page, PageRequest, StreamInfo, UserInfo, MAX_PAGE_SIZE,
+    ChannelResult, DropReason, FollowedChannel, Game, Page, PageRequest, SendOutcome, StreamInfo,
+    UserInfo, MAX_PAGE_SIZE,
 };
 pub use ratelimit::{Bucket, RateLimiter, RetryPolicy};
 pub use refreshing::{Refresher, RefreshingApi};
@@ -106,6 +107,19 @@ pub trait TwitchApi: Send + Sync + 'static {
         &self,
         logins: &[String],
     ) -> impl Future<Output = Result<Vec<StreamInfo>>> + Send;
+
+    /// `POST /chat/messages`: writes `text` in the chat of `broadcaster_id` as `sender_id` (the
+    /// token's owner). Needs a user token with `user:write:chat`, so only Helix can: the default
+    /// (the anonymous GQL client) answers [`Error::NotSignedIn`] without sending anything.
+    fn send_chat(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        text: &str,
+    ) -> impl Future<Output = Result<SendOutcome>> + Send {
+        let _ = (broadcaster_id, sender_id, text);
+        async { Err(Error::NotSignedIn) }
+    }
 }
 
 /// Most logins one `streams_by_login` call takes (Helix's limit).
