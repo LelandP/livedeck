@@ -289,7 +289,7 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5_000));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
     let image = render(&ui);
-    // The focused row's border (`Theme.accent-light`, #bf94ff), drawn whether or not there are
+    // The focused row's border (`Theme.accent-light`, #a594ff), drawn whether or not there are
     // fonts.
     let accent = |p: &Rgba8Pixel| p.r > 160 && p.b > 200 && p.g > 120 && p.g < 180;
     assert!(

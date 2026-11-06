@@ -22,6 +22,8 @@ export enum UiAction { select, back, toggle-chat, menu, retry }
 // Navigation logic lives in `htpc_core::reduce`. This file only renders and animates.
 export component MainWindow inherits Window {
     title: "LiveDeck";
+    // Title bar and taskbar icon (made by packaging/windows/make-icon.ps1).
+    icon: @image-url("../../../assets/livedeck.png");
     preferred-width: 1280px;
     preferred-height: 800px;
     background: Theme.bg;
