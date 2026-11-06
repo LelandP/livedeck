@@ -517,6 +517,7 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::StartLiveWatch
             | Command::StopLiveWatch
             | Command::ExpireToast { .. }
+            | Command::ScheduleOfflineRecheck { .. }
             | Command::Quit => Vec::new(),
         }
     }

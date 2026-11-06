@@ -398,6 +398,13 @@ pub struct AppState {
     /// stream: every stream opens as video.
     pub audio_only: bool,
     pub playback: Playback,
+    /// While the offline screen is up, the app quietly asks for the stream again every few
+    /// seconds. This is the id of the latest such recheck (ids never repeat), so a timer from an
+    /// earlier offline spell finds nothing.
+    pub offline_recheck: u32,
+    /// A quiet recheck is resolving the stream. The offline screen stays up meanwhile: only the
+    /// first frame replaces it, and any failure just schedules the next recheck.
+    pub rechecking: bool,
     pub paused: bool,
     /// The player menu is open on this row (Start on the Player screen). It takes the D-pad.
     pub player_menu: Option<PlayerMenuRow>,

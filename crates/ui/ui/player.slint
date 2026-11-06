@@ -258,6 +258,16 @@ export component PlayerScreen inherits Rectangle {
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }
+                // The app looks for the stream again every 10 s (OFFLINE_RECHECK in the app's
+                // playback.rs) and plays it as soon as it is back, e.g. after a 24 h restart.
+                Text {
+                    visible: root.playback == 2;
+                    text: "Checking every 10 seconds, it will play as soon as it is back";
+                    color: Theme.muted;
+                    font-size: Theme.fs-body;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
                 Text {
                     visible: root.playback == 3;
                     text: root.playback-error;

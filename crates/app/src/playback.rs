@@ -1,22 +1,36 @@
 //! Playback commands: resolve a channel with the `StreamResolver`, then hand the playlist to the
 //! `Player`. Player events come back as core `Event`s.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use htpc_core::{Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, StreamKind, Zoom};
 use htpc_player::{LoadOptions, Player, PlayerEvent};
 use htpc_resolver::{ResolveError, StreamResolver};
+
+/// How long the offline screen waits before looking for the stream again
+/// (`Command::ScheduleOfflineRecheck`). The player's end screen says this number too.
+pub const OFFLINE_RECHECK: Duration = Duration::from_secs(10);
 
 /// Runs `Play`, `SetPaused`, `StopPlayback`, `SetPlayerOption` and `SetStats`. Returns the events
 /// to send back, if any.
 pub struct Playback<R> {
     resolver: R,
     player: Arc<dyn Player>,
+    /// Bumped by every `Play` and `StopPlayback`. A resolve that finishes after a newer one
+    /// started, or after the stream was left, is dropped: it must not load a stream nobody is
+    /// watching, nor answer for the newer one.
+    generation: AtomicU64,
 }
 
 impl<R: StreamResolver> Playback<R> {
     pub fn new(resolver: R, player: Arc<dyn Player>) -> Self {
-        Self { resolver, player }
+        Self {
+            resolver,
+            player,
+            generation: AtomicU64::new(0),
+        }
     }
 
     /// True for the commands this module runs.
@@ -43,6 +57,7 @@ impl<R: StreamResolver> Playback<R> {
                 Vec::new()
             }
             Command::StopPlayback => {
+                self.generation.fetch_add(1, Ordering::SeqCst);
                 self.player.stop();
                 Vec::new()
             }
@@ -60,7 +75,13 @@ impl<R: StreamResolver> Playback<R> {
 
     async fn play(&self, channel: String, stream: StreamKind, latency: Latency) -> Vec<Event> {
         let rendition = rendition_name(stream);
-        match self.resolver.resolve(&channel, rendition).await {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let resolved = self.resolver.resolve(&channel, rendition).await;
+        if self.generation.load(Ordering::SeqCst) != generation {
+            tracing::debug!(%channel, "a newer play or stop replaced this one");
+            return Vec::new();
+        }
+        match resolved {
             Ok(url) => {
                 tracing::info!(%channel, rendition, "playlist resolved, starting the player");
                 let latency = match latency {
@@ -263,6 +284,50 @@ mod tests {
             }]
         );
         assert!(player.calls().is_empty());
+    }
+
+    /// Answers with a playlist after a second.
+    struct Slow;
+
+    impl StreamResolver for Slow {
+        async fn resolve(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<htpc_resolver::PlaylistUrl, ResolveError> {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(htpc_resolver::PlaylistUrl("u".into()))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_resolve_that_finishes_after_stop_or_a_newer_play_is_dropped() {
+        let player = FakePlayer::new();
+        let pb = Arc::new(Playback::new(Slow, Arc::new(player.clone())));
+        // Stop while resolving: nothing is loaded.
+        let first = tokio::spawn({
+            let pb = Arc::clone(&pb);
+            async move { pb.execute(play("chan")).await }
+        });
+        tokio::task::yield_now().await;
+        pb.execute(Command::StopPlayback).await;
+        assert!(first.await.unwrap().is_empty());
+        assert_eq!(player.calls(), [PlayerCall::Stop]);
+
+        // Two plays at once: only the newer one loads.
+        let older = tokio::spawn({
+            let pb = Arc::clone(&pb);
+            async move { pb.execute(play("chan")).await }
+        });
+        tokio::task::yield_now().await;
+        pb.execute(play("chan")).await;
+        older.await.unwrap();
+        let loads = player
+            .calls()
+            .into_iter()
+            .filter(|c| matches!(c, PlayerCall::Load(..)))
+            .count();
+        assert_eq!(loads, 1);
     }
 
     #[tokio::test]

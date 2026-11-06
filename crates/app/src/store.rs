@@ -260,6 +260,14 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 tokio::task::spawn_blocking(move || crate::browser::open_url(&url));
                 continue;
             }
+            if let Command::ScheduleOfflineRecheck { id } = cmd {
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(crate::playback::OFFLINE_RECHECK).await;
+                    let _ = tx.send(htpc_core::Event::OfflineRecheckDue(id).into());
+                });
+                continue;
+            }
             if let Command::FetchThumbnails { urls } = cmd {
                 self.spawn_images(urls, S::thumbnail);
                 continue;

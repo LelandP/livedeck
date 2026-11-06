@@ -376,14 +376,41 @@ fn pulse_hud(s: &mut AppState) {
 
 /// Resolves and plays the stream on screen. Shows the loading state until the player reports.
 fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
-    let Some(channel) = s.now_playing.as_ref().map(|p| p.channel.clone()) else {
+    if s.now_playing.is_none() {
         return;
-    };
+    }
     s.playback = Playback::Loading;
+    s.rechecking = false;
     s.paused = false;
     // The numbers of the last stream mean nothing for this one.
     s.stats = None;
     pulse_hud(s);
+    push_play(s, cmds);
+}
+
+/// Shows the offline screen and schedules a quiet look for the stream coming back.
+fn go_offline(s: &mut AppState, cmds: &mut Vec<Command>) {
+    s.playback = Playback::Offline;
+    s.rechecking = false;
+    s.paused = false;
+    s.offline_recheck = s.offline_recheck.wrapping_add(1);
+    cmds.push(Command::ScheduleOfflineRecheck {
+        id: s.offline_recheck,
+    });
+}
+
+/// A quiet recheck failed one way or another: still offline, look again later.
+fn recheck_failed(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.rechecking && s.playback == Playback::Offline {
+        go_offline(s, cmds);
+    }
+}
+
+/// Asks for the stream on screen, as `start_playback` does, but leaves the state alone.
+fn push_play(s: &AppState, cmds: &mut Vec<Command>) {
+    let Some(channel) = s.now_playing.as_ref().map(|p| p.channel.clone()) else {
+        return;
+    };
     cmds.push(Command::Play {
         channel,
         stream: s.stream_kind(),
@@ -665,27 +692,37 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::StreamOffline { channel } => {
-            if watching(s, &channel) && s.playback == Playback::Loading {
-                s.playback = Playback::Offline;
+            if watching(s, &channel) {
+                if s.playback == Playback::Loading {
+                    go_offline(s, cmds);
+                } else {
+                    recheck_failed(s, cmds);
+                }
             }
         }
         Event::PlaybackFailed { channel, message } => {
-            if watching(s, &channel) && s.playback == Playback::Loading {
-                s.playback = Playback::Failed(message);
+            if watching(s, &channel) {
+                if s.playback == Playback::Loading {
+                    s.playback = Playback::Failed(message);
+                } else {
+                    // A blip while looking for the stream again is not worth an error screen.
+                    recheck_failed(s, cmds);
+                }
             }
         }
         // The player's own events carry no channel. They are only trusted while a stream is on
         // screen, in the state that can produce them.
         Event::PlaybackStarted => {
-            if s.screen == Screen::Player && s.playback == Playback::Loading {
+            let rechecked = s.rechecking && s.playback == Playback::Offline;
+            if s.screen == Screen::Player && (s.playback == Playback::Loading || rechecked) {
                 s.playback = Playback::Playing;
+                s.rechecking = false;
                 pulse_hud(s);
             }
         }
         Event::PlaybackEnded => {
             if s.screen == Screen::Player && s.playback == Playback::Playing {
-                s.playback = Playback::Offline;
-                s.paused = false;
+                go_offline(s, cmds);
             }
         }
         Event::PlaybackError(message) => {
@@ -693,6 +730,15 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             if s.screen == Screen::Player && active {
                 s.playback = Playback::Failed(message);
                 s.paused = false;
+            } else if s.screen == Screen::Player {
+                recheck_failed(s, cmds);
+            }
+        }
+        Event::OfflineRecheckDue(id) => {
+            let due = id == s.offline_recheck && !s.rechecking;
+            if due && s.screen == Screen::Player && s.playback == Playback::Offline {
+                s.rechecking = true;
+                push_play(s, cmds);
             }
         }
         // Like the other player events, only trusted while a stream is on screen, and only while
@@ -1110,6 +1156,7 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
             // Audio only belongs to the stream that was left, not to the next one.
             s.audio_only = false;
             s.playback = Playback::Idle;
+            s.rechecking = false;
             s.paused = false;
             s.chat.clear();
             s.chat_status = ChatStatus::Idle;

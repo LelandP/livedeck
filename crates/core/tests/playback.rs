@@ -229,6 +229,82 @@ fn the_hud_pulses_on_input_and_state_changes() {
     assert!(s.hud_pulse != before);
 }
 
+fn offline(s: &AppState) -> (AppState, Vec<Command>) {
+    reduce(
+        s,
+        Event::StreamOffline {
+            channel: "chan".into(),
+        },
+    )
+}
+
+#[test]
+fn going_offline_schedules_a_recheck() {
+    let (s, _) = watching();
+    let (s, cmds) = offline(&s);
+    assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 1 }]);
+    // A stream that ends while playing too (the 24 h restart).
+    let (s, _) = reduce(&s, Intent::Retry);
+    let s = ev(&s, Event::PlaybackStarted);
+    let (s, cmds) = reduce(&s, Event::PlaybackEnded);
+    assert_eq!(s.playback, Playback::Offline);
+    assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 2 }]);
+}
+
+#[test]
+fn a_recheck_looks_quietly_and_plays_when_the_stream_is_back() {
+    let (s, _) = watching();
+    let (s, _) = offline(&s);
+    let (s, cmds) = reduce(&s, Event::OfflineRecheckDue(1));
+    assert_eq!(cmds, vec![play("chan")]);
+    // The offline screen stays up while it looks.
+    assert_eq!(s.playback, Playback::Offline);
+    assert!(s.rechecking);
+    // A second timer while looking does not ask twice.
+    assert!(reduce(&s, Event::OfflineRecheckDue(1)).1.is_empty());
+    let s = ev(&s, Event::PlaybackStarted);
+    assert_eq!(s.playback, Playback::Playing);
+    assert!(!s.rechecking);
+}
+
+#[test]
+fn a_failed_recheck_stays_offline_and_looks_again() {
+    let (s, _) = watching();
+    let (s, _) = offline(&s);
+    let (looking, _) = reduce(&s, Event::OfflineRecheckDue(1));
+    for answer in [
+        Event::StreamOffline {
+            channel: "chan".into(),
+        },
+        Event::PlaybackFailed {
+            channel: "chan".into(),
+            message: "timeout".into(),
+        },
+        Event::PlaybackError("bad".into()),
+    ] {
+        let (s, cmds) = reduce(&looking, answer);
+        assert_eq!(s.playback, Playback::Offline);
+        assert!(!s.rechecking);
+        assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 2 }]);
+    }
+}
+
+#[test]
+fn stale_or_late_rechecks_do_nothing() {
+    let (s, _) = watching();
+    let (s, _) = offline(&s);
+    // An older timer.
+    assert!(reduce(&s, Event::OfflineRecheckDue(0)).1.is_empty());
+    // After a manual retry, the stream is loading: no recheck.
+    let (retrying, _) = reduce(&s, Intent::Retry);
+    assert!(reduce(&retrying, Event::OfflineRecheckDue(1)).1.is_empty());
+    // After leaving the player.
+    let (left, _) = reduce(&s, Intent::Back);
+    let (left, cmds) = reduce(&left, Event::OfflineRecheckDue(1));
+    assert!(cmds.is_empty());
+    assert_eq!(left.playback, Playback::Idle);
+}
+
 #[test]
 fn back_resets_pause() {
     let (s, _) = watching();

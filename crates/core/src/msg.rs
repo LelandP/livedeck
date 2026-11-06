@@ -115,6 +115,9 @@ pub enum Command {
     StopLiveWatch,
     /// Send `Event::ToastExpired(id)` once the toast has been on screen long enough.
     ExpireToast { id: u32 },
+    /// The stream on screen is offline: send `Event::OfflineRecheckDue(id)` in a few seconds, so
+    /// the reducer can look again (a streamer restarting after Twitch's 24 h limit is back soon).
+    ScheduleOfflineRecheck { id: u32 },
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }
@@ -239,6 +242,9 @@ pub enum Event {
     WentLive(Vec<Stream>),
     /// The toast `id` has been shown long enough.
     ToastExpired(u32),
+    /// Time to look again whether the offline stream is back. Ignored unless `id` is the latest
+    /// recheck and the offline screen is still up.
+    OfflineRecheckDue(u32),
 }
 
 /// Anything the reducer accepts.
