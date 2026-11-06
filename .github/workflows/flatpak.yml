@@ -21,6 +21,26 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v4
+      # Software centres (Discover, GNOME Software) compare the <release> versions in the metainfo
+      # to tell an update from a fresh install, so opening a newer .flatpak offers to update. The
+      # version comes from Cargo.toml (the release workflow checks the tag matches it), stamped in
+      # here so it is never kept by hand. packaging/linux is outside the cache key, so this does
+      # not throw away the cached mpv and FFmpeg builds.
+      - name: Stamp the version into the metainfo
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=packaging/linux/io.github.livedeck.LiveDeck.metainfo.xml
+          version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)
+          if [ -z "$version" ]; then echo "no version in Cargo.toml" >&2; exit 1; fi
+          if grep -Eq '^[[:space:]]*<releases' "$file"; then
+            echo "$file already has <releases>: the build writes it, remove it there" >&2
+            exit 1
+          fi
+          date=$(date -u +%F)
+          sed -i "s|</component>|  <releases>\n    <release version=\"$version\" date=\"$date\"/>\n  </releases>\n</component>|" "$file"
+          grep -q "<release version=\"$version\"" "$file"
+          cat "$file"
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: livedeck.flatpak

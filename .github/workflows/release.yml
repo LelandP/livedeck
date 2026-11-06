@@ -108,7 +108,7 @@ jobs:
             cat <<'EOF'
           **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Windows may show a SmartScreen warning because the program is not code-signed.
 
-          **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. This build is new and untested on a Deck.
+          **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. To update, open the new file in Discover (or GNOME Software), or run the same command with `--reinstall`. Settings and sign-in are kept. This build is new and untested on a Deck.
 
           LiveDeck is an unofficial Twitch client and finds streams through unofficial endpoints, which can break and may conflict with Twitch's terms of service. See the README.
 

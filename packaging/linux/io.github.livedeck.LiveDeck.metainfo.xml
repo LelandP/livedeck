@@ -17,4 +17,5 @@
   <content_rating type="oars-1.1">
     <content_attribute id="social-chat">intense</content_attribute>
   </content_rating>
+  <!-- No <releases> here: the Flatpak workflow adds one with the version from Cargo.toml. -->
 </component>
