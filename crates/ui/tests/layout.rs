@@ -220,6 +220,26 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         eprintln!("quit prompt: no text was rendered (no fonts?), skipping the title check");
     }
 
+    // A failed stream with the player's log lines: the details panel lays out and is drawn below
+    // the summary, with the newest line visible.
+    let mut failed = watching_a_busy_chat(ChatLayout::Side);
+    failed.chat_open = false;
+    failed.playback = htpc_core::Playback::Failed(
+        "the stream could not be opened (mpv error -13)\n\n\
+         [ffmpeg] error: https: Protocol not found\n\
+         [cplayer] error: Failed to open https://example.test/live.m3u8"
+            .into(),
+    );
+    Update::full(view_model(&failed)).apply(&ui);
+    let image = render(&ui);
+    let below_summary = count(&image, 0..WIDTH, 400..HINTS_TOP, text);
+    if count(&image, 0..WIDTH, 0..HEIGHT, text) > 0 {
+        assert!(
+            below_summary > 0,
+            "the player log is not drawn under the error"
+        );
+    }
+
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
     // element that has a size but no position, which once put the heading strip mid-screen.
     let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));

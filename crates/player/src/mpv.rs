@@ -14,6 +14,7 @@ use libmpv2::events::Event;
 use libmpv2::{mpv_end_file_reason, Mpv};
 
 use crate::output::VideoOutput;
+use crate::recent::RecentLog;
 use crate::{Player, PlayerEvent};
 
 /// How often the control thread looks for mpv events when no command arrives.
@@ -69,6 +70,7 @@ impl MpvPlayer {
             Ok(())
         })
         .map_err(|e| format!("libmpv failed to start: {}", describe(&e)))?;
+        request_log_messages(&mpv, c"warn");
         let mpv = Arc::new(mpv);
 
         let (tx, rx) = channel();
@@ -125,6 +127,21 @@ fn use_c_numeric_locale() {
 #[cfg(not(target_os = "linux"))]
 fn use_c_numeric_locale() {}
 
+/// Asks mpv to send its log messages at `min_level` and above as events, so a failure can show
+/// what mpv said (see `RecentLog`). libmpv2 has no wrapper for this call.
+fn request_log_messages(mpv: &Mpv, min_level: &std::ffi::CStr) {
+    use std::ffi::{c_char, c_int, c_void};
+    extern "C" {
+        fn mpv_request_log_messages(ctx: *mut c_void, min_level: *const c_char) -> c_int;
+    }
+    // SAFETY: `ctx` is the live handle `mpv` owns, and `min_level` is NUL-terminated. mpv copies
+    // the string.
+    let err = unsafe { mpv_request_log_messages(mpv.ctx.as_ptr().cast(), min_level.as_ptr()) };
+    if err < 0 {
+        tracing::warn!(err, "mpv log messages unavailable");
+    }
+}
+
 /// An mpv error in words, for the player's error screen: "Raw(-13)" tells nobody anything. The
 /// code stays in brackets for bug reports.
 fn describe(e: &libmpv2::Error) -> String {
@@ -148,16 +165,18 @@ fn describe(e: &libmpv2::Error) -> String {
 fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEvent)) {
     // True from `Load` until the first frame, so `Playing` is reported once per stream.
     let mut starting = false;
+    // What mpv warned about since the current stream started, shown with a failure.
+    let mut recent = RecentLog::default();
     loop {
         match rx.recv_timeout(POLL) {
             Ok(Control::Load(url)) => {
+                recent.clear();
                 let _ = mpv.set_property("pause", false);
                 match mpv.command("loadfile", &[url.as_str(), "replace"]) {
                     Ok(()) => starting = true,
-                    Err(e) => on_event(PlayerEvent::Failed(format!(
-                        "loadfile failed: {}",
-                        describe(&e)
-                    ))),
+                    Err(e) => on_event(PlayerEvent::Failed(
+                        recent.report(&format!("loadfile failed: {}", describe(&e))),
+                    )),
                 }
             }
             Ok(Control::Pause(paused)) => {
@@ -189,12 +208,21 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
                 // `Stop` and `Redirect` are our own doing (a new load or `stop`).
                 Ok(Event::EndFile(_)) => {}
                 Ok(Event::Shutdown) => return,
+                Ok(Event::LogMessage {
+                    prefix,
+                    level,
+                    text,
+                    ..
+                }) => {
+                    tracing::debug!(target: "mpv", "[{prefix}] {level}: {}", text.trim_end());
+                    recent.push(prefix, level, text);
+                }
                 Ok(_) => {}
                 // An end-of-file with an error code arrives as an `Err`.
                 Err(e) => {
                     starting = false;
                     tracing::warn!(%e, "mpv could not play the stream");
-                    on_event(PlayerEvent::Failed(describe(&e)));
+                    on_event(PlayerEvent::Failed(recent.report(&describe(&e))));
                 }
             }
         }

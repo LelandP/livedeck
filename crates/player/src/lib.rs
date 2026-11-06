@@ -18,6 +18,8 @@ mod gpu;
 mod mpv;
 #[cfg(feature = "mpv")]
 mod output;
+#[cfg(any(feature = "mpv", test))]
+mod recent;
 #[cfg(feature = "mpv")]
 mod target;
 

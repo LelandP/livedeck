@@ -77,6 +77,8 @@ export component MainWindow inherits Window {
     // 0 loading, 1 playing, 2 offline, 3 failed (PlaybackId in view_model.rs).
     in property <int> playback: 0;
     in property <string> playback-error: "";
+    // What the player logged before failing (shown small under the error, for bug reports).
+    in property <string> playback-details: "";
     in property <bool> paused: false;
     // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
     in property <int> hud-pulse: 0;
@@ -239,6 +241,7 @@ export component MainWindow inherits Window {
         video: root.video;
         playback: root.playback;
         playback-error: root.playback-error;
+        playback-details: root.playback-details;
         paused: root.paused;
         hud-visible: root.hud-visible;
     }

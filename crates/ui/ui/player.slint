@@ -35,6 +35,8 @@ export component PlayerScreen inherits Rectangle {
     // 0 loading, 1 playing, 2 offline, 3 failed (PlaybackId in view_model.rs).
     in property <int> playback: 0;
     in property <string> playback-error: "";
+    // The player's last log lines before the failure, one per line.
+    in property <string> playback-details: "";
     in property <bool> paused: false;
     in property <bool> hud-visible: true;
 
@@ -98,6 +100,21 @@ export component PlayerScreen inherits Rectangle {
                     font-size: Theme.fs-body;
                     horizontal-alignment: center;
                     wrap: word-wrap;
+                }
+                // What mpv (or Streamlink) said, left-aligned on a dark panel so a photo of the
+                // screen can be read.
+                if root.playback == 3 && root.playback-details != "" : Rectangle {
+                    background: #000000a0;
+                    border-radius: 8px;
+                    VerticalLayout {
+                        padding: 16px;
+                        Text {
+                            text: root.playback-details;
+                            color: Theme.text;
+                            font-size: Theme.fs-small;
+                            wrap: word-wrap;
+                        }
+                    }
                 }
                 Text {
                     text: "Press A or X to try again  ·  B to go back";

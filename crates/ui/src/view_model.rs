@@ -179,6 +179,9 @@ pub struct ViewModel {
     pub playback: PlaybackId,
     /// Why playback failed, or empty.
     pub playback_error: String,
+    /// What the player logged before the failure (the message after its first blank line), for a
+    /// photo of the screen to be a useful bug report. Empty when there is nothing.
+    pub playback_details: String,
     pub paused: bool,
     /// Changes whenever the HUD should come back (the window hides it again after a timeout).
     pub hud_pulse: i32,
@@ -535,6 +538,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
         Playback::Offline => (PlaybackId::Offline, String::new()),
         Playback::Failed(message) => (PlaybackId::Failed, message.clone()),
     };
+    // The player puts its recent log lines after a blank line (htpc-player's `RecentLog`).
+    let (playback_error, playback_details) = match playback_error.split_once("\n\n") {
+        Some((summary, details)) => (summary.to_owned(), details.trim().to_owned()),
+        None => (playback_error, String::new()),
+    };
     // On the Player screen A and X act on the stream, not on the cards underneath. On Settings,
     // A is the account action.
     let (select_label, can_retry) = if state.screen == Screen::Settings {
@@ -591,6 +599,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         quality_label: state.settings.quality.label().to_owned(),
         playback,
         playback_error,
+        playback_details,
         paused: state.paused,
         hud_pulse: state.hud_pulse as i32,
         exit_prompt: state.exit_prompt,
@@ -743,6 +752,7 @@ impl Update {
         ui.set_quality_label(vm.quality_label.into());
         ui.set_playback(vm.playback as i32);
         ui.set_playback_error(vm.playback_error.into());
+        ui.set_playback_details(vm.playback_details.into());
         ui.set_paused(vm.paused);
         ui.set_hud_pulse(vm.hud_pulse);
         ui.set_exit_prompt(vm.exit_prompt);
@@ -1320,6 +1330,27 @@ mod tests {
         let (mut s, _) = reduce(&loaded(), Intent::Select);
         s.chat = ChatBuffer::from(lines);
         s
+    }
+
+    #[test]
+    fn a_failure_shows_its_summary_and_the_player_log_apart() {
+        let mut s = watching(Vec::new());
+        s.playback = htpc_core::Playback::Failed(
+            "the stream could not be opened (mpv error -13)\n\n[ffmpeg] error: a\n[cplayer] error: b"
+                .into(),
+        );
+        let vm = view_model(&s);
+        assert_eq!(
+            vm.playback_error,
+            "the stream could not be opened (mpv error -13)"
+        );
+        assert_eq!(vm.playback_details, "[ffmpeg] error: a\n[cplayer] error: b");
+
+        // A message without log lines is all summary.
+        s.playback = htpc_core::Playback::Failed("Streamlink is not installed".into());
+        let vm = view_model(&s);
+        assert_eq!(vm.playback_error, "Streamlink is not installed");
+        assert!(vm.playback_details.is_empty());
     }
 
     #[test]
