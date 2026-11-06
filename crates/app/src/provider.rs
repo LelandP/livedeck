@@ -45,6 +45,12 @@ pub trait Provider: Send + Sync + 'static {
     /// One decoded thumbnail, or `None` if it cannot be had (offline, no cache). Failures are
     /// logged here: a card simply keeps its tint.
     fn thumbnail(&self, url: &str) -> impl Future<Output = Option<Thumbnail>> + Send;
+
+    /// Every live followed channel, for live notifications (`live_watch.rs`). `None` when it
+    /// cannot be had (signed out, a failed request), which skips that poll.
+    fn followed_live(&self) -> impl Future<Output = Option<Vec<Stream>>> + Send {
+        async { None }
+    }
 }
 
 pub struct ApiProvider<A> {
@@ -508,7 +514,24 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::CancelSleepTimer
             | Command::Suspend
             | Command::OpenUrl(_)
+            | Command::StartLiveWatch
+            | Command::StopLiveWatch
+            | Command::ExpireToast { .. }
             | Command::Quit => Vec::new(),
+        }
+    }
+
+    async fn followed_live(&self) -> Option<Vec<Stream>> {
+        let id = self.viewer_id().await?;
+        match self.all_followed_streams(&id).await {
+            Ok(live) => {
+                let bucket = refresh_bucket();
+                Some(live.iter().map(|s| stream_of(s, bucket)).collect())
+            }
+            Err(err) => {
+                tracing::debug!(%err, "could not check who went live");
+                None
+            }
         }
     }
 
@@ -561,7 +584,11 @@ fn category_tiles(page: &Page<Game>) -> Vec<Tile> {
 }
 
 fn stream(s: &StreamInfo, bucket: u64) -> Tile {
-    Tile::Stream(Stream {
+    Tile::Stream(stream_of(s, bucket))
+}
+
+fn stream_of(s: &StreamInfo, bucket: u64) -> Stream {
+    Stream {
         channel: s.user_login.clone(),
         title: s.title.clone(),
         category: s.game_name.clone(),
@@ -569,7 +596,7 @@ fn stream(s: &StreamInfo, bucket: u64) -> Tile {
         tint: tint_for(&s.user_login),
         // The bucket makes the cache fetch a fresh preview every `PREVIEW_REFRESH_SECS`.
         thumbnail: sized_url(&s.thumbnail_url, PREVIEW_SIZE).map(|u| format!("{u}?t={bucket}")),
-    })
+    }
 }
 
 /// A live search result that `/streams` did not know: a card from what the search said, without
@@ -1264,6 +1291,18 @@ mod tests {
             panic!("a page was expected, got {event:?}");
         };
         assert_eq!(tiles.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn followed_live_lists_every_live_followed_channel_while_signed_in() {
+        let provider = ApiProvider::new(fake_api()).with_account(signed_in_viewer());
+        let live = provider.followed_live().await.expect("signed in");
+        let names: Vec<_> = live.iter().map(|s| s.channel.as_str()).collect();
+        assert_eq!(names[0], "nightowl_dev");
+        assert_eq!(live.len(), 5);
+
+        let signed_out = ApiProvider::new(fake_api()).with_account(Viewer::default());
+        assert_eq!(signed_out.followed_live().await, None);
     }
 
     #[tokio::test]

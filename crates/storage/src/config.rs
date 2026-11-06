@@ -3,6 +3,7 @@
 //! ```toml
 //! chat_layout = "side"        # side | overlay
 //! quality = "best"            # best | 1080p | 720p | 480p | worst
+//! live_notifications = true   # a popup when a followed channel goes live
 //! image_cache_max_mb = 256
 //! # client_id = "..."         # public Twitch client ID (TWITCH_CLIENT_ID overrides it)
 //! ```
@@ -67,6 +68,7 @@ impl Config {
 struct ConfigFile {
     chat_layout: Option<String>,
     quality: Option<String>,
+    live_notifications: Option<bool>,
     image_cache_max_mb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_id: Option<String>,
@@ -89,6 +91,10 @@ impl From<ConfigFile> for Config {
             settings: Settings {
                 chat_layout: named::<ChatLayout>("chat_layout", f.chat_layout),
                 quality: named::<Quality>("quality", f.quality),
+                // Files from before the setting existed turn it on, like a fresh install.
+                live_notifications: f
+                    .live_notifications
+                    .unwrap_or(Settings::default().live_notifications),
             },
             client_id: f
                 .client_id
@@ -107,6 +113,7 @@ impl From<&Config> for ConfigFile {
         Self {
             chat_layout: Some(c.settings.chat_layout.as_str().to_owned()),
             quality: Some(c.settings.quality.as_str().to_owned()),
+            live_notifications: Some(c.settings.live_notifications),
             image_cache_max_mb: Some(c.image_cache_max_mb),
             client_id: c.client_id.clone(),
         }

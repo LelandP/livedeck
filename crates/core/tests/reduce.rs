@@ -292,7 +292,14 @@ fn signed_in_closes_the_login_and_reloads_home_for_the_account() {
         Some("nightowl_dev")
     );
     // The Followed row appears, so Home loads again. Its rows stay up until the answer arrives.
-    assert_eq!(cmds, vec![Command::LoadFeed { feed: FeedId::Home }]);
+    // Live notifications start watching the account's follows.
+    assert_eq!(
+        cmds,
+        vec![
+            Command::LoadFeed { feed: FeedId::Home },
+            Command::StartLiveWatch
+        ]
+    );
     assert!(s.home.loading);
     assert!(!s.home.rows.is_empty());
 }

@@ -492,6 +492,47 @@ fn search_empty_typing_and_results() {
     insta::assert_snapshot!(out);
 }
 
+fn toast_lines(vm: &ViewModel) -> String {
+    let mut out = format!("screen={:?} more={}\n", vm.screen, vm.toast_more);
+    for t in &vm.toasts {
+        let img = if t.thumb_url.is_empty() { "" } else { " | img" };
+        out += &format!("  [#{} {} is live | {}{img}]\n", t.id, t.name, t.line);
+    }
+    out
+}
+
+#[test]
+fn live_notification_toasts_one_three_and_more() {
+    let user = htpc_core::User {
+        login: "nightowl_dev".into(),
+    };
+    let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let went_live = |s: &AppState, channels: &[&str]| {
+        let streams = channels
+            .iter()
+            .map(|c| match stream(c, 100, *c != "quietcoast") {
+                Tile::Stream(s) => s,
+                _ => unreachable!(),
+            })
+            .collect();
+        reduce(s, Event::WentLive(streams)).0
+    };
+    let mut out = String::from("-- one\n");
+    let s = went_live(&s, &["lofi_lena"]);
+    out += &toast_lines(&view_model(&s));
+    out += "-- three, over the player\n";
+    let s = send(&s, &[Intent::Select]);
+    let s = went_live(&s, &["marrow", "quietcoast"]);
+    out += &toast_lines(&view_model(&s));
+    out += "-- five\n";
+    let s = went_live(&s, &["pixelpilgrim", "sable"]);
+    out += &toast_lines(&view_model(&s));
+    out += "-- the oldest expired\n";
+    let s = reduce(&s, Event::ToastExpired(1)).0;
+    out += &toast_lines(&view_model(&s));
+    insta::assert_snapshot!(out);
+}
+
 fn chat_lines(vm: &ViewModel) -> String {
     let mut out = format!(
         "open={} overlay={} status={:?}\n",

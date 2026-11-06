@@ -1,5 +1,90 @@
 import { Theme } from "theme.slint";
-import { StreamItem, ChatMsg, ChatPiece } from "types.slint";
+import { StreamItem, ChatMsg, ChatPiece, ToastItem } from "types.slint";
+
+// "<channel> is live": the stream preview, the name and the title line. It slides in when it is
+// created and slides out on its own just before Rust removes it (`TOAST_TIME` in live_watch.rs is
+// 8 s). It takes no input: clicks go through to whatever is underneath.
+export component Toast inherits Rectangle {
+    in property <ToastItem> item;
+    property <bool> entered: false;
+    property <bool> leaving: false;
+
+    // Flipped just after the first frame: a change made in `init` would not animate.
+    Timer {
+        interval: 1ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    Timer {
+        interval: 7700ms;
+        running: !root.leaving;
+        triggered => { root.leaving = true; }
+    }
+
+    width: Theme.toast-w;
+    height: Theme.toast-h;
+
+    Rectangle {
+        x: root.entered && !root.leaving ? 0px : 48px;
+        opacity: root.entered && !root.leaving ? 1.0 : 0.0;
+        animate x { duration: Theme.t-med; easing: ease-out; }
+        animate opacity { duration: Theme.t-med; }
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: Theme.surface-high;
+        background: #18181bf2;
+        clip: true;
+
+        Rectangle {
+            x: 12px;
+            y: 12px;
+            width: (root.height - 24px) * 16 / 9;
+            height: root.height - 24px;
+            border-radius: 6px;
+            clip: true;
+            background: @linear-gradient(160deg, root.item.tint, Theme.surface);
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.item.thumbnail;
+                image-fit: cover;
+                opacity: self.source.width > 0 ? 1.0 : 0.0;
+                animate opacity { duration: Theme.t-med; }
+            }
+        }
+
+        VerticalLayout {
+            x: 12px + (root.height - 24px) * 16 / 9 + 16px;
+            width: parent.width - self.x - 16px;
+            alignment: center;
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    y: 8px;
+                    border-radius: 5px;
+                    background: Theme.live;
+                }
+                Text {
+                    text: root.item.name + " is live";
+                    color: Theme.text;
+                    font-size: Theme.fs-body;
+                    font-weight: 800;
+                    overflow: elide;
+                }
+            }
+            Text {
+                text: root.item.line;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+    }
+}
 
 // Card that grows into its slot when focused and shrinks/dims otherwise.
 export component StreamCard inherits Rectangle {

@@ -465,6 +465,53 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the result row does not move up"
     );
 
+    // Live notifications over a playing stream: three toasts stack at the top right (their
+    // previews are drawn in the tint, pure green here) with "+1 more" under them, the hints bar
+    // keeps its buttons, and a toast slides in rather than appearing at once.
+    let mut toasted = watching_a_busy_chat(ChatLayout::Side);
+    toasted.chat_open = false;
+    toasted.playback = htpc_core::Playback::Playing;
+    toasted.user = Some(htpc_core::User { login: "me".into() });
+    toasted.hud_pulse += 1;
+    let went_live: Vec<Stream> = (0..4)
+        .map(|i| Stream {
+            channel: format!("live{i}"),
+            title: "a title".into(),
+            category: "cat".into(),
+            viewers: 1,
+            tint: Rgb::new(0, 255, 0),
+            thumbnail: None,
+        })
+        .collect();
+    let (toasted, _) = reduce(&toasted, Event::WentLive(went_live));
+    assert_eq!(view_model(&toasted).toast_more, 1);
+    Update::full(view_model(&toasted)).apply(&ui);
+    let first_frame = render(&ui);
+    // The slide-in starts when a 1 ms timer fires, and the mock clock runs animations before
+    // timers: the first tick fires it, the second animates.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    let top_right = |img: &SharedPixelBuffer<Rgba8Pixel>| count(img, 800..WIDTH, 0..340, green);
+    // One slot per toast: 96 px tall, 12 px apart, from 24 px down.
+    for slot in 0..3u32 {
+        let top = 24 + slot * 108;
+        let preview = count(&image, 800..WIDTH, top..top + 96, green);
+        // A 128x72 preview, most of it tinted.
+        assert!(
+            preview > 4_000,
+            "toast {slot} is not drawn at the top right"
+        );
+    }
+    assert!(
+        top_right(&first_frame) < top_right(&image),
+        "the toasts do not slide in"
+    );
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the toasts hide the hints bar"
+    );
+
     // Browse: the heading sits at the top, not in the middle of the screen. Slint centres an
     // element that has a size but no position, which once put the heading strip mid-screen.
     let (browse, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Browse));

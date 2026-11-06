@@ -58,8 +58,10 @@ export component SettingsScreen inherits Rectangle {
     in property <string> user-name;
     in property <string> chat-layout;
     in property <string> quality;
+    in property <string> live-notifications;
     in property <string> version;
-    // 0 account, 1 chat layout, 2 quality (SettingsRow order). -1 while the rail has focus.
+    // 0 account, 1 chat layout, 2 quality, 3 live notifications (SettingsRow order). -1 while the
+    // rail has focus.
     in property <int> focus-row;
 
     VerticalLayout {
@@ -96,6 +98,13 @@ export component SettingsScreen inherits Rectangle {
             value: root.quality;
             choice: true;
             focused: root.focus-row == 2;
+        }
+        SettingRow {
+            title: "Live notifications";
+            help: root.user-name == "" ? "Sign in to hear when channels you follow go live" : "A popup when a channel you follow goes live";
+            value: root.live-notifications;
+            choice: true;
+            focused: root.focus-row == 3;
         }
 
         Text {

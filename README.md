@@ -19,7 +19,8 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Read-only chat with coloured names, badges and emotes, as a side panel or an overlay on the video
 - Sign in with a code and a QR code (no password typed on the TV), then a Followed row and a Following tab
 - Search for channels and categories by name with an on-screen keyboard (signed in)
-- Settings for chat layout and video quality, saved between runs
+- Live notifications: a silent popup when a channel you follow goes live, on any screen (signed in, can be turned off)
+- Settings for chat layout, video quality and live notifications, saved between runs
 - Everything controllable with a gamepad (D-pad, A/B/X/Y, Start)
 
 **What does not**
@@ -33,8 +34,7 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Live notifications:** a popup (and a sound) when another followed channel goes live, with a toggle in Settings to turn it off. Signed-in users only, as it needs Twitch EventSub
-- [ ] **Follow raids:** when the channel you are watching ends its stream with a raid, offer to follow it to the target channel (with a short countdown and a way to stay). Signed-in users only. Shares the EventSub client with live notifications
+- [ ] **Follow raids:** when the channel you are watching ends its stream with a raid, offer to follow it to the target channel (with a short countdown and a way to stay). Signed-in users only. Needs a Twitch EventSub client (one subscription, for the channel being watched)
 - [ ] **Chat sending:** write in chat with the on-screen keyboard from Search, and perhaps quick canned messages. Needs the `chat:edit` permission, so users sign in again
 - [ ] **Hype train:** show progress and level while watching, if Twitch lets a viewer read it. Like predictions, it may need the broadcaster's own permission, so this needs checking first
 - [ ] **Predictions and polls:** show them while watching, if Twitch lets a viewer read them. Their EventSub topics may need the broadcaster's own permission, so this needs checking first
@@ -98,9 +98,10 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
 
 - **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
 - **Search:** in the left menu (sign in first). Type with the on-screen keyboard: the D-pad moves, A types, X deletes, Y adds a space, Start jumps to the results. Results update as you type, from two characters on: live channels, categories, then offline channels. Up from the first row (or B) goes back to the keyboard. On a PC you can also just type.
-- **Settings:** chat layout (side panel or over the video) and video quality (applies to the next stream you open).
+- **Settings:** chat layout (side panel or over the video), video quality (applies to the next stream you open) and live notifications.
+- **Live notifications:** while signed in, LiveDeck checks every 30 seconds which channels you follow are live, and shows a popup at the top right for each one that just went live (not the one you are watching, and not after a quick stream restart). Popups stay 8 seconds and take no buttons. Turning them off in Settings stops the checks.
 - **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. *Sleep timer* counts down whatever you watch (switching channels does not reset it); a minute before the end any button keeps going for the same length again, otherwise the sound fades, the stream stops and the device suspends. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
-- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `image_cache_max_mb` and an optional `client_id`.
+- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `image_cache_max_mb` and an optional `client_id`.
 - **Try it offline:** `livedeck --mock` runs with fixture data and no network.
 - **Logs:** set `RUST_LOG=livedeck=debug`. `livedeck --help` lists every option and environment variable.
 

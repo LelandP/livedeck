@@ -1,0 +1,22 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- one
+screen=Home more=0
+  [#1 lofi_lena is live | lofi_lena title · VALORANT | img]
+-- three, over the player
+screen=Player more=0
+  [#3 quietcoast is live | quietcoast title · VALORANT]
+  [#2 marrow is live | marrow title · VALORANT | img]
+  [#1 lofi_lena is live | lofi_lena title · VALORANT | img]
+-- five
+screen=Player more=2
+  [#5 sable is live | sable title · VALORANT | img]
+  [#4 pixelpilgrim is live | pixelpilgrim title · VALORANT | img]
+  [#3 quietcoast is live | quietcoast title · VALORANT]
+-- the oldest expired
+screen=Player more=1
+  [#5 sable is live | sable title · VALORANT | img]
+  [#4 pixelpilgrim is live | pixelpilgrim title · VALORANT | img]
+  [#3 quietcoast is live | quietcoast title · VALORANT]

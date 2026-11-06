@@ -3,8 +3,8 @@
 import "../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf";
 import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
 import { Theme } from "theme.slint";
-import { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey } from "types.slint";
-import { Hint } from "components.slint";
+import { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem } from "types.slint";
+import { Hint, Toast } from "components.slint";
 import { HomeContent } from "home.slint";
 import { GridContent } from "grid.slint";
 import { SearchContent } from "search.slint";
@@ -13,7 +13,7 @@ import { PlayerScreen } from "player.slint";
 import { SignInScreen } from "signin.slint";
 import { SettingsScreen } from "settings.slint";
 
-export { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey }
+export { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem }
 
 // Hint-bar actions (mouse fallback). Rust maps them to core Intents.
 export enum UiAction { select, back, toggle-chat, menu, retry }
@@ -54,6 +54,10 @@ export component MainWindow inherits Window {
     in property <int> settings-focus: 0;
     in property <string> chat-layout-label: "";
     in property <string> quality-label: "";
+    in property <string> live-notifications-label: "";
+    // "<channel> is live" popups, newest first (at most three), and how many more there are.
+    in property <[ToastItem]> toasts;
+    in property <int> toast-more: 0;
     // The app version for the about text (set by the app from its Cargo version).
     in property <string> version: "";
 
@@ -264,6 +268,7 @@ export component MainWindow inherits Window {
         user-name: root.user-name;
         chat-layout: root.chat-layout-label;
         quality: root.quality-label;
+        live-notifications: root.live-notifications-label;
         version: root.version;
         focus-row: root.rail-focused ? -1 : root.settings-focus;
     }
@@ -376,6 +381,30 @@ export component MainWindow inherits Window {
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
+        }
+    }
+
+    // Live notifications: stacked at the top right over every screen, the player included. They
+    // only inform, so they take no input and never cover the hints bar.
+    for toast[i] in root.toasts : Toast {
+        x: parent.width - self.width - 24px;
+        y: 24px + i * (Theme.toast-h + Theme.toast-gap);
+        animate y { duration: Theme.t-med; easing: ease-out; }
+        item: toast;
+    }
+    if root.toast-more > 0 : Rectangle {
+        x: parent.width - self.width - 24px;
+        y: 24px + root.toasts.length * (Theme.toast-h + Theme.toast-gap);
+        width: more-text.preferred-width + 32px;
+        height: 36px;
+        border-radius: 18px;
+        background: #18181bf2;
+        more-text := Text {
+            text: "+" + root.toast-more + " more";
+            color: Theme.muted;
+            font-size: Theme.fs-small;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 

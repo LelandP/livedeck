@@ -10,7 +10,7 @@ use crate::keyboard::{self, Key};
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
 use crate::state::{
     subscribe_url, AppState, CategoryFeed, Feed, Playback, PlayerMenuRow, RailEntry, Screen,
-    SearchState, SettingsRow, SleepTimer,
+    SearchState, SettingsRow, SleepTimer, Toast, TOASTS_KEPT,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -145,6 +145,20 @@ fn change_setting(s: &mut AppState, row: SettingsRow, forward: bool, cmds: &mut 
             s.settings.quality = s.settings.quality.cycled(forward);
             // The saved quality is where every stream starts again, also in this session.
             s.session.quality = None;
+        }
+        // On or off: both directions toggle.
+        SettingsRow::LiveNotifications => {
+            s.settings.live_notifications = !s.settings.live_notifications;
+            if !s.settings.live_notifications {
+                s.toasts.clear();
+            }
+            if s.is_signed_in() {
+                cmds.push(if s.settings.live_notifications {
+                    Command::StartLiveWatch
+                } else {
+                    Command::StopLiveWatch
+                });
+            }
         }
     }
     cmds.push(Command::SaveSettings(s.settings));
@@ -706,6 +720,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             // Home gains the Followed row. The Following tab loads when it is opened.
             reload_home(s, cmds);
             s.following = Feed::default();
+            if s.wants_live_watch() {
+                cmds.push(Command::StartLiveWatch);
+            }
             if s.screen == Screen::Login {
                 // Polling already finished, so no CancelLogin is needed.
                 s.login = None;
@@ -720,6 +737,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::SignedOut => {
             s.user = None;
             s.following = Feed::default();
+            // Live notifications are about the account's follows.
+            s.toasts.clear();
+            cmds.push(Command::StopLiveWatch);
             // The results came from the account. The id carries on, so a late answer to an
             // old search can never pass for a new one.
             s.search = SearchState {
@@ -761,6 +781,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.search.feed.error = Some(message);
             }
         }
+        Event::WentLive(streams) => went_live(s, streams, cmds),
+        Event::ToastExpired(id) => s.toasts.retain(|t| t.id != id),
         Event::SleepTimerTick { id, left_min } => {
             if let Some(timer) = sleep_timer(s, id) {
                 timer.left_min = left_min;
@@ -785,6 +807,36 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
     }
+}
+
+/// Adds a toast for each channel that went live, newest first, and asks the app to take each
+/// away again later. The channel on screen is never announced, nor one already on a toast. A
+/// late report after sign-out or with the setting off is dropped.
+fn went_live(s: &mut AppState, streams: Vec<Stream>, cmds: &mut Vec<Command>) {
+    if !s.wants_live_watch() {
+        return;
+    }
+    let mut fresh = Vec::new();
+    for stream in streams {
+        let on_screen = s.screen == Screen::Player
+            && s.now_playing
+                .as_ref()
+                .is_some_and(|p| p.channel.eq_ignore_ascii_case(&stream.channel));
+        let shown = s
+            .toasts
+            .iter()
+            .any(|t| t.stream.channel.eq_ignore_ascii_case(&stream.channel));
+        if on_screen || shown {
+            continue;
+        }
+        s.last_toast_id = s.last_toast_id.wrapping_add(1);
+        let id = s.last_toast_id;
+        cmds.push(Command::ExpireToast { id });
+        fresh.push(Tile::Stream(stream.clone()));
+        s.toasts.insert(0, Toast { id, stream });
+    }
+    s.toasts.truncate(TOASTS_KEPT);
+    fetch_thumbnails(fresh.iter(), cmds);
 }
 
 /// True while the Player screen shows `channel`. Late answers for a channel already left fail it.

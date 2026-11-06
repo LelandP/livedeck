@@ -96,7 +96,13 @@ fn a_on_settings_signs_out_and_the_event_reloads_home() {
     let (s, cmds) = reduce(&s, Event::SignedOut);
     assert!(!s.is_signed_in());
     assert_eq!(s.screen, Screen::Settings);
-    assert_eq!(cmds, vec![Command::LoadFeed { feed: FeedId::Home }]);
+    assert_eq!(
+        cmds,
+        vec![
+            Command::StopLiveWatch,
+            Command::LoadFeed { feed: FeedId::Home }
+        ]
+    );
 }
 
 #[test]
@@ -118,7 +124,13 @@ fn signing_out_on_the_following_tab_goes_home() {
     assert_eq!(s.screen, Screen::Home);
     assert_eq!(s.rail.index, RailEntry::Home);
     assert_eq!(s.following, Feed::default(), "follows are not kept");
-    assert_eq!(cmds, vec![Command::LoadFeed { feed: FeedId::Home }]);
+    assert_eq!(
+        cmds,
+        vec![
+            Command::StopLiveWatch,
+            Command::LoadFeed { feed: FeedId::Home }
+        ]
+    );
 }
 
 #[test]
@@ -160,7 +172,7 @@ fn down_and_up_move_between_the_settings_rows_and_stop_at_the_ends() {
     let (s, _) = run(on_settings(), &[Intent::Down]);
     assert_eq!(s.settings_focus, SettingsRow::ChatLayout);
     let (s, _) = run(s, &[Intent::Down, Intent::Down, Intent::Down]);
-    assert_eq!(s.settings_focus, SettingsRow::Quality);
+    assert_eq!(s.settings_focus, SettingsRow::LiveNotifications);
     let (s, _) = run(s, &[Intent::Up, Intent::Up, Intent::Up]);
     assert_eq!(s.settings_focus, SettingsRow::Account);
 }

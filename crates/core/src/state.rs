@@ -91,13 +91,16 @@ pub enum SettingsRow {
     Account,
     ChatLayout,
     Quality,
+    /// On or off: a popup when a followed channel goes live.
+    LiveNotifications,
 }
 
 impl SettingsRow {
-    pub const ALL: [SettingsRow; 3] = [
+    pub const ALL: [SettingsRow; 4] = [
         SettingsRow::Account,
         SettingsRow::ChatLayout,
         SettingsRow::Quality,
+        SettingsRow::LiveNotifications,
     ];
 
     pub fn index(self) -> usize {
@@ -208,6 +211,21 @@ impl SleepTimer {
         all[(at + if forward { 1 } else { -1 }).rem_euclid(len) as usize]
     }
 }
+
+/// A "<channel> is live" popup. It only informs: no button acts on it, and the app removes it
+/// after a few seconds (`Event::ToastExpired`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Toast {
+    /// Goes up with every toast, never repeats.
+    pub id: u32,
+    pub stream: Stream,
+}
+
+/// Toasts drawn at once. More are summed up as "+N more".
+pub const TOASTS_SHOWN: usize = 3;
+/// Toasts kept at most (each goes after a few seconds anyway). A burst beyond this drops the
+/// oldest.
+pub const TOASTS_KEPT: usize = 20;
 
 /// Card focus on the home rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -415,6 +433,10 @@ pub struct AppState {
     /// The platform can open a web page in a browser the user will see. False in Game Mode on
     /// the Deck, where a browser opens behind gamescope or not at all. Set once at startup.
     pub can_open_browser: bool,
+    /// "<channel> is live" popups, newest first. Drawn over every screen.
+    pub toasts: Vec<Toast>,
+    /// The id of the last toast, kept so ids never repeat.
+    pub last_toast_id: u32,
 }
 
 /// The Twitch page to subscribe to `channel`. The channel is a Twitch login (letters, digits and
@@ -426,6 +448,12 @@ pub fn subscribe_url(channel: &str) -> String {
 impl AppState {
     pub fn is_signed_in(&self) -> bool {
         self.user.is_some()
+    }
+
+    /// The app should be watching for followed channels going live: signed in, with the
+    /// setting on. `main` checks it at startup; the reducer keeps it true after that.
+    pub fn wants_live_watch(&self) -> bool {
+        self.is_signed_in() && self.settings.live_notifications
     }
 
     /// The quality streams are played at: the player menu's pick, or else the saved setting.

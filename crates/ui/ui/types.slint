@@ -16,6 +16,20 @@ export struct StreamItem {
     offline: bool,
 }
 
+// A "<channel> is live" popup (live notifications).
+export struct ToastItem {
+    // Rust keeps each popup's element by this, so its animations and timer carry on.
+    id: int,
+    name: string,
+    // The stream title and category.
+    line: string,
+    // Shown until the preview has loaded (and when there is none).
+    tint: color,
+    thumbnail: image,
+    // Cache key of the preview. Rust uses it to patch the image in place.
+    thumb-url: string,
+}
+
 // One key of the Search keyboard: where it sits on the 10-column grid and how many columns it
 // covers (htpc_core::keyboard).
 export struct SearchKey {

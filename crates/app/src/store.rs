@@ -19,6 +19,7 @@ use htpc_resolver::StreamResolver;
 
 use crate::awake::KeepAwake;
 use crate::chat::Chat;
+use crate::live_watch::LiveWatch;
 use crate::playback::Playback;
 use crate::provider::Provider;
 use crate::search::Searcher;
@@ -109,6 +110,8 @@ pub struct Store<P, R, S> {
     session: Arc<Session>,
     /// Runs searches once typing pauses.
     searcher: Searcher,
+    /// Watches for followed channels going live, and times the toasts.
+    live_watch: LiveWatch,
     sink: S,
     tx: UnboundedSender<Msg>,
     downloads: Arc<Semaphore>,
@@ -139,6 +142,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             chat_images: HashSet::new(),
             session,
             searcher: Searcher::default(),
+            live_watch: LiveWatch::default(),
             sink,
             tx,
             downloads: Arc::new(Semaphore::new(THUMBNAIL_CONCURRENCY)),
@@ -274,6 +278,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             if Searcher::handles(&cmd) {
                 self.searcher
                     .run(Arc::clone(&self.provider), self.tx.clone(), cmd);
+                continue;
+            }
+            if LiveWatch::handles(&cmd) {
+                self.live_watch
+                    .execute(Arc::clone(&self.provider), self.tx.clone(), cmd);
                 continue;
             }
             if Sleep::handles(&cmd) {

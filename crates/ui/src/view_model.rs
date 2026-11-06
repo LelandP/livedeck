@@ -12,11 +12,11 @@ use std::collections::{HashMap, VecDeque};
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
     Feed, FeedId, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, Row, RowKind, Screen,
-    SearchState, SettingsRow, Stream, Tile,
+    SearchState, SettingsRow, Stream, Tile, Toast, TOASTS_SHOWN,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
-use crate::{ChatMsg, ChatPiece, MainWindow, RowData, SearchKey, StreamItem};
+use crate::{ChatMsg, ChatPiece, MainWindow, RowData, SearchKey, StreamItem, ToastItem};
 
 /// Name colour for chatters who have not picked one. Matches the scaffold's mock colour.
 pub const DEFAULT_CHAT_NAME: Rgb = Rgb::new(214, 255, 58);
@@ -133,6 +133,19 @@ pub struct ChatLineVm {
     pub pieces: Vec<PieceVm>,
 }
 
+/// A "<channel> is live" popup.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToastVm {
+    /// The toast's id: the window keeps each popup's element (and its animations) by it.
+    pub id: i32,
+    pub name: String,
+    /// The stream title and category, as far as known.
+    pub line: String,
+    pub tint: Rgb,
+    /// Cache key of the stream preview. Empty without one.
+    pub thumb_url: String,
+}
+
 /// Everything `MainWindow` displays.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ViewModel {
@@ -181,6 +194,12 @@ pub struct ViewModel {
     pub settings_focus: i32,
     pub chat_layout_label: String,
     pub quality_label: String,
+    /// "On" or "Off".
+    pub live_notifications_label: String,
+    /// The newest "is live" popups, at most `TOASTS_SHOWN`, newest first.
+    pub toasts: Vec<ToastVm>,
+    /// How many more there are than `toasts` shows ("+2 more"). 0 for none.
+    pub toast_more: i32,
     pub playback: PlaybackId,
     /// Why playback failed, or empty.
     pub playback_error: String,
@@ -631,6 +650,22 @@ fn search_status(state: &AppState) -> String {
     }
 }
 
+fn toast(t: &Toast) -> ToastVm {
+    let s = &t.stream;
+    let line = match (s.title.is_empty(), s.category.is_empty()) {
+        (false, false) => format!("{} · {}", s.title, s.category),
+        (false, true) => s.title.clone(),
+        (true, _) => s.category.clone(),
+    };
+    ToastVm {
+        id: t.id as i32,
+        name: s.channel.clone(),
+        line,
+        tint: s.tint,
+        thumb_url: s.thumbnail.clone().unwrap_or_default(),
+    }
+}
+
 /// What A does on the focused key of the Search keyboard.
 fn key_label(key: Key) -> &'static str {
     match key {
@@ -780,7 +815,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
         let label = match state.settings_focus {
             SettingsRow::Account if state.is_signed_in() => "Sign out",
             SettingsRow::Account => "Sign in",
-            SettingsRow::ChatLayout | SettingsRow::Quality => "Change",
+            SettingsRow::ChatLayout | SettingsRow::Quality | SettingsRow::LiveNotifications => {
+                "Change"
+            }
         };
         (label, false)
     } else if search_on_keys {
@@ -845,6 +882,14 @@ pub fn view_model(state: &AppState) -> ViewModel {
         settings_focus: to_i32(state.settings_focus.index()),
         chat_layout_label: state.settings.chat_layout.label().to_owned(),
         quality_label: state.settings.quality.label().to_owned(),
+        live_notifications_label: if state.settings.live_notifications {
+            "On"
+        } else {
+            "Off"
+        }
+        .to_owned(),
+        toasts: state.toasts.iter().take(TOASTS_SHOWN).map(toast).collect(),
+        toast_more: to_i32(state.toasts.len().saturating_sub(TOASTS_SHOWN)),
         playback,
         playback_error,
         playback_details,
@@ -952,6 +997,7 @@ pub struct Update {
     pub qr_changed: bool,
     /// The same for the subscribe card's QR code.
     pub subscribe_qr_changed: bool,
+    pub toasts_changed: bool,
 }
 
 impl Update {
@@ -963,6 +1009,7 @@ impl Update {
             chat_changed: true,
             qr_changed: true,
             subscribe_qr_changed: true,
+            toasts_changed: true,
         }
     }
 
@@ -976,6 +1023,7 @@ impl Update {
             chat_changed: prev.chat != next.chat,
             qr_changed: prev.qr != next.qr,
             subscribe_qr_changed: prev.subscribe_qr != next.subscribe_qr,
+            toasts_changed: prev.toasts != next.toasts,
             vm: next,
         })
     }
@@ -987,8 +1035,12 @@ impl Update {
             if self.rows_changed {
                 sync_rows(ui, &vm.rows, images);
             }
+            if self.toasts_changed {
+                sync_toasts(ui, &vm.toasts, images);
+            }
             ui.set_now_playing(to_stream_item(&vm.now_playing, images));
         });
+        ui.set_toast_more(vm.toast_more);
         if self.chat_changed {
             sync_chat(ui, &vm.chat);
         }
@@ -1020,6 +1072,7 @@ impl Update {
         ui.set_settings_focus(vm.settings_focus);
         ui.set_chat_layout_label(vm.chat_layout_label.into());
         ui.set_quality_label(vm.quality_label.into());
+        ui.set_live_notifications_label(vm.live_notifications_label.into());
         ui.set_playback(vm.playback as i32);
         ui.set_playback_error(vm.playback_error.into());
         ui.set_playback_details(vm.playback_details.into());
@@ -1103,6 +1156,58 @@ pub fn apply_thumbnail(ui: &MainWindow, url: &str, thumb: &Thumbnail) {
                     },
                 );
             }
+        }
+    }
+    // A toast's preview comes the same way as a card's.
+    let toasts = ui.get_toasts();
+    if let Some(model) = vec_model(&toasts) {
+        for (i, toast) in toasts.iter().enumerate() {
+            if toast.thumb_url.as_str() == url {
+                model.set_row_data(
+                    i,
+                    ToastItem {
+                        thumbnail: image.clone(),
+                        ..toast
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn to_toast_item(t: &ToastVm, images: &ImageMemory) -> ToastItem {
+    ToastItem {
+        id: t.id,
+        name: t.name.as_str().into(),
+        line: t.line.as_str().into(),
+        tint: to_color(t.tint),
+        thumbnail: images.get(&t.thumb_url).unwrap_or_default(),
+        thumb_url: t.thumb_url.as_str().into(),
+    }
+}
+
+/// Brings the window's toasts in line with `want`, keeping each toast's element by id: a new
+/// one is inserted where it goes, an expired one removed, and the others are left alone, so
+/// their slide-in and timers carry on.
+fn sync_toasts(ui: &MainWindow, want: &[ToastVm], images: &ImageMemory) {
+    let current = ui.get_toasts();
+    let Some(model) = vec_model(&current) else {
+        let all: Vec<ToastItem> = want.iter().map(|t| to_toast_item(t, images)).collect();
+        ui.set_toasts(ModelRc::new(VecModel::from(all)));
+        return;
+    };
+    let mut i = 0;
+    while i < model.row_count() {
+        let id = model.row_data(i).map_or(-1, |t| t.id);
+        if want.iter().any(|t| t.id == id) {
+            i += 1;
+        } else {
+            model.remove(i);
+        }
+    }
+    for (i, t) in want.iter().enumerate() {
+        if model.row_data(i).map(|old| old.id) != Some(t.id) {
+            model.insert(i, to_toast_item(t, images));
         }
     }
 }
@@ -1956,6 +2061,7 @@ mod tests {
         assert_eq!(vm.settings_focus, 0);
         assert_eq!(vm.chat_layout_label, "Side panel");
         assert_eq!(vm.quality_label, "Best available");
+        assert_eq!(vm.live_notifications_label, "On");
 
         let (s, _) = reduce(&s, Intent::Down);
         let (s, _) = reduce(&s, Intent::Select);

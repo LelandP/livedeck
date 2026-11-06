@@ -11,6 +11,7 @@
 mod awake;
 mod browser;
 mod chat;
+mod live_watch;
 mod mock;
 mod playback;
 mod power;
@@ -84,8 +85,8 @@ CHAT:
   video shrinks for) or `overlay` (lines over the video).
 
 CONFIG:
-  config.toml (chat_layout, quality, image_cache_max_mb, client_id) is created with
-  defaults on the first run in the platform config folder
+  config.toml (chat_layout, quality, live_notifications, image_cache_max_mb, client_id) is
+  created with defaults on the first run in the platform config folder
   (Linux: ~/.config/livedeck, Windows: %APPDATA%\\livedeck\\config).
 
 Logging: set RUST_LOG, e.g. RUST_LOG=livedeck=debug
@@ -470,7 +471,7 @@ fn run_app<P: Provider, R: StreamResolver>(
     // Detached: the thread exits with the process or once the store channel closes.
     let _gamepad = htpc_input::spawn_gamepad_thread(move |intent| send(&gamepad_tx, intent));
 
-    let (mut state, startup) = htpc_core::init();
+    let (mut state, mut startup) = htpc_core::init();
     state.settings = settings;
     state.can_open_browser = browser::can_open_browser();
     // The account is in place before the first load, so Home already has its Followed row. A
@@ -479,6 +480,11 @@ fn run_app<P: Provider, R: StreamResolver>(
         Some(token) => runtime.block_on(session.adopt(token)),
         None => session.restore(),
     };
+    // A restored sign-in watches for followed channels going live from the start. From here on
+    // the reducer starts and stops the watch.
+    if state.wants_live_watch() {
+        startup.push(htpc_core::Command::StartLiveWatch);
+    }
     // Renews a token that is about to run out, at startup and again every minute.
     let resume = Arc::clone(&session);
     runtime.spawn(async move {

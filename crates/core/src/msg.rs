@@ -2,7 +2,7 @@
 
 use crate::domain::{
     ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, PlayerStats, Row,
-    RowKind, Tile, User,
+    RowKind, Stream, Tile, User,
 };
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
@@ -107,6 +107,14 @@ pub enum Command {
     /// newer one replaced, and a `query` shorter than `SEARCH_MIN_CHARS` only cancels. Answered
     /// with `Event::SearchResults` or `Event::SearchFailed` carrying `id`.
     Search { id: u32, query: String },
+    /// Start watching for followed channels going live (replacing a running watch, whose
+    /// memory of who was live is dropped). Polls every 30 s. The first poll, and the first after
+    /// the device slept, only notes who is live. Answered over time with `Event::WentLive`.
+    StartLiveWatch,
+    /// Stop watching: no more requests.
+    StopLiveWatch,
+    /// Send `Event::ToastExpired(id)` once the toast has been on screen long enough.
+    ExpireToast { id: u32 },
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }
@@ -226,6 +234,11 @@ pub enum Event {
         id: u32,
         message: String,
     },
+    /// These followed channels went live since the last poll. Each becomes a toast, except the
+    /// channel being watched. Ignored while the watch should not run (signed out, setting off).
+    WentLive(Vec<Stream>),
+    /// The toast `id` has been shown long enough.
+    ToastExpired(u32),
 }
 
 /// Anything the reducer accepts.

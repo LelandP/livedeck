@@ -268,10 +268,22 @@ impl FromStr for Zoom {
 }
 
 /// Settings that affect behaviour. Part of `AppState`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub chat_layout: ChatLayout,
     pub quality: Quality,
+    /// A popup when a followed channel goes live (signed in only). Off stops the polling.
+    pub live_notifications: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            chat_layout: ChatLayout::default(),
+            quality: Quality::default(),
+            live_notifications: true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +323,11 @@ mod tests {
             assert_eq!(q.cycled(true).cycled(false), q);
             assert!(!q.label().is_empty());
         }
+    }
+
+    #[test]
+    fn live_notifications_are_on_by_default() {
+        assert!(Settings::default().live_notifications);
     }
 
     #[test]

@@ -24,6 +24,6 @@ pub use reduce::{init, reduce, PREFETCH_DISTANCE};
 pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{
     subscribe_url, AppState, CategoryFeed, Feed, Focus, Playback, PlayerMenuRow, RailEntry,
-    RailState, Screen, SearchState, SessionOptions, SettingsRow, SleepTimer, SEARCH_MIN_CHARS,
-    SLEEP_STEPS,
+    RailState, Screen, SearchState, SessionOptions, SettingsRow, SleepTimer, Toast,
+    SEARCH_MIN_CHARS, SLEEP_STEPS, TOASTS_KEPT, TOASTS_SHOWN,
 };
