@@ -37,11 +37,13 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Predictions and polls:** show them while watching, if Twitch lets a viewer read them. Their EventSub topics may need the broadcaster's own permission, so this needs checking first
-
 **Big project**
 
 - [ ] **Kick support:** watch Kick streams next to Twitch. The app is Twitch-shaped throughout (API trait, feeds, chat, sign-in, config), so this starts with a platform abstraction. Then a read-only Kick platform (browse, play through Streamlink, chat over Kick's own WebSocket), with login and follows later
+
+**Parked**
+
+- **Predictions and polls:** viewers can't take part from LiveDeck. Betting channel points and voting only work on the Twitch website or app, and polls can't even be read without a twitch.tv login. Showing a prediction you can't join wasn't worth it
 
 ## Install
 
