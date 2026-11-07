@@ -164,7 +164,7 @@ By contributing you agree your work is released under the project's licence (GPL
 
 **Is this the official Twitch app for Steam Deck?** No. It is an independent hobby project.
 
-**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with permission to see your follows and to write chat messages as you (only when you send one). Stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
+**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with permission to see your follows and to write chat messages as you (only when you send one). You sign in with your Twitch account; LiveDeck has no accounts of its own. Stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
 
 **Does it block ads?** No, and it does not try to.
 

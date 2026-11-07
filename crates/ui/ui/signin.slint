@@ -1,6 +1,43 @@
 import { Theme } from "theme.slint";
 
-// Device Code Grant screen: the address and code to type, and a QR code of the same link.
+// One line of "what signing in gives you": a tick, a bold label and, when there is room, what it
+// means. The tick is drawn, not a glyph, so it shows whatever the font has.
+component Benefit inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> show-detail;
+    spacing: 12px;
+
+    Path {
+        width: 18px;
+        height: 18px;
+        y: 4px;
+        viewbox-width: 18;
+        viewbox-height: 18;
+        commands: "M 2 9.5 L 7 14.5 L 16 3.5";
+        stroke: Theme.accent-light;
+        stroke-width: 3px;
+    }
+    VerticalLayout {
+        spacing: 2px;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: Theme.fs-body;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+        if root.show-detail : Text {
+            text: root.detail;
+            color: Theme.muted;
+            font-size: Theme.fs-small;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// Device Code Grant screen: the address and code to type, a QR code of the same link, and what
+// signing in to Twitch gives you.
 export component SignInScreen inherits Rectangle {
     in property <string> code;
     in property <string> url;
@@ -9,6 +46,10 @@ export component SignInScreen inherits Rectangle {
     in property <bool> failed;
     // The QR code of the verification link, one pixel per module (with its quiet zone).
     in property <image> qr;
+
+    // At 800 px (Steam Deck) the QR code and six explained benefits do not fit above the hints
+    // bar, so only the bold labels are shown there.
+    property <bool> roomy: root.height >= 960px;
 
     HorizontalLayout {
         alignment: center;
@@ -26,6 +67,14 @@ export component SignInScreen inherits Rectangle {
                 font-size: Theme.fs-display;
                 font-weight: 900;
             }
+            // Always "Twitch": there is no LiveDeck account.
+            Text {
+                text: "Use your Twitch account. There is no LiveDeck account to make, and your password is typed on twitch.tv, never in LiveDeck.";
+                color: Theme.muted;
+                font-size: Theme.fs-body;
+                wrap: word-wrap;
+            }
+            Rectangle { height: 8px; }
             Text {
                 text: "On your phone or computer, open";
                 color: Theme.muted;
@@ -71,24 +120,72 @@ export component SignInScreen inherits Rectangle {
             }
         }
 
-        // The QR code of the verification link (it already carries the code). Drawn on white with
-        // its own quiet zone, scaled without smoothing so the modules stay sharp.
-        Rectangle {
-            width: 260px;
-            height: 260px;
-            y: (parent.height - self.height) / 2;
-            background: #ffffff;
-            border-radius: 8px;
-            clip: true;
-            opacity: root.failed ? 0.25 : 1.0;
-            animate opacity { duration: Theme.t-fast; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 12px;
+            width: 300px;
 
-            Image {
-                width: parent.width;
-                height: parent.height;
-                source: root.qr;
-                image-fit: contain;
-                image-rendering: pixelated;
+            // The QR code of the verification link (it already carries the code). Drawn on white
+            // with its own quiet zone, scaled without smoothing so the modules stay sharp.
+            HorizontalLayout {
+                alignment: start;
+                Rectangle {
+                    width: 260px;
+                    height: 260px;
+                    background: #ffffff;
+                    border-radius: 8px;
+                    clip: true;
+                    opacity: root.failed ? 0.25 : 1.0;
+                    animate opacity { duration: Theme.t-fast; }
+
+                    Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: root.qr;
+                        image-fit: contain;
+                        image-rendering: pixelated;
+                    }
+                }
+            }
+
+            Rectangle { height: 12px; }
+            Text {
+                text: "Signed in to Twitch, you get";
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+            }
+            // Static: a line is added here when a signed-in feature ships. Features that work
+            // without signing in (hype train) do not go here.
+            Benefit {
+                label: "Who you follow";
+                detail: "A Followed row on Home and a Following tab";
+                show-detail: root.roomy;
+            }
+            Benefit {
+                label: "Search";
+                detail: "Find channels and categories by name";
+                show-detail: root.roomy;
+            }
+            Benefit {
+                label: "Live notifications";
+                detail: "When a channel you follow goes live";
+                show-detail: root.roomy;
+            }
+            Benefit {
+                label: "Full rows";
+                detail: "Every row pages on, not just the first ~30 streams";
+                show-detail: root.roomy;
+            }
+            Benefit {
+                label: "Follow raids";
+                detail: "To the next channel when a stream ends";
+                show-detail: root.roomy;
+            }
+            Benefit {
+                label: "Chat from the couch";
+                detail: "With the on-screen keyboard and quick messages";
+                show-detail: root.roomy;
             }
         }
     }

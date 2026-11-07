@@ -708,4 +708,29 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
             "the Browse heading is in the middle of the screen"
         );
     }
+
+    // Sign-in: the QR code and the benefits list under it fit on screen, at the Deck's 800 px
+    // (labels only) and at 1080 px (with the explanations). The column is centred, so if it grew
+    // too tall the white QR square would be pushed off the top.
+    let (sign_in, _) = reduce(&init().0, Intent::RailPick(htpc_core::RailEntry::Account));
+    Update::full(view_model(&sign_in)).apply(&ui);
+    // Pure white is the QR square only: `Theme.text` (#efeff1) stays below 240.
+    let white = |p: &Rgba8Pixel| p.r > 240 && p.g > 240 && p.b > 240;
+    for (w, h) in [(WIDTH, HEIGHT), (1920, 1080)] {
+        ui.window().set_size(slint::PhysicalSize::new(w, h));
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        let image = ui.window().take_snapshot().expect("the window renders");
+        assert_eq!((image.width(), image.height()), (w, h));
+        let rows_with_white: Vec<u32> = (0..h)
+            .filter(|&y| count(&image, 0..w, y..y + 1, white) > 0)
+            .collect();
+        let (top, bottom) = (rows_with_white[0], *rows_with_white.last().unwrap());
+        eprintln!("sign-in at {w}x{h}: QR rows {top}..={bottom}");
+        assert!(
+            top > 0 && bottom - top >= 250,
+            "{w}x{h}: the QR square is cut off at the top ({top}..={bottom})"
+        );
+    }
+    ui.window()
+        .set_size(slint::PhysicalSize::new(WIDTH, HEIGHT));
 }

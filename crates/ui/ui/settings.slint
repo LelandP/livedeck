@@ -82,7 +82,7 @@ export component SettingsScreen inherits Rectangle {
 
         SettingRow {
             title: root.user-name == "" ? "Not signed in" : root.user-name;
-            help: root.user-name == "" ? "Sign in to see who you follow" : "Signed in to Twitch";
+            help: root.user-name == "" ? "Sign in to Twitch to see who you follow" : "Signed in to Twitch";
             value: root.user-name == "" ? "Sign in" : "Sign out";
             focused: root.focus-row == 0;
         }
@@ -102,7 +102,7 @@ export component SettingsScreen inherits Rectangle {
         }
         SettingRow {
             title: "Live notifications";
-            help: root.user-name == "" ? "Sign in to hear when channels you follow go live" : "A popup when a channel you follow goes live";
+            help: root.user-name == "" ? "Sign in to Twitch to hear when channels you follow go live" : "A popup when a channel you follow goes live";
             value: root.live-notifications;
             choice: true;
             focused: root.focus-row == 3;

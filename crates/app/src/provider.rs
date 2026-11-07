@@ -222,7 +222,7 @@ impl<A: TwitchApi> ApiProvider<A> {
     /// offline row, so nobody shows twice.
     async fn load_following(&self) -> Result<Vec<Row>, String> {
         let Some(id) = self.viewer_id().await else {
-            return Err("Sign in to see the channels you follow".to_owned());
+            return Err("Sign in to Twitch to see the channels you follow".to_owned());
         };
         let bucket = refresh_bucket();
         let (live, all) = tokio::join!(self.all_followed_streams(&id), self.all_followed(&id));
