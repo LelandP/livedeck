@@ -322,6 +322,6 @@ mod tests {
         assert!(LiveWatch::handles(&Command::StartLiveWatch));
         assert!(LiveWatch::handles(&Command::StopLiveWatch));
         assert!(LiveWatch::handles(&Command::ExpireToast { id: 1 }));
-        assert!(!LiveWatch::handles(&Command::StopPlayback));
+        assert!(!LiveWatch::handles(&Command::StopPlayback { slot: 0 }));
     }
 }

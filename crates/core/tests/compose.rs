@@ -43,7 +43,7 @@ fn home(signed_in: Option<User>) -> AppState {
 /// The first stream playing with chat shown.
 fn watching(signed_in: Option<User>) -> AppState {
     let (s, _) = reduce(&home(signed_in), Intent::Select);
-    let (mut s, _) = reduce(&s, Event::PlaybackStarted);
+    let (mut s, _) = reduce(&s, Event::PlaybackStarted { slot: 0 });
     s.chat_open = true;
     s
 }

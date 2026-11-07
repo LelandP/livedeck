@@ -17,6 +17,9 @@ pub fn map_button(button: Button) -> Option<Intent> {
         Button::North => Intent::ToggleChat,
         Button::West => Intent::Retry,
         Button::Start => Intent::Menu,
+        // The small button left of the face buttons: View (Steam Deck, Xbox), Back (older pads),
+        // Create/Share (PlayStation). Multiview's button on every screen.
+        Button::Select => Intent::View,
         // gilrs calls the bumpers (LB, RB) triggers, and the triggers `LeftTrigger2`.
         Button::LeftTrigger => Intent::PageLeft,
         Button::RightTrigger => Intent::PageRight,
@@ -192,6 +195,11 @@ mod tests {
     }
 
     #[test]
+    fn the_view_button_is_multiviews() {
+        assert_eq!(map_button(Button::Select), Some(Intent::View));
+    }
+
+    #[test]
     fn the_bumpers_turn_keyboard_pages() {
         assert_eq!(map_button(Button::LeftTrigger), Some(Intent::PageLeft));
         assert_eq!(map_button(Button::RightTrigger), Some(Intent::PageRight));
@@ -199,12 +207,7 @@ mod tests {
 
     #[test]
     fn other_buttons_are_ignored() {
-        for b in [
-            Button::Mode,
-            Button::Select,
-            Button::LeftTrigger2,
-            Button::Unknown,
-        ] {
+        for b in [Button::Mode, Button::LeftTrigger2, Button::Unknown] {
             assert_eq!(map_button(b), None, "{b:?}");
         }
     }

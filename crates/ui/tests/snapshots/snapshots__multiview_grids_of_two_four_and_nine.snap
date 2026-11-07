@@ -1,0 +1,28 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- 2 streams
+screen=Multiview active=true count="2 streams" select="Listen" retry=false video_slot=0 chat_open=false
+  layouts [2*] [3] [4] [6] [9] [Spotlight]
+  0: 64.0,228.2 568.0x319.5 slot0 grandmaster_k Playing 360p SOUND "Twitch · VALORANT · 48.1K watching"
+  1: 648.0,228.2 568.0x319.5 slot1 ash Playing 360p "Twitch · VALORANT · 1.0K watching" <focus, A "Listen">
+-- 4 streams
+screen=Multiview active=true count="4 streams" select="Listen" retry=false video_slot=0 chat_open=false
+  layouts [2~] [3~] [4*] [6] [9] [Spotlight]
+  0: 84.4,72.0 547.6x308.0 slot0 grandmaster_k Playing 360p SOUND "Twitch · VALORANT · 48.1K watching"
+  1: 648.0,72.0 547.6x308.0 slot1 ash Playing 360p "Twitch · VALORANT · 1.0K watching" <focus, A "Listen">
+  2: 84.4,396.0 547.6x308.0 slot2 birch Playing 360p "Twitch · VALORANT · 2.0K watching"
+  3: 648.0,396.0 547.6x308.0 slot3 cedar Playing 360p "Twitch · VALORANT · 3.0K watching"
+-- 9 streams
+screen=Multiview active=true count="9 streams" select="Listen" retry=false video_slot=0 chat_open=false
+  layouts [2~] [3~] [4~] [6~] [9*] [Spotlight]
+  0: 90.7,72.0 355.6x200.0 slot0 grandmaster_k Playing 360p SOUND "Twitch · VALORANT · 48.1K watching"
+  1: 462.2,72.0 355.6x200.0 slot1 ash Playing 360p "Twitch · VALORANT · 1.0K watching" <focus, A "Listen">
+  2: 833.8,72.0 355.6x200.0 slot2 birch Playing 360p "Twitch · VALORANT · 2.0K watching"
+  3: 90.7,288.0 355.6x200.0 slot3 cedar Playing 360p "Twitch · VALORANT · 3.0K watching"
+  4: 462.2,288.0 355.6x200.0 slot4 dune Playing 360p kick "Kick · VALORANT"
+  5: 833.8,288.0 355.6x200.0 slot5 elm Playing 360p "Twitch · VALORANT · 5.0K watching"
+  6: 90.7,504.0 355.6x200.0 slot6 fern Playing 360p "Twitch · VALORANT · 6.0K watching"
+  7: 462.2,504.0 355.6x200.0 slot7 gale Playing 360p "Twitch · VALORANT · 7.0K watching"
+  8: 833.8,504.0 355.6x200.0 slot8 heath Playing 360p "Twitch · VALORANT · 8.0K watching"

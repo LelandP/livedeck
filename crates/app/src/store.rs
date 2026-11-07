@@ -80,9 +80,62 @@ impl Sink for slint::Weak<MainWindow> {
 /// Writes the settings to the config file. Blocking, so the store runs it off the async workers.
 pub type SaveSettings = Arc<dyn Fn(htpc_core::Settings) + Send + Sync>;
 
-/// True while a stream is on screen and starting or playing: the time to keep the screen on.
+/// Writes the favorites to `favorites.toml`. Blocking, like [`SaveSettings`].
+pub type SaveFavorites = Arc<dyn Fn(&[htpc_core::ChannelRef]) + Send + Sync>;
+
+/// Writes the last multiview session to `multiview.toml`. Blocking, like [`SaveSettings`].
+pub type SaveMultiview = Arc<dyn Fn(&htpc_core::SavedSet) + Send + Sync>;
+
+/// Writes a file off the async workers, newest last: every star and unstar (or multiview change)
+/// writes, and two writes in flight must not land in the wrong order.
+struct LatestWriter<T> {
+    save: Arc<dyn Fn(&T) + Send + Sync>,
+    /// The value still to write. A write takes the newest, so a burst writes it once or twice.
+    pending: Arc<std::sync::Mutex<Option<T>>>,
+    /// One write at a time.
+    writing: Arc<std::sync::Mutex<()>>,
+}
+
+impl<T> Clone for LatestWriter<T> {
+    fn clone(&self) -> Self {
+        Self {
+            save: Arc::clone(&self.save),
+            pending: Arc::clone(&self.pending),
+            writing: Arc::clone(&self.writing),
+        }
+    }
+}
+
+impl<T: Send + 'static> LatestWriter<T> {
+    fn new(save: impl Fn(&T) + Send + Sync + 'static) -> Self {
+        Self {
+            save: Arc::new(save),
+            pending: Arc::new(std::sync::Mutex::new(None)),
+            writing: Arc::default(),
+        }
+    }
+
+    fn write(&self, value: T) {
+        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _one = this.writing.lock().unwrap_or_else(|e| e.into_inner());
+            let next = this
+                .pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            if let Some(value) = next {
+                (this.save)(&value);
+            }
+        });
+    }
+}
+
+/// True while a stream is on screen and starting or playing: the time to keep the screen on. In
+/// multiview, `playback` is the stream with sound's.
 fn watching(state: &AppState) -> bool {
-    state.screen == Screen::Player
+    matches!(state.screen, Screen::Player | Screen::Multiview)
         && matches!(
             state.playback,
             CorePlayback::Loading | CorePlayback::Playing
@@ -94,6 +147,10 @@ pub struct Store<P, R, S> {
     state: AppState,
     /// `None` when there is nowhere to save (no config folder, tests, `--mock`).
     save_settings: Option<SaveSettings>,
+    /// The same for the favorites.
+    save_favorites: Option<LatestWriter<Vec<htpc_core::ChannelRef>>>,
+    /// And for the last multiview session.
+    save_multiview: Option<LatestWriter<htpc_core::SavedSet>>,
     /// Keeps the screen on during a stream. `None` in tests that do not care.
     keep_awake: Option<KeepAwake>,
     /// What `keep_awake` was last told.
@@ -136,9 +193,17 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
         sink: S,
         tx: UnboundedSender<Msg>,
     ) -> Self {
+        // The saved favorites and multiview set, before the first Home load asks for their row
+        // and the resume card.
+        provider.set_favorites(state.favorites.clone());
+        if let Some(set) = &state.last_multiview {
+            provider.set_resume_set(set.channels.clone());
+        }
         Self {
             state,
             save_settings: None,
+            save_favorites: None,
+            save_multiview: None,
             keep_awake: None,
             awake: false,
             sleep: None,
@@ -161,6 +226,22 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     /// Persists changed settings with `save`.
     pub fn with_settings_saver(mut self, save: SaveSettings) -> Self {
         self.save_settings = Some(save);
+        self
+    }
+
+    /// Persists changed favorites with `save`.
+    pub fn with_favorites_saver(mut self, save: SaveFavorites) -> Self {
+        self.save_favorites = Some(LatestWriter::new(
+            move |list: &Vec<htpc_core::ChannelRef>| save(list),
+        ));
+        self
+    }
+
+    /// Persists the multiview set with `save` whenever it changes.
+    pub fn with_multiview_saver(mut self, save: SaveMultiview) -> Self {
+        self.save_multiview = Some(LatestWriter::new(move |set: &htpc_core::SavedSet| {
+            save(set)
+        }));
         self
     }
 
@@ -268,6 +349,22 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 self.provider.set_kick(on);
                 continue;
             }
+            if let Command::SaveFavorites(list) = cmd {
+                // At once, not in a task: a `LoadFeed` after it must already check the new list.
+                self.provider.set_favorites(list.clone());
+                if let Some(writer) = &self.save_favorites {
+                    writer.write(list);
+                }
+                continue;
+            }
+            if let Command::SaveMultiview(set) = cmd {
+                // At once, like the favorites: the next Home load checks the new set.
+                self.provider.set_resume_set(set.channels.clone());
+                if let Some(writer) = &self.save_multiview {
+                    writer.write(set);
+                }
+                continue;
+            }
             if let Command::SaveSettings(settings) = cmd {
                 if let Some(save) = self.save_settings.clone() {
                     // File IO: keep it off the async workers.
@@ -285,6 +382,14 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 tokio::spawn(async move {
                     tokio::time::sleep(crate::playback::OFFLINE_RECHECK).await;
                     let _ = tx.send(htpc_core::Event::OfflineRecheckDue(id).into());
+                });
+                continue;
+            }
+            if let Command::SettleQuality { id } = cmd {
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(crate::playback::QUALITY_SETTLE).await;
+                    let _ = tx.send(htpc_core::Event::QualitySettleDue(id).into());
                 });
                 continue;
             }
@@ -379,7 +484,7 @@ mod tests {
     use crate::session::{AppAuth, Apply, Notify, Viewer};
     use htpc_chat::{ChatEvent, FakeChat};
     use htpc_core::{init, ChatMessage, ChatSpan, ChatStatus, Event, Intent, RailEntry};
-    use htpc_player::FakePlayer;
+    use htpc_player::PlayerPool;
     use htpc_resolver::FakeResolver;
     use htpc_twitch_api::{DeviceGrant, FakeApi, FakeAuth, Game};
     use htpc_ui::{ScreenId, Shape};
@@ -442,7 +547,7 @@ mod tests {
         let provider = ApiProvider::new(api);
         let playback = Playback::new(
             FakeResolver::playing("https://example.test/live.m3u8"),
-            Arc::new(FakePlayer::new()),
+            PlayerPool::fake().0,
         );
         let session = fast_session(&tx, Viewer::default());
         let chat = Chat::new(
@@ -493,7 +598,7 @@ mod tests {
         let provider = ApiProvider::new(fake_api()).with_account(Arc::clone(&viewer));
         let playback = Playback::new(
             FakeResolver::playing("https://example.test/live.m3u8"),
-            Arc::new(FakePlayer::new()),
+            PlayerPool::fake().0,
         );
         let session = fast_session(&tx, viewer);
         let chat = Chat::new(
@@ -603,6 +708,195 @@ mod tests {
         }
         s.playback = CorePlayback::Loading;
         assert!(watching(&s), "starting counts");
+    }
+
+    #[tokio::test]
+    async fn a_starred_stream_is_on_the_favorites_screen_and_saved() {
+        let (tx, rx) = unbounded_channel();
+        let rec = Recorder::default();
+        let (state, startup) = init();
+        let playback = Playback::new(
+            FakeResolver::playing("https://example.test/live.m3u8"),
+            PlayerPool::fake().0,
+        );
+        let chat = Chat::new(
+            Arc::new(fake_chat(false)),
+            Arc::new(fake_chat(false)),
+            tx.clone(),
+        );
+        let saved: Arc<Mutex<Vec<Vec<htpc_core::ChannelRef>>>> = Arc::default();
+        let into = Arc::clone(&saved);
+        let store = Store::new(
+            state,
+            ApiProvider::new(fake_api()),
+            playback,
+            chat,
+            fast_session(&tx, Viewer::default()),
+            rec.clone(),
+            tx.clone(),
+        )
+        .with_favorites_saver(Arc::new(move |list: &[htpc_core::ChannelRef]| {
+            into.lock().unwrap().push(list.to_vec());
+        }));
+        tokio::spawn(store.run(startup, rx));
+        rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        // The reducer needs a user to star: the token's owner signs in.
+        tx.send(
+            Event::SignedIn(htpc_core::User {
+                login: MOCK_USER.into(),
+                can_chat: true,
+            })
+            .into(),
+        )
+        .unwrap();
+        rec.wait_for("signed in", |vm| vm.user_name == MOCK_USER)
+            .await;
+
+        // View on the hero (grandmaster_k): *Add to multiview*, *Add to favorites*.
+        tx.send(Intent::View.into()).unwrap();
+        let vm = rec.wait_for("popup", |vm| vm.mv.popup_open).await;
+        assert_eq!(vm.mv.popup_rows[1].label, "Add to favorites");
+        press(&tx, Intent::Down, 1).await;
+        tx.send(Intent::Select.into()).unwrap();
+        rec.wait_for("closed", |vm| !vm.mv.popup_open).await;
+
+        // The provider already checks the new list when Favorites opens.
+        tx.send(Intent::RailPick(RailEntry::Favorites).into())
+            .unwrap();
+        let vm = rec
+            .wait_for("favorites", |vm| {
+                vm.heading == "Favorites"
+                    && vm
+                        .rows
+                        .first()
+                        .is_some_and(|r| r.cards.first().is_some_and(|c| !c.loading))
+            })
+            .await;
+        assert_eq!(vm.rail_current, 2);
+        assert_eq!(vm.rows[0].title, "Live");
+        assert_eq!(vm.rows[0].cards[0].channel, "grandmaster_k");
+        for _ in 0..400 {
+            if !saved.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            *saved.lock().unwrap(),
+            [vec![htpc_core::ChannelRef::twitch("grandmaster_k")]]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_resume_card_starts_the_saved_set_and_the_change_is_saved() {
+        let (tx, rx) = unbounded_channel();
+        let rec = Recorder::default();
+        let (mut state, startup) = init();
+        state.user = Some(htpc_core::User {
+            login: MOCK_USER.into(),
+            can_chat: true,
+        });
+        // `sleepy_fox` is offline in the fixtures, the other two live.
+        state.last_multiview = Some(htpc_core::SavedSet {
+            channels: vec![
+                htpc_core::ChannelRef::twitch("tidewatch"),
+                htpc_core::ChannelRef::twitch("sleepy_fox"),
+                htpc_core::ChannelRef::twitch("lofi_lena"),
+            ],
+            layout: htpc_core::Layout::Spotlight,
+            sound: 2,
+        });
+        let playback = Playback::new(
+            FakeResolver::playing("https://example.test/live.m3u8"),
+            PlayerPool::fake().0,
+        );
+        let chat = Chat::new(
+            Arc::new(fake_chat(false)),
+            Arc::new(fake_chat(false)),
+            tx.clone(),
+        );
+        let saved: Arc<Mutex<Vec<htpc_core::SavedSet>>> = Arc::default();
+        let into = Arc::clone(&saved);
+        let store = Store::new(
+            state,
+            ApiProvider::new(fake_api()),
+            playback,
+            chat,
+            fast_session(&tx, Viewer::default()),
+            rec.clone(),
+            tx.clone(),
+        )
+        .with_multiview_saver(Arc::new(move |set: &htpc_core::SavedSet| {
+            into.lock().unwrap().push(set.clone());
+        }));
+        tokio::spawn(store.run(startup, rx));
+
+        // The card opens Followed Live, with the two live ones.
+        let vm = rec
+            .wait_for("card", |vm| {
+                vm.rows
+                    .get(1)
+                    .is_some_and(|r| r.cards.first().is_some_and(|c| c.resume))
+            })
+            .await;
+        let card = &vm.rows[1].cards[0];
+        assert_eq!(card.title, "2 streams");
+        assert_eq!(card.mosaic.len(), 2);
+
+        press(&tx, Intent::Down, 1).await;
+        tx.send(Intent::Select.into()).unwrap();
+        let vm = rec
+            .wait_for("multiview", |vm| vm.screen == ScreenId::Multiview)
+            .await;
+        assert_eq!(vm.toasts.len(), 1);
+        assert_eq!(vm.toasts[0].name, "1 offline, skipped");
+        assert!(vm.toasts[0].note);
+
+        for _ in 0..400 {
+            if !saved.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            *saved.lock().unwrap(),
+            [htpc_core::SavedSet {
+                channels: vec![
+                    htpc_core::ChannelRef::twitch("tidewatch"),
+                    htpc_core::ChannelRef::twitch("lofi_lena"),
+                ],
+                layout: htpc_core::Layout::Spotlight,
+                sound: 1,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn favorites_are_written_newest_last() {
+        let written: Arc<Mutex<Vec<usize>>> = Arc::default();
+        let into = Arc::clone(&written);
+        let writer = LatestWriter::new(move |list: &Vec<htpc_core::ChannelRef>| {
+            // A slow disk, so writes pile up.
+            std::thread::sleep(Duration::from_millis(2));
+            into.lock().unwrap().push(list.len());
+        });
+        for n in 1..=20 {
+            let list = (0..n)
+                .map(|i| htpc_core::ChannelRef::twitch(format!("c{i}")))
+                .collect();
+            writer.write(list);
+        }
+        for _ in 0..400 {
+            if written.lock().unwrap().last() == Some(&20) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Let any write still queued finish: none may land after the newest.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let written = written.lock().unwrap();
+        assert_eq!(written.last(), Some(&20), "{written:?}");
+        assert!(written.windows(2).all(|w| w[0] < w[1]), "{written:?}");
     }
 
     #[tokio::test]
@@ -767,7 +1061,7 @@ mod tests {
             .rows
             .iter()
             .all(|r| r.shape == Shape::Portrait && r.cards.len() == 5));
-        assert_eq!(vm.rail_current, 2);
+        assert_eq!(vm.rail_current, 3);
 
         // Scrolling to the last rows loads the next page without blocking input.
         press(&tx, Intent::Down, 5).await;
@@ -852,7 +1146,7 @@ mod tests {
         };
         let playback = Playback::new(
             FakeResolver::playing("https://example.test/live.m3u8"),
-            Arc::new(FakePlayer::new()),
+            PlayerPool::fake().0,
         );
         let chat = Chat::new(
             Arc::new(FakeChat::new(script)),

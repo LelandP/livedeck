@@ -33,7 +33,7 @@ fn home() -> AppState {
 
 fn playing() -> AppState {
     let (s, _) = reduce(&home(), Intent::Select);
-    reduce(&s, Event::PlaybackStarted).0
+    reduce(&s, Event::PlaybackStarted { slot: 0 }).0
 }
 
 fn run(s: &AppState, intents: &[Intent]) -> (AppState, Vec<Command>) {
@@ -215,7 +215,7 @@ fn firing_on_the_player_goes_back_and_suspends() {
     assert_eq!(s.screen, Screen::Home);
     assert_eq!(s.now_playing, None);
     assert_eq!(s.player_menu, None);
-    assert!(cmds.contains(&Command::StopPlayback));
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
     assert!(cmds.contains(&Command::LeaveChat));
     assert_eq!(cmds.last(), Some(&Command::Suspend));
 }

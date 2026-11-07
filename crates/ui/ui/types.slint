@@ -1,3 +1,11 @@
+// One stream of the *Resume multiview* card's 2×2 mosaic.
+export struct MosaicCell {
+    tint: color,
+    thumbnail: image,
+    // Cache key of the preview. Rust uses it to patch the image in place.
+    thumb-url: string,
+}
+
 export struct StreamItem {
     channel: string,
     title: string,
@@ -16,13 +24,22 @@ export struct StreamItem {
     offline: bool,
     // A Kick channel: a "Kick" chip at the top left. Twitch cards have none.
     kick: bool,
+    // Picked for multiview: a tick badge at the top right.
+    picked: bool,
+    // Home's *Resume multiview* card: the mosaic instead of the thumbnail, and `title` ("5
+    // streams") always shown.
+    resume: bool,
+    mosaic: [MosaicCell],
 }
 
-// A "<channel> is live" popup (live notifications).
+// A "<channel> is live" popup (live notifications), or a note ("2 offline, skipped").
 export struct ToastItem {
     // Rust keeps each popup's element by this, so its animations and timer carry on.
     id: int,
+    // The channel, or a note's whole text.
     name: string,
+    // A note: `name` alone, without "is live", a preview or the second line.
+    note: bool,
     // The stream title and category.
     line: string,
     // Shown until the preview has loaded (and when there is none).
@@ -57,6 +74,57 @@ export struct ChatPiece {
     // Cache key of the image. Rust uses it to patch the image in place. Empty for plain words.
     url: string,
     emote: bool,
+}
+
+// One place of the multiview grid: a stream, or an empty *Add a stream* slot. Where it sits is in
+// the 1280x800 layout's pixels (htpc_core::layout::rects); the screen scales and centres it.
+export struct MvTile {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    // An *Add a stream* slot: everything below is unused.
+    empty: bool,
+    // The player it plays on: its frames are `tile-videos[slot]`.
+    slot: int,
+    channel: string,
+    // "Twitch · Just Chatting · 4.2K watching".
+    line: string,
+    kick: bool,
+    tint: color,
+    // The rendition it plays ("480p"), and whether the network limit lowered it (drawn amber).
+    quality: string,
+    lowered: bool,
+    // The stream with sound: a violet badge with a level meter, never dimmed.
+    sound: bool,
+    focused: bool,
+    // 0 loading, 1 playing, 2 offline, 3 failed (PlaybackId in view_model.rs).
+    state: int,
+    // What A does on the focused tile ("Listen", "Full screen", "Add a stream").
+    action: string,
+}
+
+// A layout chip in the multiview header: "2" ... "9", "Spotlight".
+export struct MvLayoutChip {
+    label: string,
+    on: bool,
+    // Too small for the streams: LB/RB skip it, and it is drawn faded.
+    fits: bool,
+}
+
+// A stream in the strip shown over full screen on LB/RB.
+export struct MvStripItem {
+    slot: int,
+    channel: string,
+    kick: bool,
+    // The one on screen (with sound).
+    on: bool,
+}
+
+// A row of the View popup: what it does, and a value on the right (the layout row's "◀ Grid of 4 ▶").
+export struct PopupItem {
+    label: string,
+    value: string,
 }
 
 export struct ChatMsg {

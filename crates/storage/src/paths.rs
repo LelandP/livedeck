@@ -3,7 +3,7 @@
 //! | | Linux / SteamOS | Windows |
 //! |---|---|---|
 //! | config | `$XDG_CONFIG_HOME/livedeck` | `%APPDATA%\livedeck\config` |
-//! | data (token fallback) | `$XDG_DATA_HOME/livedeck` | `%APPDATA%\livedeck\data` |
+//! | data (token fallback, favorites, multiview) | `$XDG_DATA_HOME/livedeck` | `%APPDATA%\livedeck\data` |
 //! | cache (images) | `$XDG_CACHE_HOME/livedeck` | `%LOCALAPPDATA%\livedeck\cache` |
 //!
 //! Inside a Flatpak the XDG variables point into `~/.var/app/<id>/`, which is what we want.
@@ -17,6 +17,8 @@ pub const APP_NAME: &str = "livedeck";
 
 const CONFIG_FILE: &str = "config.toml";
 const TOKEN_FILE: &str = "tokens.json";
+const FAVORITES_FILE: &str = "favorites.toml";
+const MULTIVIEW_FILE: &str = "multiview.toml";
 const IMAGE_DIR: &str = "images";
 
 /// The three base folders. Nothing is created until something is written.
@@ -57,6 +59,17 @@ impl Paths {
         self.data_dir.join(TOKEN_FILE)
     }
 
+    /// The starred channels. The app writes it often, so it is not in the config folder.
+    pub fn favorites_file(&self) -> PathBuf {
+        self.data_dir.join(FAVORITES_FILE)
+    }
+
+    /// The last multiview session. Written whenever a running one changes, so next to the
+    /// favorites.
+    pub fn multiview_file(&self) -> PathBuf {
+        self.data_dir.join(MULTIVIEW_FILE)
+    }
+
     pub fn image_cache_dir(&self) -> PathBuf {
         self.cache_dir.join(IMAGE_DIR)
     }
@@ -71,6 +84,8 @@ mod tests {
         let p = Paths::under(Path::new("/r"));
         assert_eq!(p.config_file(), Path::new("/r/config/config.toml"));
         assert_eq!(p.token_file(), Path::new("/r/data/tokens.json"));
+        assert_eq!(p.favorites_file(), Path::new("/r/data/favorites.toml"));
+        assert_eq!(p.multiview_file(), Path::new("/r/data/multiview.toml"));
         assert_eq!(p.image_cache_dir(), Path::new("/r/cache/images"));
     }
 

@@ -134,6 +134,6 @@ mod tests {
     #[test]
     fn handles_only_search() {
         assert!(Searcher::handles(&search(1, "ab")));
-        assert!(!Searcher::handles(&Command::StopPlayback));
+        assert!(!Searcher::handles(&Command::StopPlayback { slot: 0 }));
     }
 }

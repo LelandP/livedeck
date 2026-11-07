@@ -204,6 +204,85 @@ pub fn fake_chat(lively: bool) -> FakeChat {
     }
 }
 
+/// The mock channels that are not live: following them shows them offline, and playing one ends on
+/// the offline screen.
+const MOCK_OFFLINE: [&str; 4] = ["sleepy_fox", "driftwood", "kettle_kai", "sleepy-fox"];
+
+/// How long a mock resolve takes, so "Starting…" and the quality swap can be seen.
+const MOCK_RESOLVE: Duration = Duration::from_millis(600);
+
+/// Picture sources from FFmpeg's `lavfi` that move, so a playing tile is plain to see.
+/// Each is a source and its options after the size and rate.
+const MOCK_PATTERNS: [(&str, &str); 6] = [
+    ("testsrc2", ""),
+    ("gradients", ":speed=0.02"),
+    (
+        "life",
+        ":mold=10:ratio=0.2:life_color=0xa970ff:death_color=0x1a1030",
+    ),
+    ("testsrc", ""),
+    ("gradients", ":c0=0x53fc18:c1=0x0e0e10:speed=0.03"),
+    ("cellauto", ":rule=110"),
+];
+
+/// `--mock`'s stream lookup: every live channel plays a generated test picture with a quiet tone,
+/// through FFmpeg's `lavfi` device in mpv, so the player and multiview work without a network. The
+/// picture is as big as the rendition asked for (a 480p tile gets 854x480), so quality changes show
+/// in the stats box, and each channel has its own picture and pitch, so moving the sound can be
+/// heard.
+pub struct MockResolver;
+
+impl htpc_resolver::StreamResolver for MockResolver {
+    async fn resolve(
+        &self,
+        _site: htpc_resolver::Site,
+        channel: &str,
+        quality: &str,
+    ) -> Result<htpc_resolver::PlaylistUrl, htpc_resolver::ResolveError> {
+        tokio::time::sleep(MOCK_RESOLVE).await;
+        if MOCK_OFFLINE.contains(&channel) {
+            return Err(htpc_resolver::ResolveError::Offline);
+        }
+        Ok(htpc_resolver::PlaylistUrl(mock_stream_url(
+            channel, quality,
+        )))
+    }
+}
+
+/// The `lavfi` graph a mock channel plays at `quality` (a Streamlink name or fallback list).
+fn mock_stream_url(channel: &str, quality: &str) -> String {
+    // A stable pick per channel (std's hasher is seeded per run).
+    let seed = channel
+        .bytes()
+        .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+    let (source, options) = MOCK_PATTERNS[seed as usize % MOCK_PATTERNS.len()];
+    let pitch = 220 + (seed % 9) * 55;
+    let (height, fps) = mock_rendition(quality);
+    // 16:9, with an even width as the decoders' pixel formats want.
+    let width = (height * 16 / 9 + 1) & !1;
+    // `format` drops the alpha some sources have, which mpv would draw over a checkerboard.
+    format!(
+        "av://lavfi:{source}=size={width}x{height}:rate={fps}{options},format=yuv420p[out0];sine=frequency={pitch}:sample_rate=48000,volume=0.12[out1]"
+    )
+}
+
+/// The height and frame rate the first name of a Streamlink list stands for: `480p30` is 480 lines
+/// at 30 fps, `best` 1080p60, `worst` 160p30. Sound only gets a small picture, which mpv does not
+/// decode then.
+fn mock_rendition(quality: &str) -> (u32, u32) {
+    let first = quality.split(',').next().unwrap_or_default();
+    match first {
+        "best" => (1080, 60),
+        "worst" | "audio_only" => (160, 30),
+        name => {
+            let (lines, rate) = name.split_once('p').unwrap_or((name, ""));
+            let height = lines.parse().unwrap_or(720);
+            let fps = if rate == "60" { 60 } else { 30 };
+            (height, fps)
+        }
+    }
+}
+
 /// Kick's side of `--mock`: two pages of Top Live and a channel that is not live, so the Kick row
 /// pages and Search finds both kinds.
 pub fn fake_kick() -> FakeKick {
@@ -229,4 +308,41 @@ pub fn fake_kick() -> FakeKick {
     FakeKick::new()
         .with_pages(streams.chunks(8).map(<[_]>::to_vec).collect())
         .with_offline("sleepy-fox", "SleepyFox")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use htpc_resolver::{ResolveError, Site, StreamResolver};
+
+    #[test]
+    fn the_picture_is_as_big_as_the_rendition_asked_for() {
+        assert_eq!(mock_rendition("480p30,480p,480p60,360p30,worst"), (480, 30));
+        assert_eq!(mock_rendition("720p60,720p,720p30,worst"), (720, 60));
+        assert_eq!(mock_rendition("160p"), (160, 30));
+        assert_eq!(mock_rendition("best"), (1080, 60));
+        assert_eq!(mock_rendition("worst"), (160, 30));
+        assert_eq!(mock_rendition("audio_only"), (160, 30));
+    }
+
+    #[test]
+    fn each_channel_keeps_its_own_picture_and_a_16_by_9_size() {
+        let a = mock_stream_url("marrow", "360p30,worst");
+        assert_eq!(a, mock_stream_url("marrow", "360p30,worst"));
+        assert!(a.starts_with("av://lavfi:"), "{a}");
+        assert!(a.contains("size=640x360:rate=30"), "{a}");
+        assert!(a.contains("[out0];sine=") && a.ends_with("[out1]"), "{a}");
+        let big = mock_stream_url("marrow", "480p30");
+        assert!(big.contains("size=854x480"), "{big}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn offline_mock_channels_stay_offline() {
+        let offline = MockResolver
+            .resolve(Site::Twitch, "driftwood", "best")
+            .await;
+        assert_eq!(offline, Err(ResolveError::Offline));
+        let live = MockResolver.resolve(Site::Kick, "neon_drift", "best").await;
+        assert!(live.is_ok_and(|url| url.0.contains("1920x1080")));
+    }
 }

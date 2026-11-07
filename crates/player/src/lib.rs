@@ -9,9 +9,16 @@
 //! - [`UnavailablePlayer`]: what a build without the `mpv` feature uses, or any build when libmpv
 //!   failed to start. Every load fails with the reason.
 //!
+//! Several streams play at once through a [`PlayerPool`]: one player per [`Slot`], made on demand.
+//! Slot 0 ([`MAIN_SLOT`]) is the single player. With `mpv`, `VideoOutputs` draws every slot's
+//! frames from the window's one rendering notifier. A new quality of the stream on screen loads in
+//! a hidden spare player and takes over at its first frame ([`PlayerPool::spare`]).
+//!
 //! This crate does not depend on `htpc-core`. The app maps its types.
 
 mod fake;
+mod pace;
+mod pool;
 
 #[cfg(feature = "mpv")]
 mod gl_state;
@@ -30,7 +37,18 @@ pub use fake::{FakePlayer, PlayerCall, UnavailablePlayer};
 #[cfg(feature = "mpv")]
 pub use mpv::MpvPlayer;
 #[cfg(feature = "mpv")]
-pub use output::VideoOutput;
+pub use output::{VideoOutput, VideoOutputs};
+pub use pace::RefreshRate;
+pub use pool::{FakePool, PlayerPool, Report, Seat, IDLE_DROP};
+
+/// Which of the pool's players: 0 is the single player, 1 to 8 the other multiview tiles.
+pub type Slot = u8;
+
+/// How many players can exist at once (multiview's largest grid is 3×3).
+pub const SLOTS: usize = 9;
+
+/// The single player's slot. It is never dropped for being idle.
+pub const MAIN_SLOT: Slot = 0;
 
 /// What the player reports. Sent from the player's own thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +63,18 @@ pub enum PlayerEvent {
     Paused(bool),
     /// About once a second while stats are on (see [`Player::set_stats`]).
     Stats(PlayerStats),
+    /// About once a second from the first frame of a stream until it stops, except while paused.
+    Health(PlayerHealth),
+}
+
+/// How well the stream keeps up: the slow-network rule's input (plan.md, section 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayerHealth {
+    /// The picture froze for lack of data: `paused-for-cache` (normal latency), or nothing at all
+    /// buffered (low latency turns `cache-pause` off, so mpv plays on into an empty buffer).
+    pub stalled: bool,
+    /// Buffered ahead (`demuxer-cache-duration`), in milliseconds.
+    pub buffer_ms: u32,
 }
 
 /// How the picture fills a screen of another shape.
@@ -66,6 +96,9 @@ pub enum PlayerOption {
     /// Decode and show video (`true`), or play the sound only and send no frames. Kept for the
     /// streams loaded after it, so it is set before each load.
     Video(bool),
+    /// Silent (`true`) but still playing, or heard. Multiview mutes every tile but the one with
+    /// sound. Kept for the streams loaded after it, so a muted tile stays muted on a reload.
+    Muted(bool),
 }
 
 /// How much the player buffers. Set when a stream is loaded.

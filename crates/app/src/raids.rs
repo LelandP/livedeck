@@ -305,6 +305,6 @@ mod tests {
         assert!(!Raids::handles(&Command::FetchStreamInfo {
             channel: ChannelRef::twitch("x")
         }));
-        assert!(!Raids::handles(&Command::StopPlayback));
+        assert!(!Raids::handles(&Command::StopPlayback { slot: 0 }));
     }
 }

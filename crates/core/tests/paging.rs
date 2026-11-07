@@ -590,6 +590,7 @@ fn category_streams_load_as_a_grid_and_play_on_select() {
                 channel: "s1".into()
             },
             Command::Play {
+                slot: 0,
                 channel: ChannelRef::twitch("s1"),
                 stream: StreamKind::Video(Quality::Best),
                 latency: Latency::Low

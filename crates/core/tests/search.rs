@@ -327,7 +327,7 @@ fn a_stream_from_the_results_keeps_the_search_for_when_b_comes_back() {
     assert_eq!(s.screen, Screen::Player);
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if channel.login == "live0")));
+        .any(|c| matches!(c, Command::Play { slot: 0, channel, .. } if channel.login == "live0")));
     let (s, _) = reduce(&s, Intent::Back);
     assert_eq!(s.screen, Screen::Search);
     assert_eq!(s.search.query, "ab");

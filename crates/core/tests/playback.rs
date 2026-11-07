@@ -30,6 +30,7 @@ fn watching() -> (AppState, Vec<Command>) {
 
 fn play(channel: &str) -> Command {
     Command::Play {
+        slot: 0,
         channel: ChannelRef::twitch(channel),
         stream: StreamKind::Video(Quality::Best),
         latency: Latency::Low,
@@ -63,6 +64,7 @@ fn the_configured_quality_is_requested() {
     );
     let (_, cmds) = reduce(&s, Intent::Select);
     assert!(cmds.contains(&Command::Play {
+        slot: 0,
         channel: ChannelRef::twitch("chan"),
         stream: StreamKind::Video(Quality::P720),
         latency: Latency::Low
@@ -72,7 +74,7 @@ fn the_configured_quality_is_requested() {
 #[test]
 fn the_first_frame_means_playing() {
     let (s, _) = watching();
-    let s = ev(&s, Event::PlaybackStarted);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
     assert_eq!(s.playback, Playback::Playing);
 }
 
@@ -131,16 +133,19 @@ fn late_answers_after_leaving_are_dropped() {
     assert_eq!(
         cmds,
         vec![
-            Command::StopPlayback,
+            Command::StopPlayback { slot: 0 },
             Command::LeaveChat,
             Command::StopHypeTrain
         ]
     );
     assert_eq!(s.playback, Playback::Idle);
     for e in [
-        Event::PlaybackStarted,
-        Event::PlaybackEnded,
-        Event::PlaybackError("x".into()),
+        Event::PlaybackStarted { slot: 0 },
+        Event::PlaybackEnded { slot: 0 },
+        Event::PlaybackError {
+            slot: 0,
+            message: "x".into(),
+        },
         Event::StreamOffline {
             channel: ChannelRef::twitch("chan"),
         },
@@ -152,22 +157,34 @@ fn late_answers_after_leaving_are_dropped() {
 #[test]
 fn the_stream_ending_while_playing_is_offline() {
     let (s, _) = watching();
-    let s = ev(&s, Event::PlaybackStarted);
-    let s = ev(&s, Event::PlaybackEnded);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
+    let s = ev(&s, Event::PlaybackEnded { slot: 0 });
     assert_eq!(s.playback, Playback::Offline);
     // An end while still loading is not trusted (it belongs to an earlier stream).
     let (s, _) = watching();
-    assert_eq!(ev(&s, Event::PlaybackEnded).playback, Playback::Loading);
+    assert_eq!(
+        ev(&s, Event::PlaybackEnded { slot: 0 }).playback,
+        Playback::Loading
+    );
 }
 
 #[test]
 fn a_player_error_fails_loading_and_playing() {
     let (s, _) = watching();
-    let failed = ev(&s, Event::PlaybackError("bad".into()));
+    let failed = ev(
+        &s,
+        Event::PlaybackError {
+            slot: 0,
+            message: "bad".into(),
+        },
+    );
     assert_eq!(failed.playback, Playback::Failed("bad".into()));
     let playing = ev(
-        &ev(&s, Event::PlaybackStarted),
-        Event::PlaybackError("x".into()),
+        &ev(&s, Event::PlaybackStarted { slot: 0 }),
+        Event::PlaybackError {
+            slot: 0,
+            message: "x".into(),
+        },
     );
     assert_eq!(playing.playback, Playback::Failed("x".into()));
 }
@@ -179,8 +196,20 @@ fn x_and_a_retry_a_failed_or_offline_stream() {
         channel: ChannelRef::twitch("chan"),
     };
     for (bad, intent) in [
-        (Event::PlaybackError("bad".into()), Intent::Retry),
-        (Event::PlaybackError("bad".into()), Intent::Select),
+        (
+            Event::PlaybackError {
+                slot: 0,
+                message: "bad".into(),
+            },
+            Intent::Retry,
+        ),
+        (
+            Event::PlaybackError {
+                slot: 0,
+                message: "bad".into(),
+            },
+            Intent::Select,
+        ),
         (offline, Intent::Retry),
     ] {
         let failed = ev(&s, bad);
@@ -196,7 +225,7 @@ fn retry_does_nothing_while_loading_or_playing() {
     let (after, cmds) = reduce(&s, Intent::Retry);
     assert_eq!(after.playback, Playback::Loading);
     assert!(cmds.is_empty());
-    let playing = ev(&s, Event::PlaybackStarted);
+    let playing = ev(&s, Event::PlaybackStarted { slot: 0 });
     let (after, cmds) = reduce(&playing, Intent::Retry);
     assert_eq!(after.playback, Playback::Playing);
     assert!(cmds.is_empty());
@@ -205,13 +234,25 @@ fn retry_does_nothing_while_loading_or_playing() {
 #[test]
 fn a_pauses_and_resumes_a_live_stream() {
     let (s, _) = watching();
-    let s = ev(&s, Event::PlaybackStarted);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
     let (s, cmds) = reduce(&s, Intent::Select);
     assert!(s.paused);
-    assert_eq!(cmds, vec![Command::SetPaused(true)]);
+    assert_eq!(
+        cmds,
+        vec![Command::SetPaused {
+            slot: 0,
+            paused: true
+        }]
+    );
     let (s, cmds) = reduce(&s, Intent::Select);
     assert!(!s.paused);
-    assert_eq!(cmds, vec![Command::SetPaused(false)]);
+    assert_eq!(
+        cmds,
+        vec![Command::SetPaused {
+            slot: 0,
+            paused: false
+        }]
+    );
 }
 
 #[test]
@@ -230,7 +271,7 @@ fn the_hud_pulses_on_input_and_state_changes() {
     let (s, _) = reduce(&s, Intent::Up);
     assert!(s.hud_pulse != base, "a direction shows the HUD");
     let before = s.hud_pulse;
-    let s = ev(&s, Event::PlaybackStarted);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
     assert!(s.hud_pulse != before, "the first frame shows the HUD");
     let before = s.hud_pulse;
     let (s, _) = reduce(&s, Intent::ToggleChat);
@@ -253,8 +294,8 @@ fn going_offline_schedules_a_recheck() {
     assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 1 }]);
     // A stream that ends while playing too (the 24 h restart).
     let (s, _) = reduce(&s, Intent::Retry);
-    let s = ev(&s, Event::PlaybackStarted);
-    let (s, cmds) = reduce(&s, Event::PlaybackEnded);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
+    let (s, cmds) = reduce(&s, Event::PlaybackEnded { slot: 0 });
     assert_eq!(s.playback, Playback::Offline);
     assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 2 }]);
 }
@@ -270,7 +311,7 @@ fn a_recheck_looks_quietly_and_plays_when_the_stream_is_back() {
     assert!(s.rechecking);
     // A second timer while looking does not ask twice.
     assert!(reduce(&s, Event::OfflineRecheckDue(1)).1.is_empty());
-    let s = ev(&s, Event::PlaybackStarted);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
     assert_eq!(s.playback, Playback::Playing);
     assert!(!s.rechecking);
 }
@@ -288,7 +329,10 @@ fn a_failed_recheck_stays_offline_and_looks_again() {
             channel: ChannelRef::twitch("chan"),
             message: "timeout".into(),
         },
-        Event::PlaybackError("bad".into()),
+        Event::PlaybackError {
+            slot: 0,
+            message: "bad".into(),
+        },
     ] {
         let (s, cmds) = reduce(&looking, answer);
         assert_eq!(s.playback, Playback::Offline);
@@ -316,7 +360,7 @@ fn stale_or_late_rechecks_do_nothing() {
 #[test]
 fn back_resets_pause() {
     let (s, _) = watching();
-    let s = ev(&s, Event::PlaybackStarted);
+    let s = ev(&s, Event::PlaybackStarted { slot: 0 });
     let (s, _) = reduce(&s, Intent::Select);
     assert!(s.paused);
     let (s, _) = reduce(&s, Intent::Back);

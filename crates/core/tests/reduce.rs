@@ -191,7 +191,7 @@ fn right_or_back_closes_rail_and_keeps_cursor() {
     for exit in [Intent::Right, Intent::Back] {
         let (s, cmds) = run(home(), &[Intent::Left, Intent::Down, Intent::Down, exit]);
         assert!(!s.rail.focused, "{exit:?} should close the rail");
-        assert_eq!(s.rail.index, RailEntry::Browse);
+        assert_eq!(s.rail.index, RailEntry::Favorites);
         assert_eq!(s.screen, Screen::Home);
         assert!(cmds.is_empty());
     }
@@ -226,8 +226,8 @@ fn rail_settings_opens_the_settings_screen() {
 #[test]
 fn account_entry_opens_login_on_top_of_home() {
     let mut keys = vec![Intent::Left];
-    // Past Following, Browse, Search and Settings.
-    keys.extend([Intent::Down; 5]);
+    // Past Following, Favorites, Browse, Search and Settings.
+    keys.extend([Intent::Down; 6]);
     keys.push(Intent::Select);
     let (s, cmds) = run(home(), &keys);
     assert_eq!(s.rail.index, RailEntry::Account);
@@ -453,6 +453,7 @@ fn select_stream_opens_player_and_joins_chat() {
                 channel: "t1".into()
             },
             Command::Play {
+                slot: 0,
                 channel: ChannelRef::twitch("t1"),
                 stream: StreamKind::Video(Quality::Best),
                 latency: Latency::Low
@@ -513,7 +514,7 @@ fn back_from_player_closes_chat_and_returns_home() {
     assert_eq!(
         cmds,
         vec![
-            Command::StopPlayback,
+            Command::StopPlayback { slot: 0 },
             Command::LeaveChat,
             Command::StopHypeTrain
         ]

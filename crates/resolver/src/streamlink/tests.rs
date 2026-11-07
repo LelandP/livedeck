@@ -55,6 +55,18 @@ fn best_and_worst_have_no_fallback() {
 }
 
 #[test]
+fn fallback_lists_pass_through() {
+    assert_eq!(
+        quality_arg("480p30,480p,360p30,worst"),
+        "480p30,480p,360p30,worst"
+    );
+    assert_eq!(quality_arg(" 720p60 , 720p "), "720p60,720p,best");
+    assert_eq!(quality_arg("720p,,best"), "best", "an empty name");
+    assert_eq!(quality_arg("720p,a b"), "best");
+    assert_eq!(quality_arg(&vec!["160p"; MAX_NAMES + 1].join(",")), "best");
+}
+
+#[test]
 fn audio_only_falls_back_to_video_when_a_stream_has_no_audio_rendition() {
     assert_eq!(quality_arg("audio_only"), "audio_only,best");
 }

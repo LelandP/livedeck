@@ -2,7 +2,7 @@
 source: crates/ui/tests/snapshots.rs
 expression: render(&view_model(&browse()))
 ---
-screen=Grid heading="Categories" focus=(0, 0) rail_current=2
+screen=Grid heading="Categories" focus=(0, 0) rail_current=3
 select="Open" retry=false back=false empty=false error=""
 row 0 Portrait "": [Game 0 | img] [Game 1 | img] [Game 2 | img] [Game 3 | img] [Game 4 | img]
 row 1 Portrait "": [Game 5 | img] [Game 6 | img]

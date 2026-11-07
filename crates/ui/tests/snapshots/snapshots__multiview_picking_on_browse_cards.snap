@@ -1,0 +1,59 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- nothing picked, on the hero
+can_view=true tray=""
+screen=Home heading="Live now" focus=(0, 0) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img]
+row 1 Landscape "Followed · Live": [nightowl_dev | VALORANT | 4.2K viewers | img] [marrow | VALORANT | 1.9K viewers]
+row 2 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img]
+row 3 Portrait "Categories": [Just Chatting | img] [VALORANT | img]
+open=true title="Multiview" sub="grandmaster_k" on_layout=false select="Select"
+  > "Add to multiview" ""
+    "Add to favorites" ""
+-- the hero picked, on the next card
+can_view=true tray="Multiview · 1 picked"
+screen=Home heading="Live now" focus=(1, 0) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img | picked]
+row 1 Landscape "Followed · Live": [nightowl_dev | VALORANT | 4.2K viewers | img] [marrow | VALORANT | 1.9K viewers]
+row 2 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img]
+row 3 Portrait "Categories": [Just Chatting | img] [VALORANT | img]
+open=true title="Multiview" sub="nightowl_dev · 1 picked" on_layout=false select="Select"
+  > "Add to multiview" ""
+    "Watch the 2 together" ""
+    "Clear picked" ""
+    "Add to favorites" ""
+-- back on the hero
+open=true title="Multiview" sub="grandmaster_k · 1 picked" on_layout=false select="Select"
+  > "Remove from multiview" ""
+    "Clear picked" ""
+    "Add to favorites" ""
+-- a category card
+can_view=false tray="Multiview · 1 picked"
+screen=Home heading="Live now" focus=(3, 0) rail_current=0
+select="Open" retry=false back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img | picked]
+row 1 Landscape "Followed · Live": [nightowl_dev | VALORANT | 4.2K viewers | img] [marrow | VALORANT | 1.9K viewers]
+row 2 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img]
+row 3 Portrait "Categories": [Just Chatting | img] [VALORANT | img]
+-- the single player, with the hero picked
+open=true title="Multiview" sub="Watching nightowl_dev" on_layout=false select="Select"
+  > "Add a stream to watch with this one" ""
+    "Watch with the 1 picked" ""
+    "Add to favorites" ""
+-- the two watched together
+screen=Multiview active=true count="2 streams" select="Full screen" retry=false video_slot=0 chat_open=false
+  layouts [2*] [3] [4] [6] [9] [Spotlight]
+  0: 64.0,228.2 568.0x319.5 slot0 grandmaster_k Loading 360p SOUND "Twitch · VALORANT · 48.1K watching" <focus, A "Full screen">
+  1: 648.0,228.2 568.0x319.5 slot1 nightowl_dev Loading 360p "Twitch · VALORANT · 4.2K watching"
+-- B: back on Home, both still picked
+can_view=true tray="Multiview · 2 picked"
+screen=Home heading="Live now" focus=(1, 1) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img | picked]
+row 1 Landscape "Followed · Live": [Resume multiview | 2 streams | mosaic of 2, 2 with img] [nightowl_dev | VALORANT | 4.2K viewers | img | picked] [marrow | VALORANT | 1.9K viewers]
+row 2 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img]
+row 3 Portrait "Categories": [Just Chatting | img] [VALORANT | img]

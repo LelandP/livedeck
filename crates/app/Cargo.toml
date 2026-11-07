@@ -25,6 +25,8 @@ htpc-kick-api.workspace = true
 # It pins the exact Slint version through the workspace's `slint = "1.18.1"`.
 slint = { workspace = true, features = ["unstable-winit-030"] }
 tokio.workspace = true
+# `buffered`: Kick favorites are looked up a few at a time.
+futures-util = { workspace = true, features = ["alloc"] }
 pico-args.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

@@ -5,7 +5,7 @@ use slint::platform::Key;
 /// window can let them propagate.
 ///
 /// Printable characters become `Intent::Text`: the Search screen types them, and the reducer
-/// turns `y` and `r` into the chat and retry shortcuts everywhere else. Backspace is
+/// turns `y`, `r` and `v` into the chat, retry and View shortcuts everywhere else. Backspace is
 /// `Intent::Erase` for the same reason (a deleted character on Search, Back elsewhere).
 pub fn map_key(text: &str) -> Option<Intent> {
     let mut chars = text.chars();
@@ -67,9 +67,9 @@ mod tests {
 
     #[test]
     fn printable_keys_are_text_for_the_reducer_to_interpret() {
-        // `y` and `r` stay the chat and retry shortcuts off the Search screen (see the core's
-        // `typed_key`), so they come through as text too.
-        for c in ['y', 'Y', 'r', 'R', 'a', 'Z', '7', '_', '-', '!'] {
+        // `y`, `r` and `v` stay the chat, retry and View shortcuts off the Search screen (see the
+        // core's `typed_key`), so they come through as text too: Search must be able to type them.
+        for c in ['y', 'Y', 'r', 'R', 'v', 'V', 'a', 'Z', '7', '_', '-', '!'] {
             assert_eq!(map_key(&c.to_string()), Some(Intent::Text(c)), "{c:?}");
         }
         assert_eq!(map_key(&key(Key::Space)), Some(Intent::Text(' ')));

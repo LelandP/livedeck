@@ -45,6 +45,17 @@ fn card(c: &CardVm) -> String {
     if !c.thumb_url.is_empty() {
         out += " | img";
     }
+    if c.picked {
+        out += " | picked";
+    }
+    if c.resume {
+        let images = c.mosaic.iter().filter(|m| !m.thumb_url.is_empty()).count();
+        out += &format!(
+            " | {} | mosaic of {}, {images} with img",
+            c.title,
+            c.mosaic.len()
+        );
+    }
     out + "]"
 }
 
@@ -220,11 +231,11 @@ fn player_line(vm: &ViewModel) -> String {
 fn player_loading_playing_paused_offline_and_failed() {
     let (s, _) = reduce(&home_loaded(), Intent::Select);
     let mut out = player_line(&view_model(&s));
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     out += &player_line(&view_model(&s));
     let paused = reduce(&s, Intent::Select).0;
     out += &player_line(&view_model(&paused));
-    let ended = reduce(&s, Event::PlaybackEnded).0;
+    let ended = reduce(&s, Event::PlaybackEnded { slot: 0 }).0;
     out += &player_line(&view_model(&ended));
     let (loading, _) = reduce(&home_loaded(), Intent::Select);
     let failed = reduce(
@@ -255,7 +266,7 @@ fn menu_lines(vm: &ViewModel) -> String {
 #[test]
 fn player_menu_and_stats_box() {
     let (s, _) = reduce(&home_loaded(), Intent::Select);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let mut out = menu_lines(&view_model(&s));
     // Start, then down to Zoom and fill the screen.
     let s = send(&s, &[Intent::Menu]);
@@ -295,7 +306,7 @@ fn player_menu_and_stats_box() {
 #[test]
 fn player_audio_only() {
     let (s, _) = reduce(&home_loaded(), Intent::Select);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     // Stats on, then down to Audio only and turn it on.
     let s = send(&s, &[Intent::Menu, Intent::Down, Intent::Down]);
     let s = send(
@@ -305,7 +316,7 @@ fn player_audio_only() {
     let s = send(&s, &[Intent::Right]);
     let mut out = format!("audio_only={}\n", view_model(&s).audio_only);
     out += &menu_lines(&view_model(&s));
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let report = PlayerStats {
         audio_bitrate: Some(160_000),
         audio_codec: Some("aac".into()),
@@ -359,7 +370,7 @@ fn subscribe_card_with_and_without_a_browser() {
         s.can_open_browser = can_open_browser;
         out += &format!("can_open_browser={can_open_browser}\n");
         let (s, _) = reduce(&s, Intent::Select);
-        let s = reduce(&s, Event::PlaybackStarted).0;
+        let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
         // Start, down to the last row.
         let s = send(&s, &[Intent::Menu]);
         let s = send(&s, &[Intent::Down; 7]);
@@ -376,7 +387,7 @@ fn subscribe_card_with_and_without_a_browser() {
 #[test]
 fn sleep_timer_countdown_and_warning() {
     let (s, _) = reduce(&home_loaded(), Intent::Select);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let mut out = sleep_lines(&view_model(&s));
     // Start, down to the sleep timer, 15 then 30 minutes.
     let s = send(&s, &[Intent::Menu]);
@@ -423,7 +434,7 @@ fn raid_card_counts_down_then_follows() {
     };
     let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
     let (s, _) = reduce(&s, Intent::Select);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let raid = |viewers| Event::Raided {
         from_login: "grandmaster_k".into(),
         to_login: "next_up".into(),
@@ -466,7 +477,7 @@ fn hype_lines(vm: &ViewModel) -> String {
 #[test]
 fn hype_train_bar_follows_the_polls() {
     let (s, _) = reduce(&home_loaded(), Intent::Select);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let channel = s.now_playing.as_ref().unwrap().channel.login.clone();
     let hype = |level, progress, goal, seconds_left| Event::HypeTrain {
         channel: channel.clone(),
@@ -601,10 +612,69 @@ fn search_empty_typing_and_results() {
 fn toast_lines(vm: &ViewModel) -> String {
     let mut out = format!("screen={:?} more={}\n", vm.screen, vm.toast_more);
     for t in &vm.toasts {
+        if t.note {
+            out += &format!("  [#{} note: {}]\n", t.id, t.name);
+            continue;
+        }
         let img = if t.thumb_url.is_empty() { "" } else { " | img" };
         out += &format!("  [#{} {} is live | {}{img}]\n", t.id, t.name, t.line);
     }
     out
+}
+
+#[test]
+fn the_resume_card_on_home_and_the_skipped_toast() {
+    let (mut s, _) = init();
+    s.user = Some(htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    });
+    s.last_multiview = Some(htpc_core::SavedSet {
+        channels: ["lofi_lena", "quietcoast", "marrow", "sable", "sleepy"]
+            .into_iter()
+            .map(ChannelRef::twitch)
+            .collect(),
+        layout: htpc_core::Layout::Grid(6),
+        sound: 0,
+    });
+    let offline = Tile::Channel(htpc_core::Channel {
+        channel: ChannelRef::twitch("sleepy"),
+        name: "sleepy".into(),
+        tint: Rgb::default(),
+    });
+    // What the provider found: four live, one offline.
+    let checked = Row::new(
+        RowKind::Resume,
+        vec![
+            stream("lofi_lena", 100, true),
+            stream("quietcoast", 100, false),
+            stream("marrow", 100, true),
+            stream("sable", 100, true),
+            offline,
+        ],
+    );
+    let s = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows: vec![
+                Row::new(
+                    RowKind::Featured,
+                    vec![stream("grandmaster_k", 48_100, true)],
+                ),
+                Row::new(RowKind::TopLive, vec![stream("pixelpilgrim", 900, true)]),
+                checked,
+            ],
+        },
+    )
+    .0;
+    let mut out = String::from("-- the card opens Top Live\n");
+    let s = send(&s, &[Intent::Down]);
+    out += &render(&view_model(&s));
+    out += "-- A: the four start, the offline one is skipped\n";
+    let s = send(&s, &[Intent::Select]);
+    out += &toast_lines(&view_model(&s));
+    insta::assert_snapshot!(out);
 }
 
 #[test]
@@ -739,6 +809,438 @@ fn chat_connecting_live_busy_moderated_and_reconnecting() {
     insta::assert_snapshot!(out);
 }
 
+// --- Multiview ---------------------------------------------------------------------------------
+
+/// The followed channels the picker lists, in order.
+const FOLLOWED: [&str; 9] = [
+    "ash", "birch", "cedar", "dune", "elm", "fern", "gale", "heath", "isle",
+];
+
+/// Signed in on Home, Following loaded with the live `FOLLOWED` (the fourth one on Kick, no
+/// viewers known), watching `grandmaster_k` in the single player.
+fn watching_signed_in() -> AppState {
+    let user = htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    };
+    let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let followed: Vec<Tile> = FOLLOWED
+        .iter()
+        .enumerate()
+        .map(|(i, login)| {
+            let mut tile = stream(login, 1_000 * (i as u64 + 1), i % 2 == 0);
+            if let Tile::Stream(s) = &mut tile {
+                if i == 3 {
+                    s.channel = ChannelRef::kick(*login);
+                    s.viewers = 0;
+                }
+            }
+            tile
+        })
+        .collect();
+    let s = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Following,
+            rows: vec![Row::new(RowKind::FollowedLive, followed)],
+        },
+    )
+    .0;
+    let (s, _) = reduce(&s, Intent::Select);
+    reduce(&s, Event::PlaybackStarted { slot: 0 }).0
+}
+
+/// Multiview with `grandmaster_k` and the first `n - 1` followed channels, settled and playing,
+/// the picker closed and the focus on the second stream.
+fn multiview_with(n: usize) -> AppState {
+    let mut s = send(&watching_signed_in(), &[Intent::View, Intent::Select]);
+    for i in 0..n - 1 {
+        if i > 0 {
+            s = reduce(&s, Intent::Down).0;
+        }
+        s = reduce(&s, Intent::Select).0;
+    }
+    if s.multiview.as_ref().unwrap().picker.is_some() {
+        s = reduce(&s, Intent::Back).0;
+    }
+    s = reduce(&s, Event::QualitySettleDue(s.last_settle_id)).0;
+    let slots: Vec<u8> = s
+        .multiview
+        .as_ref()
+        .unwrap()
+        .tiles
+        .iter()
+        .flatten()
+        .map(|t| t.slot)
+        .collect();
+    for slot in slots {
+        s = reduce(&s, Event::PlaybackStarted { slot }).0;
+    }
+    s.multiview.as_mut().unwrap().focus = 1;
+    s
+}
+
+fn mv_lines(vm: &ViewModel) -> String {
+    let mv = &vm.mv;
+    let mut out = format!(
+        "screen={:?} active={} count={:?} select={:?} retry={} video_slot={} chat_open={}\n",
+        vm.screen,
+        mv.active,
+        mv.count_text,
+        vm.select_label,
+        vm.can_retry,
+        vm.video_slot,
+        vm.chat_open
+    );
+    let chips: Vec<String> = mv
+        .layouts
+        .iter()
+        .map(|c| {
+            let mark = if c.on {
+                "*"
+            } else if c.fits {
+                ""
+            } else {
+                "~"
+            };
+            format!("[{}{mark}]", c.label)
+        })
+        .collect();
+    out += &format!("  layouts {}\n", chips.join(" "));
+    for (i, t) in mv.tiles.iter().enumerate() {
+        out += &format!("  {i}: {:.1},{:.1} {:.1}x{:.1}", t.x, t.y, t.w, t.h);
+        if t.empty {
+            out += " [add a stream]";
+        } else {
+            out += &format!(
+                " slot{} {} {:?} {}{}{}{} {:?}",
+                t.slot,
+                t.channel,
+                t.state,
+                t.quality,
+                if t.lowered { " ↓amber" } else { "" },
+                if t.sound { " SOUND" } else { "" },
+                if t.kick { " kick" } else { "" },
+                t.line
+            );
+        }
+        if t.focused {
+            out += &format!(" <focus, A {:?}>", t.action);
+        }
+        out += "\n";
+    }
+    out
+}
+
+#[test]
+fn multiview_grids_of_two_four_and_nine() {
+    let mut out = String::new();
+    for n in [2, 4, 9] {
+        out += &format!("-- {n} streams\n");
+        out += &mv_lines(&view_model(&multiview_with(n)));
+    }
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn multiview_slow_network_lowers_the_muted_tiles() {
+    let s = multiview_with(4);
+    let stall = htpc_core::Health {
+        stalled: true,
+        buffer_ms: 0,
+    };
+    let s = reduce(
+        &s,
+        Event::PlayerHealth {
+            slot: 1,
+            at_ms: 0,
+            health: stall,
+        },
+    )
+    .0;
+    let vm = view_model(&s);
+    let out = format!("{}{}", mv_lines(&vm), toast_lines(&vm));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn multiview_spotlight_with_three_and_seven() {
+    let mut out = String::new();
+    // From the grid of 3, LB wraps back to Spotlight; from the grid of 9, RB goes there.
+    for (n, step) in [(3, Intent::PageLeft), (7, Intent::PageRight)] {
+        let s = send(&multiview_with(n), &[step]);
+        out += &format!("-- {n} streams\n");
+        out += &mv_lines(&view_model(&s));
+        // The sound moves to the focused small tile, which becomes the big one.
+        let s = send(&s, &[Intent::Select]);
+        out += "   sound moved\n";
+        out += &mv_lines(&view_model(&s));
+    }
+    insta::assert_snapshot!(out);
+}
+
+fn popup_lines(vm: &ViewModel) -> String {
+    let mv = &vm.mv;
+    let mut out = format!(
+        "open={} title={:?} sub={:?} on_layout={} select={:?}\n",
+        mv.popup_open, mv.popup_title, mv.popup_sub, mv.popup_on_layout, vm.select_label
+    );
+    for (i, r) in mv.popup_rows.iter().enumerate() {
+        let mark = if i as i32 == mv.popup_focus { ">" } else { " " };
+        out += &format!("  {mark} {:?} {:?}\n", r.label, r.value);
+    }
+    out
+}
+
+#[test]
+fn multiview_view_popup() {
+    let mut out = String::from("-- single player, signed out\n");
+    let (s, _) = reduce(&home_loaded(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    out += &popup_lines(&view_model(&send(&s, &[Intent::View])));
+
+    out += "-- single player, signed in\n";
+    out += &popup_lines(&view_model(&send(&watching_signed_in(), &[Intent::View])));
+
+    out += "-- grid, on a muted tile\n";
+    let grid = multiview_with(3);
+    let s = send(&grid, &[Intent::View]);
+    out += &popup_lines(&view_model(&s));
+    out += &mv_lines(&view_model(&s));
+
+    out += "-- grid, the layout row\n";
+    let s = send(&s, &[Intent::Down, Intent::Down, Intent::Down]);
+    out += &popup_lines(&view_model(&s));
+    let s = send(&s, &[Intent::Right]);
+    out += &popup_lines(&view_model(&s));
+
+    out += "-- full screen\n";
+    let full = send(&grid, &[Intent::Up, Intent::Left]);
+    let full = send(&full, &[Intent::Select]);
+    out += &popup_lines(&view_model(&send(&full, &[Intent::View])));
+
+    out += "-- A on an offline tile\n";
+    let offline = reduce(
+        &grid,
+        Event::PlaybackEnded {
+            slot: grid.multiview.as_ref().unwrap().tile(1).unwrap().slot,
+        },
+    )
+    .0;
+    out += &mv_lines(&view_model(&offline));
+    out += &popup_lines(&view_model(&send(&offline, &[Intent::Select])));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn multiview_picking_on_browse_cards() {
+    let user = htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    };
+    let home = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let browse = |vm: &ViewModel| {
+        format!(
+            "can_view={} tray={:?}\n{}",
+            vm.can_view,
+            vm.tray_text,
+            render(vm)
+        )
+    };
+    let mut out = String::from("-- nothing picked, on the hero\n");
+    out += &browse(&view_model(&home));
+    out += &popup_lines(&view_model(&send(&home, &[Intent::View])));
+
+    out += "-- the hero picked, on the next card\n";
+    let s = send(&home, &[Intent::View, Intent::Select, Intent::Down]);
+    out += &browse(&view_model(&s));
+    out += &popup_lines(&view_model(&send(&s, &[Intent::View])));
+
+    out += "-- back on the hero\n";
+    out += &popup_lines(&view_model(&send(&s, &[Intent::Up, Intent::View])));
+
+    out += "-- a category card\n";
+    let cat = send(&s, &[Intent::Down, Intent::Down]);
+    out += &browse(&view_model(&cat));
+
+    out += "-- the single player, with the hero picked\n";
+    let player = send(&s, &[Intent::Select]);
+    let player = reduce(&player, Event::PlaybackStarted { slot: 0 }).0;
+    out += &popup_lines(&view_model(&send(&player, &[Intent::View])));
+
+    out += "-- the two watched together\n";
+    let mv = send(&s, &[Intent::View, Intent::Down, Intent::Select]);
+    out += &mv_lines(&view_model(&mv));
+
+    out += "-- B: back on Home, both still picked\n";
+    out += &browse(&view_model(&send(&mv, &[Intent::Back])));
+    insta::assert_snapshot!(out);
+}
+
+fn picker_lines(vm: &ViewModel) -> String {
+    let mv = &vm.mv;
+    let mut out = format!(
+        "open={} tab={} focus={} select={:?} empty={:?}\n",
+        mv.picker_open, mv.picker_tab, mv.picker_focus, vm.select_label, mv.picker_empty
+    );
+    for (i, (row, watching)) in mv.picker_rows.iter().zip(&mv.picker_watching).enumerate() {
+        let mark = if i as i32 == mv.picker_focus {
+            ">"
+        } else {
+            " "
+        };
+        let tag = if *watching { " (watching)" } else { "" };
+        out += &format!("  {mark} {}{tag}\n", card(row));
+    }
+    out
+}
+
+#[test]
+fn multiview_picker() {
+    let s = send(&watching_signed_in(), &[Intent::View, Intent::Select]);
+    let mut out = String::from("-- opened from the single player\n");
+    out += &picker_lines(&view_model(&s));
+    out += &mv_lines(&view_model(&s));
+
+    out += "-- after adding the first, on the second\n";
+    let s = send(&s, &[Intent::Select, Intent::Down]);
+    out += &picker_lines(&view_model(&s));
+
+    out += "-- back on the one already added\n";
+    out += &picker_lines(&view_model(&send(&s, &[Intent::Up])));
+
+    out += "-- Favorites (none yet)\n";
+    out += &picker_lines(&view_model(&send(&s, &[Intent::PageRight])));
+
+    out += "-- Following still loading, with nothing yet\n";
+    let mut loading = send(&s, &[Intent::Back]);
+    loading.following.rows.clear();
+    // View, *Add a stream*: the picker asks Following again.
+    let loading = send(&loading, &[Intent::View, Intent::Select]);
+    out += &picker_lines(&view_model(&loading));
+    insta::assert_snapshot!(out);
+}
+
+fn favorite_picker_lines(vm: &ViewModel) -> String {
+    let mv = &vm.mv;
+    let mut out = format!(
+        "tab={} focus={} select={:?} y={:?} empty={:?}\n",
+        mv.picker_tab, mv.picker_focus, vm.select_label, mv.picker_star_label, mv.picker_empty
+    );
+    for (i, row) in mv.picker_rows.iter().enumerate() {
+        let mark = if i as i32 == mv.picker_focus {
+            ">"
+        } else {
+            " "
+        };
+        let star = if mv.picker_starred[i] { "★ " } else { "" };
+        let off = if row.offline { " (offline)" } else { "" };
+        out += &format!("  {mark} {star}{}{off}\n", card(row));
+    }
+    out
+}
+
+#[test]
+fn favorites_screen_home_row_and_picker() {
+    let user = htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    };
+    let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let mut out = String::from("-- the Favorites screen, nothing starred\n");
+    let fav = send(&s, &[Intent::RailPick(RailEntry::Favorites)]);
+    out += &render(&view_model(&fav));
+    out += &format!("empty_text={:?}\n", view_model(&fav).empty_text);
+
+    out += "-- marrow starred from its card: Home's row\n";
+    let starred = send(&s, &[Intent::Down, Intent::Right, Intent::View]);
+    out += &popup_lines(&view_model(&starred));
+    let starred = send(&starred, &[Intent::Down, Intent::Select]);
+    out += &render(&view_model(&starred));
+
+    out += "-- the Favorites screen, live and offline\n";
+    let mut s = starred.clone();
+    s.favorites.push(ChannelRef::kick("napper"));
+    let s = send(&s, &[Intent::RailPick(RailEntry::Favorites)]);
+    let s = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Favorites,
+            rows: vec![
+                Row::new(RowKind::FavoritesLive, vec![stream("marrow", 1_900, false)]),
+                Row::new(
+                    RowKind::FavoritesOffline,
+                    vec![Tile::Channel(htpc_core::Channel {
+                        channel: ChannelRef::kick("napper"),
+                        name: "Napper".into(),
+                        tint: Rgb::default(),
+                    })],
+                ),
+            ],
+        },
+    )
+    .0;
+    let vm = view_model(&s);
+    out += &render(&vm);
+    out += &format!("view={:?}\n", vm.view_label);
+    let on_offline = send(&s, &[Intent::Down]);
+    let vm = view_model(&on_offline);
+    out += &format!("on the offline card: view={:?}\n", vm.view_label);
+    out += &popup_lines(&view_model(&send(&on_offline, &[Intent::View])));
+
+    out += "-- the picker's Favorites tab, Y on the offline one\n";
+    let mut watching = watching_signed_in();
+    watching.favorites = s.favorites.clone();
+    watching.favorites_feed = s.favorites_feed.clone();
+    let picker = send(&watching, &[Intent::View, Intent::Select]);
+    let picker = reduce(
+        &picker,
+        Event::FeedLoaded {
+            feed: FeedId::Favorites,
+            rows: s.favorites_feed.rows.clone(),
+        },
+    )
+    .0;
+    out += &favorite_picker_lines(&view_model(&picker));
+    let on_offline = send(&picker, &[Intent::Down]);
+    out += &favorite_picker_lines(&view_model(&on_offline));
+    out += &favorite_picker_lines(&view_model(&send(&on_offline, &[Intent::ToggleChat])));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn multiview_full_screen_strip_and_pause() {
+    let grid = multiview_with(3);
+    // Up-left to the stream with sound, A: full screen.
+    let full = send(&grid, &[Intent::Up, Intent::Left, Intent::Select]);
+    let lines = |vm: &ViewModel| {
+        let strip: Vec<String> = vm
+            .mv
+            .strip
+            .iter()
+            .map(|s| format!("{}{}{}", s.slot, s.channel, if s.on { "*" } else { "" }))
+            .collect();
+        format!(
+            "screen={:?} channel={:?} video_slot={} position={:?} strip=[{}] select={:?} paused={}\n",
+            vm.screen,
+            vm.now_playing.channel,
+            vm.video_slot,
+            vm.mv.position,
+            strip.join(" "),
+            vm.select_label,
+            vm.paused
+        )
+    };
+    let mut out = lines(&view_model(&full));
+    let next = send(&full, &[Intent::PageRight]);
+    out += &lines(&view_model(&next));
+    let paused = send(&next, &[Intent::Select]);
+    out += &lines(&view_model(&paused));
+    let back = send(&paused, &[Intent::Back]);
+    out += &lines(&view_model(&back));
+    insta::assert_snapshot!(out);
+}
+
 fn compose_lines(vm: &ViewModel) -> String {
     let keys: Vec<&str> = vm.compose_keys.iter().map(|k| k.label.as_str()).collect();
     let focused = usize::try_from(vm.compose_key_focus)
@@ -775,7 +1277,7 @@ fn chat_compose_side_overlay_and_a_drop() {
         let mut s = home_loaded();
         s.user = user;
         let (s, _) = reduce(&s, Intent::Select);
-        let mut s = reduce(&s, Event::PlaybackStarted).0;
+        let mut s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
         s.chat_open = true;
         s
     };

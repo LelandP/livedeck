@@ -1,0 +1,51 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- single player, signed out
+open=true title="Multiview" sub="Watch several streams at once" on_layout=false select="Select"
+  > "Sign in to watch several streams" ""
+-- single player, signed in
+open=true title="Multiview" sub="Watching grandmaster_k" on_layout=false select="Select"
+  > "Add a stream to watch with this one" ""
+    "Add to favorites" ""
+-- grid, on a muted tile
+open=true title="Multiview" sub="3 streams · Grid of 3 · sound from grandmaster_k" on_layout=false select="Select"
+  > "Add a stream" ""
+    "Remove ash" ""
+    "Add ash to favorites" ""
+    "Layout" "Grid of 3"
+    "Leave multiview" ""
+screen=Multiview active=true count="3 streams" select="Select" retry=false video_slot=0 chat_open=false
+  layouts [2~] [3*] [4] [6] [9] [Spotlight]
+  0: 84.4,72.0 547.6x308.0 slot0 grandmaster_k Playing 360p SOUND "Twitch · VALORANT · 48.1K watching"
+  1: 648.0,72.0 547.6x308.0 slot1 ash Playing 360p "Twitch · VALORANT · 1.0K watching"
+  2: 366.2,396.0 547.6x308.0 slot2 birch Playing 360p "Twitch · VALORANT · 2.0K watching"
+-- grid, the layout row
+open=true title="Multiview" sub="3 streams · Grid of 3 · sound from grandmaster_k" on_layout=true select="Next layout"
+    "Add a stream" ""
+    "Remove ash" ""
+    "Add ash to favorites" ""
+  > "Layout" "Grid of 3"
+    "Leave multiview" ""
+open=true title="Multiview" sub="3 streams · Grid of 4 · sound from grandmaster_k" on_layout=true select="Next layout"
+    "Add a stream" ""
+    "Remove ash" ""
+    "Add ash to favorites" ""
+  > "Layout" "Grid of 4"
+    "Leave multiview" ""
+-- full screen
+open=true title="Multiview" sub="3 streams · Grid of 3 · sound from grandmaster_k" on_layout=false select="Select"
+  > "Add a stream" ""
+    "Remove grandmaster_k" ""
+    "Add grandmaster_k to favorites" ""
+    "Leave multiview" ""
+-- A on an offline tile
+screen=Multiview active=true count="3 streams" select="Retry or remove" retry=true video_slot=0 chat_open=false
+  layouts [2~] [3*] [4] [6] [9] [Spotlight]
+  0: 84.4,72.0 547.6x308.0 slot0 grandmaster_k Playing 360p SOUND "Twitch · VALORANT · 48.1K watching"
+  1: 648.0,72.0 547.6x308.0 slot1 ash Offline 360p "Twitch · VALORANT · 1.0K watching" <focus, A "Retry or remove">
+  2: 366.2,396.0 547.6x308.0 slot2 birch Playing 360p "Twitch · VALORANT · 2.0K watching"
+open=true title="Multiview" sub="ash is offline" on_layout=false select="Select"
+  > "Try ash again" ""
+    "Remove ash" ""

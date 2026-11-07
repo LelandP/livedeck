@@ -1,0 +1,45 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- opened from the single player
+open=true tab=1 focus=0 select="Add" empty="Looking for the channels you follow…"
+  > [ash | VALORANT | 1.0K viewers | img]
+    [birch | VALORANT | 2.0K viewers]
+    [cedar | VALORANT | 3.0K viewers | img]
+    [dune | VALORANT | 0 viewers]
+    [elm | VALORANT | 5.0K viewers | img]
+    [fern | VALORANT | 6.0K viewers]
+    [gale | VALORANT | 7.0K viewers | img]
+    [heath | VALORANT | 8.0K viewers]
+    [isle | VALORANT | 9.0K viewers | img]
+screen=Multiview active=true count="1 stream" select="Add" retry=false video_slot=0 chat_open=false
+  layouts [2*] [3] [4] [6] [9] [Spotlight]
+  0: 64.0,228.2 568.0x319.5 slot0 grandmaster_k Playing 1080p SOUND "Twitch · VALORANT · 48.1K watching"
+  1: 648.0,228.2 568.0x319.5 [add a stream]
+-- after adding the first, on the second
+open=true tab=1 focus=1 select="Add" empty="Looking for the channels you follow…"
+    [ash | VALORANT | 1.0K viewers | img] (watching)
+  > [birch | VALORANT | 2.0K viewers]
+    [cedar | VALORANT | 3.0K viewers | img]
+    [dune | VALORANT | 0 viewers]
+    [elm | VALORANT | 5.0K viewers | img]
+    [fern | VALORANT | 6.0K viewers]
+    [gale | VALORANT | 7.0K viewers | img]
+    [heath | VALORANT | 8.0K viewers]
+    [isle | VALORANT | 9.0K viewers | img]
+-- back on the one already added
+open=true tab=1 focus=0 select="" empty="Looking for the channels you follow…"
+  > [ash | VALORANT | 1.0K viewers | img] (watching)
+    [birch | VALORANT | 2.0K viewers]
+    [cedar | VALORANT | 3.0K viewers | img]
+    [dune | VALORANT | 0 viewers]
+    [elm | VALORANT | 5.0K viewers | img]
+    [fern | VALORANT | 6.0K viewers]
+    [gale | VALORANT | 7.0K viewers | img]
+    [heath | VALORANT | 8.0K viewers]
+    [isle | VALORANT | 9.0K viewers | img]
+-- Favorites (none yet)
+open=true tab=0 focus=0 select="" empty="No favorites yet. Press Y on a channel to star it."
+-- Following still loading, with nothing yet
+open=true tab=1 focus=0 select="" empty="Looking for the channels you follow…"

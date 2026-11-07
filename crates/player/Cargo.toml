@@ -16,3 +16,7 @@ tracing.workspace = true
 slint = { workspace = true, optional = true }
 glow = { workspace = true, optional = true }
 libmpv2 = { version = "7.0.0", optional = true }
+
+[[example]]
+name = "health_probe"
+required-features = ["mpv"]

@@ -175,7 +175,7 @@ mod tests {
     fn handles_only_join_and_leave() {
         assert!(Chat::handles(&join("x")));
         assert!(Chat::handles(&Command::LeaveChat));
-        assert!(!Chat::handles(&Command::StopPlayback));
+        assert!(!Chat::handles(&Command::StopPlayback { slot: 0 }));
         assert!(!Chat::handles(&Command::FetchChatImages {
             urls: Vec::new()
         }));

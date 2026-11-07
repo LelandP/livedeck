@@ -31,8 +31,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use htpc_chat::{ChatClient, IrcChat, KickChat};
 use htpc_core::{Event, Intent, Msg, RailEntry};
-use htpc_player::{Player, PlayerEvent, UnavailablePlayer};
-use htpc_resolver::{ResolveError, StreamResolver, StreamlinkResolver, TokioRunner};
+#[cfg(not(feature = "mpv"))]
+use htpc_player::UnavailablePlayer;
+use htpc_player::{Player, PlayerEvent, PlayerPool, RefreshRate, Slot, MAIN_SLOT};
+use htpc_resolver::{StreamResolver, StreamlinkResolver, TokioRunner};
 use htpc_storage::TokenStore;
 use htpc_twitch_api::{Credentials, FakeAuth, GqlClient, HelixClient, HttpAuth, HybridApi};
 use htpc_twitch_api::{RefreshingApi, RetryPolicy};
@@ -48,7 +50,7 @@ use crate::provider::{ApiProvider, Provider};
 use crate::raids::Raids;
 use crate::session::{AppAuth, Apply, Notify, Session, Viewer, NO_CLIENT_ID};
 use crate::sleep::Sleep;
-use crate::store::{SaveSettings, Store};
+use crate::store::{SaveFavorites, SaveMultiview, SaveSettings, Store};
 
 const HELP: &str = "\
 livedeck: couch-first, unofficial Twitch client for SteamOS
@@ -105,6 +107,8 @@ CONFIG:
   quick_messages, client_id) is
   created with defaults on the first run in the platform config folder
   (Linux: ~/.config/livedeck, Windows: %APPDATA%\\livedeck\\config).
+  favorites.toml (the starred channels, written by the app) is in the data folder
+  (Linux: ~/.local/share/livedeck, Windows: %APPDATA%\\livedeck\\data).
 
 Logging: set RUST_LOG, e.g. RUST_LOG=livedeck=debug
 ";
@@ -240,9 +244,27 @@ fn load_storage() -> Storage {
                 images: None,
                 tokens: None,
                 config_store: None,
+                favorites: Vec::new(),
+                favorites_store: None,
+                last_multiview: None,
+                multiview_store: None,
             };
         }
     };
+    let favorites_store = htpc_storage::FavoritesStore::new(paths.favorites_file());
+    let favorites = favorites_store.load_or_default();
+    tracing::info!(
+        path = %favorites_store.path().display(),
+        count = favorites.len(),
+        "favorites loaded"
+    );
+    let multiview_store = htpc_storage::MultiviewStore::new(paths.multiview_file());
+    let last_multiview = multiview_store.load_or_default();
+    tracing::info!(
+        path = %multiview_store.path().display(),
+        streams = last_multiview.as_ref().map_or(0, |s| s.channels.len()),
+        "last multiview session loaded"
+    );
     let store = htpc_storage::ConfigStore::new(paths.config_file());
     let config = store.load_or_default();
     if !store.path().exists() {
@@ -273,6 +295,10 @@ fn load_storage() -> Storage {
         images: cache,
         tokens: Some(tokens),
         config_store: Some(store),
+        favorites,
+        favorites_store: Some(favorites_store),
+        last_multiview,
+        multiview_store: Some(multiview_store),
     }
 }
 
@@ -285,6 +311,36 @@ struct Storage {
     tokens: Option<Arc<TokenStore>>,
     /// Where settings changed on the Settings screen are written.
     config_store: Option<htpc_storage::ConfigStore>,
+    /// The starred channels, from `favorites.toml`.
+    favorites: Vec<htpc_core::ChannelRef>,
+    /// Where they are written when they change.
+    favorites_store: Option<htpc_storage::FavoritesStore>,
+    /// The last multiview session, from `multiview.toml`.
+    last_multiview: Option<htpc_core::SavedSet>,
+    /// Where it is written when a running session changes.
+    multiview_store: Option<htpc_storage::MultiviewStore>,
+}
+
+/// Saves the multiview set into `multiview.toml`.
+fn multiview_saver(store: Option<htpc_storage::MultiviewStore>) -> Option<SaveMultiview> {
+    let store = store?;
+    Some(Arc::new(move |set: &htpc_core::SavedSet| {
+        match store.save(set) {
+            Ok(()) => tracing::debug!(streams = set.channels.len(), "multiview set saved"),
+            Err(err) => tracing::warn!(%err, "could not save the multiview set"),
+        }
+    }))
+}
+
+/// Saves the favorites into `favorites.toml`.
+fn favorites_saver(store: Option<htpc_storage::FavoritesStore>) -> Option<SaveFavorites> {
+    let store = store?;
+    Some(Arc::new(
+        move |list: &[htpc_core::ChannelRef]| match store.save(list) {
+            Ok(()) => tracing::debug!(count = list.len(), "favorites saved"),
+            Err(err) => tracing::warn!(%err, "could not save the favorites"),
+        },
+    ))
 }
 
 /// Saves settings into `config.toml`, keeping the file's other values (client ID, cache size).
@@ -306,67 +362,119 @@ fn settings_saver(
     }))
 }
 
-/// The player: libmpv with the `mpv` feature, otherwise one that reports "no video support".
-/// Its events go to the store as `Event`s.
-fn make_player(ui: &MainWindow, tx: &UnboundedSender<Msg>) -> Arc<dyn Player> {
-    let report = {
+/// How often players stopped for a minute are dropped (`PlayerPool::drop_idle`).
+const IDLE_SWEEP: Duration = Duration::from_secs(15);
+
+/// The players, one per slot: libmpv with the `mpv` feature, otherwise players that report "no
+/// video support". Their events go to the store as `Event`s. The single player (slot 0) is made
+/// at once, so a broken libmpv shows in the log at startup.
+fn make_pool(ui: &MainWindow, tx: &UnboundedSender<Msg>, rate: RefreshRate) -> Arc<PlayerPool> {
+    let on_event = {
         let tx = tx.clone();
-        move |event: PlayerEvent| {
-            if let Some(event) = playback::player_event(event) {
+        let clock = playback::Clock::start();
+        move |slot: Slot, event: PlayerEvent| {
+            if let Some(event) = playback::player_event(slot, event, clock.ms()) {
                 let _ = tx.send(event.into());
             }
         }
     };
     #[cfg(feature = "mpv")]
-    let unavailable = match attach_mpv(ui, report.clone()) {
-        Ok(player) => return player,
-        Err(err) => {
-            tracing::error!(%err, "video is off");
-            // Shown on the player's error screen, so the real cause is visible without a log.
-            UnavailablePlayer::with_reason(report, format!("video could not start: {err:#}"))
-        }
-    };
+    let pool = mpv_pool(ui, rate, on_event);
     #[cfg(not(feature = "mpv"))]
-    let unavailable = {
-        let _ = ui;
-        UnavailablePlayer::new(report)
+    let pool = {
+        let _ = (ui, rate);
+        PlayerPool::new(
+            |_, _, report| {
+                Ok(Arc::new(UnavailablePlayer::new(move |e| report(e))) as Arc<dyn Player>)
+            },
+            on_event,
+        )
     };
-    Arc::new(unavailable)
+    let pool = Arc::new(pool);
+    pool.player(MAIN_SLOT);
+    pool
 }
 
-/// Starts mpv and connects its frames to the window's `video` image.
+/// A pool of mpv players, every slot's frames drawn by one `VideoOutputs`, each at the size the
+/// window shows it (`htpc_ui::video_size`): the Player screen's video, a multiview tile, a strip
+/// thumbnail, or hidden.
 #[cfg(feature = "mpv")]
-fn attach_mpv(
+fn mpv_pool(
     ui: &MainWindow,
-    report: impl Fn(PlayerEvent) + Send + Clone + 'static,
-) -> Result<Arc<dyn Player>> {
-    let (player, output) = htpc_player::MpvPlayer::new(report).map_err(anyhow::Error::msg)?;
+    rate: RefreshRate,
+    on_event: impl Fn(Slot, PlayerEvent) + Send + Sync + 'static,
+) -> PlayerPool {
     let size = ui.as_weak();
     let show = ui.as_weak();
     let redraw = ui.as_weak();
-    output
-        .attach(
-            ui.window(),
-            move || match size.upgrade() {
-                // The video area in physical pixels. Nothing is drawn off the Player screen.
-                Some(ui) if ui.get_screen() == htpc_ui::ScreenId::Player as i32 => {
-                    let scale = ui.window().scale_factor();
-                    let px = |len: f32| (len * scale).round().max(0.0) as u32;
-                    (px(ui.get_video_w()), px(ui.get_video_h()))
-                }
-                _ => (0, 0),
-            },
-            move |image| {
-                if let Some(ui) = show.upgrade() {
-                    ui.set_video(image);
-                }
-            },
-            move || {
-                let _ = redraw.upgrade_in_event_loop(|ui| ui.window().request_redraw());
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("could not hook into the renderer: {e}"))?;
-    Ok(Arc::new(player))
+    let outputs = htpc_player::VideoOutputs::attach(
+        ui.window(),
+        move |slot| match size.upgrade() {
+            Some(ui) => htpc_ui::video_size(&ui, slot),
+            None => (0, 0),
+        },
+        move |slot, image| {
+            if let Some(ui) = show.upgrade() {
+                htpc_ui::show_video(&ui, slot, image);
+            }
+        },
+        move |wait| {
+            let _ = redraw.upgrade_in_event_loop(move |ui| request_redraw(&ui, wait));
+        },
+        rate,
+    );
+    let outputs = match outputs {
+        Ok(outputs) => outputs,
+        Err(err) => {
+            let reason = format!("could not hook into the renderer: {err}");
+            return PlayerPool::new(move |_, _, _| Err(reason.clone()), on_event);
+        }
+    };
+    let promote = outputs.clone();
+    PlayerPool::new(
+        move |slot, seat, report| {
+            let (player, output) = htpc_player::MpvPlayer::new(move |e| report(e))?;
+            match seat {
+                htpc_player::Seat::Main => outputs.insert(slot, output),
+                htpc_player::Seat::Spare => outputs.insert_spare(slot, output),
+            }
+            Ok(Arc::new(player) as Arc<dyn Player>)
+        },
+        on_event,
+    )
+    // A new quality's first frame: its player is drawn in the slot from then on.
+    .with_swap(move |slot| promote.promote(slot))
+}
+
+/// Redraws the window now, or after `wait` (video frames are paced to the display's rate).
+#[cfg(feature = "mpv")]
+fn request_redraw(ui: &MainWindow, wait: Duration) {
+    if wait.is_zero() {
+        ui.window().request_redraw();
+        return;
+    }
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(wait, move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.window().request_redraw();
+        }
+    });
+}
+
+/// Drops players that have been stopped for a minute, then redraws so their render contexts are
+/// freed (that only happens while drawing).
+fn sweep_idle_players(runtime: &tokio::runtime::Runtime, pool: &Arc<PlayerPool>, ui: &MainWindow) {
+    let pool = Arc::clone(pool);
+    let weak = ui.as_weak();
+    runtime.spawn(async move {
+        let mut tick = tokio::time::interval(IDLE_SWEEP);
+        loop {
+            tick.tick().await;
+            if pool.drop_idle() > 0 {
+                let _ = weak.upgrade_in_event_loop(|ui| ui.window().request_redraw());
+            }
+        }
+    });
 }
 
 /// Full screen when a flag says so, otherwise in Steam's Game Mode (Steam sets `SteamGamepadUI`
@@ -379,20 +487,47 @@ fn want_fullscreen(flag: Option<bool>) -> bool {
 /// `htpc_ui::fit_scale` of the window's physical size. The system's own factor can be far off (X11
 /// guesses about 2x on the Deck's screen), which pushed the hints bar off the bottom.
 /// `SLINT_SCALE_FACTOR` turns this off.
-fn wire_scaling(ui: &MainWindow) {
-    if env_var("SLINT_SCALE_FACTOR").is_some() {
+///
+/// The store hears the window's physical size (`Event::DisplaySize`) once the window is up and on
+/// every change, also with `SLINT_SCALE_FACTOR` set: multiview's tile quality comes from it.
+fn wire_scaling(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
+    let fit = env_var("SLINT_SCALE_FACTOR").is_none();
+    let reported = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
+    let on_change = {
+        let weak = ui.as_weak();
+        let tx = tx.clone();
+        move || {
+            let (weak, tx, reported) = (weak.clone(), tx.clone(), reported.clone());
+            // Not from inside the property-change handler: the events below change the size again.
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                if let Some(ui) = weak.upgrade() {
+                    if fit {
+                        fit_to_window(&ui);
+                    }
+                    report_display_size(&ui, &tx, &reported);
+                }
+            });
+        }
+    };
+    // The first report, once the event loop runs and the window has its real size.
+    on_change();
+    ui.on_geometry_changed(on_change);
+}
+
+/// Sends `Event::DisplaySize` when the window's physical size differs from the last one sent.
+fn report_display_size(
+    ui: &MainWindow,
+    tx: &UnboundedSender<Msg>,
+    reported: &std::cell::Cell<(u32, u32)>,
+) {
+    let size = ui.window().size();
+    let now = (size.width, size.height);
+    if now == reported.get() || now.0 == 0 || now.1 == 0 {
         return;
     }
-    let weak = ui.as_weak();
-    ui.on_geometry_changed(move || {
-        let weak = weak.clone();
-        // Not from inside the property-change handler: the events below change the size again.
-        slint::Timer::single_shot(Duration::ZERO, move || {
-            if let Some(ui) = weak.upgrade() {
-                fit_to_window(&ui);
-            }
-        });
-    });
+    reported.set(now);
+    tracing::debug!(width = now.0, height = now.1, "display size");
+    let _ = tx.send(Event::DisplaySize { w: now.0, h: now.1 }.into());
 }
 
 fn fit_to_window(ui: &MainWindow) {
@@ -443,6 +578,14 @@ struct Wiring {
     raid_connect: raids::Connect,
     /// The ready-made chat messages from `config.toml`.
     quick_messages: Vec<String>,
+    /// The starred channels from `favorites.toml`. None in `--mock`.
+    favorites: Vec<htpc_core::ChannelRef>,
+    /// Writes them when they change. `None` in `--mock`.
+    save_favorites: Option<SaveFavorites>,
+    /// The last multiview session from `multiview.toml`. None in `--mock`.
+    last_multiview: Option<htpc_core::SavedSet>,
+    /// Writes it when a running session changes. `None` in `--mock`.
+    save_multiview: Option<SaveMultiview>,
 }
 
 /// The real raid watch: EventSub with the session's token.
@@ -482,6 +625,10 @@ fn run_app<P: Provider, R: StreamResolver>(
         power,
         raid_connect,
         quick_messages,
+        favorites,
+        save_favorites,
+        last_multiview,
+        save_multiview,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -498,13 +645,15 @@ fn run_app<P: Provider, R: StreamResolver>(
 
     let ui = MainWindow::new().context("failed to create the window")?;
     ui.set_version(env!("CARGO_PKG_VERSION").into());
-    wire_scaling(&ui);
+    wire_scaling(&ui, &tx);
     if fullscreen {
         ui.window().set_fullscreen(true);
     }
     wire_ui(&ui, &tx);
-    wire_focus(&ui, &tx);
-    let player = make_player(&ui, &tx);
+    let rate = RefreshRate::new();
+    wire_window_events(&ui, &tx, rate.clone());
+    let pool = make_pool(&ui, &tx, rate);
+    sweep_idle_players(&runtime, &pool, &ui);
 
     let gamepad_tx = tx.clone();
     // Detached: the thread exits with the process or once the store channel closes.
@@ -515,6 +664,8 @@ fn run_app<P: Provider, R: StreamResolver>(
     // Before the first Home load, so it already has (or has not) its Kick row.
     startup.insert(0, htpc_core::Command::SetKick(settings.show_kick));
     state.quick_messages = quick_messages;
+    state.favorites = favorites;
+    state.last_multiview = last_multiview;
     state.can_open_browser = browser::can_open_browser();
     // The account is in place before the first load, so Home already has its Followed row. A
     // token from the environment wins over a stored login.
@@ -536,8 +687,8 @@ fn run_app<P: Provider, R: StreamResolver>(
             resume.resume().await;
         }
     });
-    let sleep = Sleep::new(Arc::clone(&player), power, tx.clone());
-    let playback = Playback::new(resolver, player);
+    let sleep = Sleep::new(pool.handle(MAIN_SLOT), power, tx.clone());
+    let playback = Playback::new(resolver, pool);
     let chat = Chat::new(chat, kick_chat, tx.clone());
     let raids = Raids::new(raid_connect, tx.clone());
     let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx)
@@ -545,6 +696,12 @@ fn run_app<P: Provider, R: StreamResolver>(
         .with_raids(raids);
     if let Some(save) = save_settings {
         store = store.with_settings_saver(save);
+    }
+    if let Some(save) = save_favorites {
+        store = store.with_favorites_saver(save);
+    }
+    if let Some(save) = save_multiview {
+        store = store.with_multiview_saver(save);
     }
     // Stops the screen dimming, locking or sleeping mid-stream.
     if let Some(keep_awake) = awake::keep_awake() {
@@ -595,22 +752,41 @@ fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
             UiAction::Menu => Intent::Menu,
             UiAction::Retry => Intent::Retry,
             UiAction::PageRight => Intent::PageRight,
+            UiAction::View => Intent::View,
         };
         send(&t, intent);
     });
 }
 
-/// Tells the store when the window gains or loses focus (the user switched apps), so it can pause
-/// the stream in the background. Slint still handles every event as usual. Without the winit
-/// backend nothing is reported, and the stream simply keeps playing.
-fn wire_focus(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
+/// Listens to the window's own events. Slint still handles every event as usual. Without the winit
+/// backend nothing is reported: the stream keeps playing in the background, and video is paced
+/// for 60 Hz.
+///
+/// - Focus: the store pauses the stream while another app is in front.
+/// - The monitor's refresh rate, read whenever the window is shown, moved or resized (which is
+///   also when it may have moved to another monitor). Video frames are paced to it.
+fn wire_window_events(ui: &MainWindow, tx: &UnboundedSender<Msg>, rate: RefreshRate) {
     use slint::winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor};
 
     let tx = tx.clone();
-    ui.window().on_winit_window_event(move |_, event| {
-        if let WindowEvent::Focused(focused) = event {
-            tracing::debug!(focused, "window focus changed");
-            let _ = tx.send(Event::WindowFocus(*focused).into());
+    ui.window().on_winit_window_event(move |window, event| {
+        match event {
+            WindowEvent::Focused(focused) => {
+                tracing::debug!(focused, "window focus changed");
+                let _ = tx.send(Event::WindowFocus(*focused).into());
+            }
+            WindowEvent::Moved(_)
+            | WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. } => {
+                let monitor = window
+                    .with_winit_window(|w| w.current_monitor()?.refresh_rate_millihertz())
+                    .flatten();
+                if let Some(mhz) = monitor.filter(|&mhz| mhz != rate.millihertz()) {
+                    tracing::debug!(hz = f64::from(mhz) / 1000.0, "display refresh rate");
+                    rate.set_millihertz(mhz);
+                }
+            }
+            _ => {}
         }
         EventResult::Propagate
     });
@@ -660,9 +836,15 @@ fn main() -> Result<()> {
         images,
         tokens,
         config_store,
+        favorites,
+        favorites_store,
+        last_multiview,
+        multiview_store,
     } = load_storage();
     let settings = config.settings;
     let save_settings = settings_saver(&config, config_store);
+    let save_favorites = favorites_saver(favorites_store);
+    let save_multiview = multiview_saver(multiview_store);
     let fullscreen = want_fullscreen(args.fullscreen);
     let (tx, rx) = unbounded_channel::<Msg>();
     let notify: Notify = {
@@ -691,8 +873,9 @@ fn main() -> Result<()> {
             notify,
             Arc::clone(&viewer),
         );
-        // There is no stream to play offline, so every channel shows the end screen.
-        let resolver = htpc_resolver::FakeResolver::failing(ResolveError::Offline);
+        // Every live channel plays a generated test picture, so the player and multiview can be
+        // tried without a network. The offline ones show the end screen.
+        let resolver = mock::MockResolver;
         // Kick is offline fixtures too, while "Show Kick" is on.
         let provider = ApiProvider::new(api)
             .with_account(viewer)
@@ -713,6 +896,12 @@ fn main() -> Result<()> {
                     as Box<dyn htpc_twitch_api::RaidWatch>)
             }),
             quick_messages: config.quick_messages,
+            // A fresh list each run, never written: the user's real favorites stay as they are.
+            favorites: Vec::new(),
+            save_favorites: None,
+            // The same for the multiview set.
+            last_multiview: None,
+            save_multiview: None,
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -762,6 +951,10 @@ fn main() -> Result<()> {
         power: Arc::new(power::SystemSuspend),
         raid_connect,
         quick_messages: config.quick_messages,
+        favorites,
+        save_favorites,
+        last_multiview,
+        save_multiview,
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

@@ -40,7 +40,7 @@ fn on_subscribe_row(can_open_browser: bool) -> AppState {
     let mut s = home();
     s.can_open_browser = can_open_browser;
     let (s, _) = reduce(&s, Intent::Select);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let (s, _) = run(&s, &[Intent::Menu]);
     let (s, _) = run(&s, &[Intent::Down; 7]);
     assert_eq!(s.player_menu, Some(PlayerMenuRow::Subscribe));

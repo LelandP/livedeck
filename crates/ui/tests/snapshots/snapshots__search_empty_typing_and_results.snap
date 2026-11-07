@@ -4,34 +4,34 @@ expression: out
 ---
 -- empty
 query="" key=0 on_keys=true in_results=false select="Type" retry=false status="Type at least two letters or digits to find channels and categories."
-screen=Search heading="Search" focus=(0, 0) rail_current=3
+screen=Search heading="Search" focus=(0, 0) rail_current=4
 select="Type" retry=false back=false empty=true error=""
 -- typing
 query="lo" key=14 on_keys=true in_results=false select="Type" retry=false status="Searching…"
-screen=Search heading="Search" focus=(0, 0) rail_current=3
+screen=Search heading="Search" focus=(0, 0) rail_current=4
 select="Type" retry=false back=false empty=false error=""
 row 0 Landscape "": [skeleton] [skeleton] [skeleton] [skeleton] [skeleton]
 -- results, keyboard focused
 query="lo" key=14 on_keys=true in_results=false select="Type" retry=false status=""
-screen=Search heading="Search" focus=(0, 0) rail_current=3
+screen=Search heading="Search" focus=(0, 0) rail_current=4
 select="Type" retry=false back=false empty=false error=""
 row 0 Landscape "Live channels": [lofi_lena | VALORANT | 860 viewers | img] [lorekeeper | VALORANT | 42 viewers]
 row 1 Portrait "Categories": [Lords | img]
 row 2 Landscape "Offline channels": [Lonely_Owl]
 -- results focused
 query="lo" key=14 on_keys=false in_results=true select="Open" retry=false status=""
-screen=Search heading="Search" focus=(1, 0) rail_current=3
+screen=Search heading="Search" focus=(1, 0) rail_current=4
 select="Open" retry=false back=false empty=false error=""
 row 0 Landscape "Live channels": [lofi_lena | VALORANT | 860 viewers | img] [lorekeeper | VALORANT | 42 viewers]
 row 1 Portrait "Categories": [Lords | img]
 row 2 Landscape "Offline channels": [Lonely_Owl]
 -- nothing found
 query="lox" key=14 on_keys=true in_results=false select="Type" retry=false status="No channels or categories match “lox”."
-screen=Search heading="Search" focus=(0, 0) rail_current=3
+screen=Search heading="Search" focus=(0, 0) rail_current=4
 select="Type" retry=false back=false empty=true error=""
 -- failed
 query="lox" key=14 on_keys=true in_results=false select="Type" retry=false status="Could not search: network error: timed out. Press Start to try again."
-screen=Search heading="Search" focus=(1, 0) rail_current=3
+screen=Search heading="Search" focus=(1, 0) rail_current=4
 select="Type" retry=false back=false empty=false error="network error: timed out"
 row 0 Landscape "Live channels": [lofi_lena | VALORANT | 860 viewers | img] [lorekeeper | VALORANT | 42 viewers]
 row 1 Portrait "Categories": [Lords | img]

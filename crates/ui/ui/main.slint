@@ -3,7 +3,7 @@
 import "../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf";
 import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
 import { Theme } from "theme.slint";
-import { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem } from "types.slint";
+import { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
 import { Hint, Toast } from "components.slint";
 import { HomeContent } from "home.slint";
 import { GridContent } from "grid.slint";
@@ -12,11 +12,12 @@ import { Rail } from "rail.slint";
 import { PlayerScreen } from "player.slint";
 import { SignInScreen } from "signin.slint";
 import { SettingsScreen } from "settings.slint";
+import { MultiviewScreen, ViewPopup, FullScreenStrip } from "multiview.slint";
 
-export { StreamItem, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem }
+export { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem }
 
 // Hint-bar actions (mouse fallback). Rust maps them to core Intents.
-export enum UiAction { select, back, toggle-chat, menu, retry, page-right }
+export enum UiAction { select, back, toggle-chat, menu, retry, page-right, view }
 
 // Pure view of `htpc_core::AppState`. Rust (crates/ui/src/view_model.rs) sets every property.
 // Navigation logic lives in `htpc_core::reduce`. This file only renders and animates.
@@ -51,6 +52,12 @@ export component MainWindow inherits Window {
     in property <string> select-label: "Watch";
     in property <bool> can-retry: false;
     in property <bool> can-back: false;
+    // A stream or channel card has focus: View opens its popup, which the hint calls `view-label`
+    // ("Multiview" on a live stream, "Favorites" on an offline channel).
+    in property <bool> can-view: false;
+    in property <string> view-label: "Multiview";
+    // The multiview tray on browse screens ("Multiview · 3 picked"). Empty: hidden.
+    in property <string> tray-text: "";
 
     // Settings screen: the focused row, and the current value of each choice.
     in property <int> settings-focus: 0;
@@ -65,8 +72,8 @@ export component MainWindow inherits Window {
     // The app version for the about text (set by the app from its Cargo version).
     in property <string> version: "";
 
-    // 0 = home / following, 1 = player, 2 = sign in, 3 = grid: browse / category, 4 = settings,
-    // 5 = search (ScreenId in view_model.rs)
+    // 0 = home / following / favorites, 1 = player, 2 = sign in, 3 = grid: browse / category, 4 = settings,
+    // 5 = search, 6 = multiview's grid (ScreenId in view_model.rs)
     in property <int> screen: 0;
     in property <int> sel-row: 0;
     in property <int> sel-col: 0;
@@ -81,7 +88,7 @@ export component MainWindow inherits Window {
     in property <bool> search-on-keys: false;
     in property <bool> search-in-results: false;
     in property <string> search-status: "";
-    // Rail cursor: 0..4 nav entries, 5 = account (RailEntry order in htpc-core).
+    // Rail cursor: 0..5 nav entries, 6 = account (RailEntry order in htpc-core).
     in property <int> rail-index: 0;
     in property <bool> rail-focused: false;
     // Rail entry shown as the current destination.
@@ -92,8 +99,74 @@ export component MainWindow inherits Window {
     in property <string> chat-status: "";
     in property <StreamItem> now-playing;
 
-    // Player screen. `video` is the latest mpv frame, set by the player crate on the UI thread.
+    // Player screen. `video` is the latest mpv frame of slot `video-slot` (the stream with sound),
+    // set on the UI thread by `htpc_ui::show_video`.
     in-out property <image> video;
+    in property <int> video-slot: 0;
+    // Every slot's latest frame, by slot, for multiview's tiles and strip (`htpc_ui::show_video`).
+    in-out property <[image]> tile-videos;
+
+    // Multiview runs (the grid, or full screen with the others behind it): its places, the
+    // layout chips, "3 streams", and for full screen "2 of 3 in multiview" and the strip.
+    in property <bool> mv-active: false;
+    in property <[MvTile]> mv-tiles;
+    in property <[MvLayoutChip]> mv-layouts;
+    in property <string> mv-count-text: "";
+    in property <int> mv-count: 0;
+    in property <string> mv-position: "";
+    in property <[MvStripItem]> mv-strip;
+    // The picker panel in the grid: tab (0 Favorites, 1 Following), rows, which are already
+    // watched and which are starred, the focused row, what to say when there are none, and what
+    // Y does ("Star" / "Unstar", empty with no rows).
+    in property <bool> picker-open: false;
+    in property <int> picker-tab: 1;
+    in property <[StreamItem]> picker-items;
+    in property <[bool]> picker-watching;
+    in property <[bool]> picker-starred;
+    in property <int> picker-focus: 0;
+    in property <string> picker-empty: "";
+    in property <string> picker-star-label: "";
+    // The View popup, over any screen. `popup-on-layout`: the focused row is the layout (◀ ▶).
+    in property <bool> popup-open: false;
+    in property <string> popup-title: "";
+    in property <string> popup-sub: "";
+    in property <[PopupItem]> popup-rows;
+    in property <int> popup-focus: 0;
+    in property <bool> popup-on-layout: false;
+    // The grid's tile area: 1152 px wide from x = 64 at 1280 px, centred in a wider window, and
+    // scaled down (`mv-k`) to make room for the chat panel. Rust reads them to size each tile's
+    // video (`htpc_ui::video_size`).
+    out property <length> mv-area-x: root.chat-open ? Theme.safe-x / 2 : (root.width - Theme.mv-area-w) / 2;
+    out property <length> mv-area-w: root.chat-open ? root.width - Theme.chat-w - Theme.safe-x : Theme.mv-area-w;
+    property <float> mv-base-k: min(1.0, root.mv-area-w / Theme.mv-area-w);
+    // The grid with nothing pressed for `mv-idle-after` and nothing open over it: the header,
+    // hints and captions fade, and the tiles grow to fill the window (beside the chat panel when
+    // it is open), keeping their shape. Any button brings it all back.
+    out property <bool> mv-idle: root.screen == 6 && !root.hud-visible && !root.picker-open && !root.popup-open && !root.raid-open && !root.exit-prompt && !root.sleep-warning;
+    property <length> mv-free-w: root.width - (root.chat-open ? Theme.chat-w : 0px) - 2 * Theme.mv-idle-margin;
+    property <length> mv-free-h: root.height - 2 * Theme.mv-idle-margin;
+    out property <float> mv-k: root.mv-idle ? min(root.mv-free-w / Theme.mv-area-w, root.mv-free-h / Theme.mv-area-h) : root.mv-base-k;
+    // Where the tile area's top left is drawn.
+    property <length> mv-grid-x: root.mv-idle ? Theme.mv-idle-margin + (root.mv-free-w - Theme.mv-area-w * root.mv-k) / 2 : root.mv-area-x + (root.mv-area-w - Theme.mv-area-w * root.mv-k) / 2;
+    property <length> mv-grid-y: root.mv-idle ? (root.height - Theme.mv-area-h * root.mv-k) / 2 : (root.height - 800px) / 2 + Theme.mv-area-y + (Theme.mv-area-h - Theme.mv-area-h * root.mv-k) / 2;
+    // The strip over multiview's full screen is up (for 2.6 s after LB/RB or going full screen):
+    // its thumbnails need frames, so their players render at thumbnail size meanwhile.
+    property <bool> strip-shown: false;
+    out property <bool> mv-strip-visible: root.strip-shown && root.screen == 1 && root.mv-active;
+    changed video-slot => {
+        if (root.screen == 1 && root.mv-active) {
+            root.show-strip();
+        }
+    }
+    strip-timer := Timer {
+        interval: 2600ms;
+        running: root.strip-shown;
+        triggered => { root.strip-shown = false; }
+    }
+    function show-strip() {
+        root.strip-shown = true;
+        strip-timer.restart();
+    }
     // 0 loading, 1 playing, 2 offline, 3 failed (PlaybackId in view_model.rs).
     in property <int> playback: 0;
     in property <string> playback-error: "";
@@ -171,10 +244,16 @@ export component MainWindow inherits Window {
     changed screen => {
         root.hud-visible = true;
         hud-timer.restart();
+        if (root.screen == 1 && root.mv-active) {
+            root.show-strip();
+        } else {
+            root.strip-shown = false;
+        }
     }
+    // The player's HUD, and multiview's grid controls (`mv-idle`).
     hud-timer := Timer {
-        interval: 4s;
-        running: root.screen == 1;
+        interval: root.screen == 6 ? Theme.mv-idle-after : 4s;
+        running: root.screen == 1 || root.screen == 6;
         triggered => { root.hud-visible = false; }
     }
 
@@ -186,7 +265,7 @@ export component MainWindow inherits Window {
     callback action(UiAction);
 
     // Order must match `htpc_core::RailEntry`. The account entry is appended by Rail.
-    property <[string]> rail-items: ["Home", "Following", "Browse", "Search", "Settings"];
+    property <[string]> rail-items: ["Home", "Following", "Favorites", "Browse", "Search", "Settings"];
 
     // Controller first. Keyboard stand-in: arrows, Enter = A, Esc/Backspace = B, Y = chat. On
     // Search, typed characters and Backspace edit the text instead.
@@ -368,6 +447,98 @@ export component MainWindow inherits Window {
         compose-hint: root.compose-hint;
     }
 
+    if root.screen == 6 : MultiviewScreen {
+        width: parent.width;
+        height: parent.height;
+        tiles: root.mv-tiles;
+        tile-videos: root.tile-videos;
+        layouts: root.mv-layouts;
+        count-text: root.mv-count-text;
+        k: root.mv-k;
+        grid-x: root.mv-grid-x;
+        grid-y: root.mv-grid-y;
+        header-x: root.mv-area-x + (root.mv-area-w - Theme.mv-area-w * root.mv-base-k) / 2;
+        header-w: Theme.mv-area-w * root.mv-base-k;
+        idle: root.mv-idle;
+        chat: root.chat;
+        chat-open: root.chat-open;
+        chat-status: root.chat-status;
+        raid-open: root.raid-open;
+        raid-title: root.raid-title;
+        raid-viewers: root.raid-viewers;
+        raid-seconds: root.raid-seconds;
+        picker-open: root.picker-open;
+        picker-tab: root.picker-tab;
+        picker-items: root.picker-items;
+        picker-watching: root.picker-watching;
+        picker-starred: root.picker-starred;
+        picker-focus: root.picker-focus;
+        picker-empty: root.picker-empty;
+    }
+
+    // Multiview's full screen: which stream and the strip of all of them, for a moment after
+    // LB/RB. Kept out of the way of the player's own cards and menus.
+    if root.screen == 1 && root.mv-active : FullScreenStrip {
+        width: parent.width;
+        height: parent.height;
+        stream: root.now-playing;
+        position: root.mv-position;
+        items: root.mv-strip;
+        tile-videos: root.tile-videos;
+        shown: root.strip-shown && !root.player-menu-open && !root.compose-open && !root.subscribe-open && !root.raid-open && !root.popup-open;
+    }
+
+    // The streams picked for multiview, in the bottom right corner of the browse screens. View on
+    // any live card starts them from its popup; a click on the tray is View.
+    if (root.screen == 0 || root.screen == 3 || root.screen == 5) && root.tray-text != "" : Rectangle {
+        x: parent.width - self.width - Theme.safe-x;
+        y: parent.height - Theme.hints-h - self.height - 16px;
+        width: tray-row.preferred-width + 28px;
+        height: 48px;
+        border-radius: 24px;
+        border-width: 2px;
+        border-color: Theme.accent;
+        background: #18181bf2;
+        TouchArea { clicked => { root.action(UiAction.view); } }
+        tray-row := HorizontalLayout {
+            x: 14px;
+            width: self.preferred-width;
+            spacing: 10px;
+            alignment: start;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: tray-glyph.preferred-width + 16px;
+                height: 26px;
+                border-radius: 13px;
+                border-width: 2px;
+                border-color: Theme.text;
+                tray-glyph := Text {
+                    text: "View";
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+            }
+            Text {
+                text: root.tray-text;
+                color: Theme.text;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // The View popup, over any screen.
+    if root.popup-open : ViewPopup {
+        width: parent.width;
+        height: parent.height;
+        title: root.popup-title;
+        sub: root.popup-sub;
+        rows: root.popup-rows;
+        focused-row: root.popup-focus;
+    }
+
     // The quit prompt, over everything but the hints bar. The scrim swallows clicks so nothing
     // underneath reacts while it is open.
     if root.exit-prompt : Rectangle {
@@ -469,8 +640,9 @@ export component MainWindow inherits Window {
         width: parent.width;
         background: #0e0e10f0;
         // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
-        // comes back on any button. Loading, paused and error screens keep it.
-        opacity: root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open && !root.compose-open ? 0.0 : 1.0;
+        // comes back on any button. Loading, paused and error screens keep it. Multiview's grid
+        // hides it while idle.
+        opacity: (root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open && !root.compose-open && !root.popup-open && !root.strip-shown) || root.mv-idle ? 0.0 : 1.0;
         animate opacity { duration: Theme.t-med; }
 
         // During the sleep warning every button does the same thing.
@@ -481,8 +653,19 @@ export component MainWindow inherits Window {
             Hint { glyph: "A"; label: "Any button: keep watching"; clicked => { root.action(UiAction.select); } }
         }
 
+        // The View popup: A runs the focused row, Left/Right step the layout row, B closes it.
+        if root.popup-open && !root.exit-prompt && !root.sleep-warning : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 36px;
+            alignment: end;
+            Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.popup-on-layout : Hint { glyph: "◀▶"; label: "Layout"; }
+            Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
+        }
+
         // The raid card takes only A and B.
-        if root.raid-open && !root.sleep-warning : HorizontalLayout {
+        if root.raid-open && !root.sleep-warning && !root.popup-open : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 36px;
@@ -514,8 +697,32 @@ export component MainWindow inherits Window {
             Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
         }
 
+        // Multiview's grid, and its picker.
+        if root.screen == 6 && root.picker-open && !root.exit-prompt && !root.sleep-warning && !root.raid-open && !root.popup-open : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 36px;
+            alignment: end;
+            if root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.picker-star-label != "" : Hint { glyph: "Y"; label: root.picker-star-label; clicked => { root.action(UiAction.toggle-chat); } }
+            Hint { glyph: "RB"; label: "LB/RB Favorites / Following"; clicked => { root.action(UiAction.page-right); } }
+            Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
+        }
+        if root.screen == 6 && !root.picker-open && !root.exit-prompt && !root.sleep-warning && !root.raid-open && !root.popup-open : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 32px;
+            alignment: end;
+            if root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            Hint { glyph: "RB"; label: "LB/RB Layout"; clicked => { root.action(UiAction.page-right); } }
+            Hint { glyph: "View"; label: "Options"; clicked => { root.action(UiAction.view); } }
+            Hint { glyph: "B"; label: "Leave"; clicked => { root.action(UiAction.back); } }
+        }
+
         // Empty while the quit prompt is open: the prompt shows its own buttons.
-        if !root.exit-prompt && !root.sleep-warning && !root.raid-open && !(root.screen == 1 && root.compose-open) : HorizontalLayout {
+        if !root.exit-prompt && !root.sleep-warning && !root.raid-open && !root.popup-open && root.screen != 6 && !(root.screen == 1 && root.compose-open) : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 36px;
@@ -523,6 +730,9 @@ export component MainWindow inherits Window {
 
             if root.screen == 0 || root.screen == 3 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if (root.screen == 0 || root.screen == 3) && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            // A live stream card: pick it for multiview, or watch the picked ones (and star it). An
+            // offline channel card: star it.
+            if (root.screen == 0 || root.screen == 3) && root.can-view : Hint { glyph: "View"; label: root.view-label; clicked => { root.action(UiAction.view); } }
             if root.screen == 0 || root.screen == 3 : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 1 && root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
@@ -532,7 +742,10 @@ export component MainWindow inherits Window {
             // Start opens the player menu. With it open, B closes it instead of leaving the stream.
             if root.screen == 1 && !root.player-menu-open : Hint { glyph: "≡"; label: "Options"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 1 && root.player-menu-open : Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
-            if (root.screen == 1 && !root.player-menu-open) || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: "Back"; clicked => { root.action(UiAction.back); } }
+            // Multiview's full screen: LB/RB flip through the streams, View has its options.
+            if root.screen == 1 && root.mv-active && root.mv-count > 1 && !root.player-menu-open && !root.subscribe-open : Hint { glyph: "RB"; label: "LB/RB Next stream"; clicked => { root.action(UiAction.page-right); } }
+            if root.screen == 1 && !root.player-menu-open && !root.subscribe-open : Hint { glyph: "View"; label: "Multiview"; clicked => { root.action(UiAction.view); } }
+            if (root.screen == 1 && !root.player-menu-open) || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: root.screen == 1 && root.mv-active ? "Grid" : "Back"; clicked => { root.action(UiAction.back); } }
             // Root screens: nowhere further back, so B asks to quit (with the rail open, B only closes it).
             if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
             if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }
@@ -548,6 +761,7 @@ export component MainWindow inherits Window {
             // Search, in the results (or the rail): like Home, and B returns to the keyboard.
             if root.screen == 5 && !root.search-on-keys : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 5 && root.search-in-results && root.can-retry && !root.rail-focused : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 5 && root.can-view : Hint { glyph: "View"; label: root.view-label; clicked => { root.action(UiAction.view); } }
             if root.screen == 5 && !root.search-on-keys : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 5 && root.search-in-results && !root.rail-focused : Hint { glyph: "B"; label: "Keyboard"; clicked => { root.action(UiAction.back); } }
         }

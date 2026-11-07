@@ -35,7 +35,7 @@ fn loading() -> AppState {
 
 /// The Player screen with the stream playing.
 fn playing() -> AppState {
-    reduce(&loading(), Event::PlaybackStarted).0
+    reduce(&loading(), Event::PlaybackStarted { slot: 0 }).0
 }
 
 fn focus(s: &AppState, focused: bool) -> (AppState, Vec<Command>) {
@@ -47,12 +47,24 @@ fn switching_away_pauses_and_coming_back_resumes() {
     let (s, cmds) = focus(&playing(), false);
     assert!(s.paused);
     assert!(s.in_background);
-    assert_eq!(cmds, [Command::SetPaused(true)]);
+    assert_eq!(
+        cmds,
+        [Command::SetPaused {
+            slot: 0,
+            paused: true
+        }]
+    );
 
     let (s, cmds) = focus(&s, true);
     assert!(!s.paused);
     assert!(!s.in_background);
-    assert_eq!(cmds, [Command::SetPaused(false)]);
+    assert_eq!(
+        cmds,
+        [Command::SetPaused {
+            slot: 0,
+            paused: false
+        }]
+    );
 }
 
 #[test]
@@ -82,13 +94,22 @@ fn a_pause_by_the_user_stays_after_coming_back() {
 fn a_stream_that_starts_in_the_background_is_paused_at_once() {
     let (s, cmds) = focus(&loading(), false);
     assert!(cmds.is_empty(), "nothing plays yet");
-    let (s, cmds) = reduce(&s, Event::PlaybackStarted);
+    let (s, cmds) = reduce(&s, Event::PlaybackStarted { slot: 0 });
     assert_eq!(s.playback, Playback::Playing);
     assert!(s.paused);
-    assert!(cmds.contains(&Command::SetPaused(true)));
+    assert!(cmds.contains(&Command::SetPaused {
+        slot: 0,
+        paused: true
+    }));
     let (s, cmds) = focus(&s, true);
     assert!(!s.paused);
-    assert_eq!(cmds, [Command::SetPaused(false)]);
+    assert_eq!(
+        cmds,
+        [Command::SetPaused {
+            slot: 0,
+            paused: false
+        }]
+    );
 }
 
 #[test]
@@ -105,7 +126,10 @@ fn leaving_the_stream_forgets_the_background_pause() {
     let (s, _) = reduce(&s, Intent::Back);
     assert!(!s.background_paused);
     let (_, cmds) = focus(&s, true);
-    assert!(!cmds.contains(&Command::SetPaused(false)));
+    assert!(!cmds.contains(&Command::SetPaused {
+        slot: 0,
+        paused: false
+    }));
 }
 
 #[test]

@@ -2,12 +2,12 @@
 source: crates/ui/tests/snapshots.rs
 expression: "format!(\"{loading}---\\n{}\", render(&view_model(&s)))"
 ---
-screen=Grid heading="Game 0" focus=(0, 0) rail_current=2
+screen=Grid heading="Game 0" focus=(0, 0) rail_current=3
 select="Watch" retry=false back=true empty=false error=""
 row 0 Landscape "": [skeleton] [skeleton] [skeleton]
 row 1 Landscape "": [skeleton] [skeleton] [skeleton]
 ---
-screen=Grid heading="Game 0" focus=(0, 0) rail_current=2
+screen=Grid heading="Game 0" focus=(0, 0) rail_current=3
 select="Watch" retry=false back=true empty=false error=""
 row 0 Landscape "": [c0 | VALORANT | 500 viewers | img] [c1 | VALORANT | 1.0K viewers] [c2 | VALORANT | 1.5K viewers | img]
 row 1 Landscape "": [c3 | VALORANT | 2.0K viewers | img]

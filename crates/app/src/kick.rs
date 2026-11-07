@@ -28,6 +28,10 @@ pub trait KickFeed: Send + Sync + 'static {
 
     /// Channels matching `query`: the live ones, then the others.
     fn search<'a>(&'a self, query: &'a str) -> BoxFuture<'a, Found>;
+
+    /// The channel `slug` (a favorite): its live stream, or a dimmed card when it is not live.
+    /// A channel Kick does not know, or a failed lookup (logged), is a dimmed card too.
+    fn channel<'a>(&'a self, slug: &'a str) -> BoxFuture<'a, Tile>;
 }
 
 pub struct KickSource<K> {
@@ -84,17 +88,36 @@ impl<K: KickApi> KickFeed for KickSource<K> {
             let offline = hits
                 .iter()
                 .filter(|h| !h.is_live)
-                .map(|h| {
-                    Tile::Channel(Channel {
-                        channel: ChannelRef::kick(&h.slug),
-                        name: h.name.clone(),
-                        tint: tint_for(&h.slug),
-                    })
-                })
+                .map(|h| offline_tile(&h.slug, &h.name))
                 .collect();
             Ok((live, offline))
         })
     }
+
+    fn channel<'a>(&'a self, slug: &'a str) -> BoxFuture<'a, Tile> {
+        Box::pin(async move {
+            match self.api.channel(slug).await {
+                Ok(Some(info)) => match &info.live {
+                    Some(live) => stream_tile(live),
+                    None => offline_tile(&info.slug, &info.name),
+                },
+                Ok(None) => offline_tile(slug, slug),
+                Err(err) => {
+                    tracing::debug!(slug, %err, "could not look up a Kick favorite");
+                    offline_tile(slug, slug)
+                }
+            }
+        })
+    }
+}
+
+/// A Kick channel that is not live: a dimmed card.
+fn offline_tile(slug: &str, name: &str) -> Tile {
+    Tile::Channel(Channel {
+        channel: ChannelRef::kick(slug),
+        name: name.to_owned(),
+        tint: tint_for(slug),
+    })
 }
 
 fn stream_tile(s: &LiveStream) -> Tile {
@@ -155,6 +178,26 @@ mod tests {
         assert_eq!((s.channel.platform, s.viewers), (Platform::Kick, 42));
         assert_eq!(offline.len(), 1);
         assert_eq!(offline[0].key(), (Platform::Kick, "foxhole"));
+    }
+
+    #[tokio::test]
+    async fn a_favorite_is_its_live_stream_or_a_dimmed_card() {
+        let kick = FakeKick::new()
+            .with_pages(vec![vec![fake_live("foxy", 42)]])
+            .with_offline("foxhole", "FoxHole");
+        let source = KickSource::new(kick);
+        let Tile::Stream(s) = source.channel("foxy").await else {
+            panic!("live")
+        };
+        assert_eq!(s.viewers, 42);
+        let Tile::Channel(c) = source.channel("foxhole").await else {
+            panic!("offline")
+        };
+        assert_eq!(
+            (c.channel, c.name.as_str()),
+            (ChannelRef::kick("foxhole"), "FoxHole")
+        );
+        assert!(matches!(source.channel("nobody").await, Tile::Channel(_)));
     }
 
     #[tokio::test]

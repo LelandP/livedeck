@@ -1,0 +1,12 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- the card opens Top Live
+screen=Home heading="Live now" focus=(1, 0) rail_current=0
+select="Resume" retry=false back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img]
+row 1 Landscape "Top Live": [Resume multiview | 4 streams | mosaic of 4, 3 with img] [pixelpilgrim | VALORANT | 900 viewers | img]
+-- A: the four start, the offline one is skipped
+screen=Multiview more=0
+  [#1 note: 1 offline, skipped]

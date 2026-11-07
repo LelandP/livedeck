@@ -1,0 +1,37 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- the Favorites screen, nothing starred
+screen=Home heading="Favorites" focus=(0, 0) rail_current=2
+select="Watch" retry=false back=false empty=true error=""
+empty_text="No favorites yet. Press View on a channel's card, or while watching, to star it"
+-- marrow starred from its card: Home's row
+open=true title="Multiview" sub="marrow" on_layout=false select="Select"
+  > "Add to multiview" ""
+    "Add to favorites" ""
+screen=Home heading="Live now" focus=(1, 1) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img]
+row 1 Landscape "Followed · Live": [nightowl_dev | VALORANT | 4.2K viewers | img] [marrow | VALORANT | 1.9K viewers]
+row 2 Landscape "Favorites · Live": [marrow | VALORANT | 1.9K viewers]
+row 3 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img]
+row 4 Portrait "Categories": [Just Chatting | img] [VALORANT | img]
+-- the Favorites screen, live and offline
+screen=Home heading="Favorites" focus=(0, 0) rail_current=2
+select="Watch" retry=false back=false empty=false error=""
+row 0 Landscape "Live": [marrow | VALORANT | 1.9K viewers]
+row 1 Landscape "Offline": [Napper]
+view="Multiview"
+on the offline card: view="Favorites"
+open=true title="Favorites" sub="napper · offline" on_layout=false select="Select"
+  > "Remove from favorites" ""
+-- the picker's Favorites tab, Y on the offline one
+tab=0 focus=0 select="Add" y="Unstar" empty="None of your favorites can be shown right now."
+  > ★ [marrow | VALORANT | 1.9K viewers]
+    ★ [Napper] (offline)
+tab=0 focus=1 select="" y="Unstar" empty="None of your favorites can be shown right now."
+    ★ [marrow | VALORANT | 1.9K viewers]
+  > ★ [Napper] (offline)
+tab=0 focus=0 select="Add" y="Unstar" empty="None of your favorites can be shown right now."
+  > ★ [marrow | VALORANT | 1.9K viewers]

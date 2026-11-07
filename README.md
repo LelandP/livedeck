@@ -23,8 +23,11 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Live notifications: a silent popup when a channel you follow goes live, on any screen (signed in, can be turned off)
 - Follow raids: when the channel you watch raids another one, a card counts down 10 seconds and takes you there (A goes now, B stays). Signed in
 - Hype trains: while one runs in the channel you watch, a bar at the top of the video shows its level, progress and time left. Signed in or not, through the same unofficial API the website uses
+- Multiview: watch up to nine streams at once in a grid (2, 3, 4, 6 or 9 places, or Spotlight with the stream with sound big). One stream has sound, A moves it or goes full screen, and the picture of each tile is sized to its place on screen. Signed in
+- Favorites: your own list of channels, Kick and Twitch mixed, with a Home row and a screen of their own. Signed in
+- Slow networks: when a multiview stream stalls, the muted tiles drop to a lower quality first, and the stream with sound last
 - Settings for chat layout, video quality and live notifications, saved between runs
-- Everything controllable with a gamepad (D-pad, A/B/X/Y, Start, LB/RB)
+- Everything controllable with a gamepad (D-pad, A/B/X/Y, Start, LB/RB, View)
 
 **What does not**
 
@@ -97,6 +100,7 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
 | X / `r` | Retry a failed load (while watching with chat shown: write in chat) |
 | Y / `y` | Show or hide chat |
 | Start / Menu key | Open or close the left menu (while watching: the player menu) |
+| View (the small button left of the face buttons) / `v` | Multiview: add a stream to the set, or open the options of the grid or full screen |
 | LB / RB / Page Up / Page Down | Change the page of the chat keyboard |
 
 - **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
@@ -106,8 +110,10 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`.
 - **Live notifications:** while signed in, LiveDeck checks every 30 seconds which channels you follow are live, and shows a popup at the top right for each one that just went live (not the one you are watching, and not after a quick stream restart). Popups stay 8 seconds and take no buttons. Turning them off in Settings stops the checks.
 - **Follow raids:** while signed in, LiveDeck listens through Twitch EventSub (a WebSocket, one subscription for the channel on screen) for that channel raiding another one. A card shows who is raiding whom and counts down 10 seconds; then, or when you press A, the player switches to the raided channel with its chat, keeping your player-menu choices, the sleep timer and audio only. B keeps you where you are. Back from the new channel returns to the browse screens.
 - **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. *Sleep timer* counts down whatever you watch (switching channels does not reset it); a minute before the end any button keeps going for the same length again, otherwise the sound fades, the stream stops and the device suspends. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
-- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `image_cache_max_mb`, `quick_messages` and an optional `client_id`.
-- **Try it offline:** `livedeck --mock` runs with fixture data and no network.
+- **Multiview:** while signed in, press View on a live channel card to add it to the set (a tick shows it, and a tray in the corner counts them). *Watch the N together* starts the set in a grid. In the grid, A moves the sound to the stream you press it on, or goes full screen on the stream with sound; B goes back to browsing with the set still picked. LB/RB change the layout, and Y shows the chat of the stream with sound. View opens the options: add a stream (Favorites or Following), remove one, star it, or leave. A stream's quality follows its size on screen, and a change of quality loads the new picture behind the old one, so it does not go black. After five seconds without a button the captions and controls fade and the streams fill the window. Full screen: A pauses, and play jumps back to live; LB/RB move to the previous or next stream.
+- **Favorites:** View on a channel card (or the picker in multiview) stars it. Favorites are listed on their own screen and in a Home row, live ones first. They are saved in `favorites.toml`.
+- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `image_cache_max_mb`, `quick_messages` and an optional `client_id`. The starred channels are in `favorites.toml` and the last multiview set (which Home's *Resume multiview* card starts) in `multiview.toml`, both in the data folder next to the sign-in fallback. LiveDeck writes those two itself.
+- **Try it offline:** `livedeck --mock` runs with fixture data and no network. Its live channels play generated test pictures, so the player and multiview can be tried too (this needs the video build, see *Build from source*).
 - **Logs:** set `RUST_LOG=livedeck=debug`. `livedeck --help` lists every option and environment variable.
 
 ### Using your own Twitch application (forks)

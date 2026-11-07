@@ -36,6 +36,7 @@ export component Toast inherits Rectangle {
         clip: true;
 
         Rectangle {
+            visible: !root.item.note;
             x: 12px;
             y: 12px;
             width: (root.height - 24px) * 16 / 9;
@@ -54,14 +55,14 @@ export component Toast inherits Rectangle {
         }
 
         VerticalLayout {
-            x: 12px + (root.height - 24px) * 16 / 9 + 16px;
+            x: root.item.note ? 24px : 12px + (root.height - 24px) * 16 / 9 + 16px;
             width: parent.width - self.x - 16px;
             alignment: center;
             spacing: 4px;
             HorizontalLayout {
                 spacing: 8px;
                 alignment: start;
-                Rectangle {
+                if !root.item.note : Rectangle {
                     width: 10px;
                     height: 10px;
                     y: 8px;
@@ -69,14 +70,16 @@ export component Toast inherits Rectangle {
                     background: Theme.live;
                 }
                 Text {
-                    text: root.item.name + " is live";
+                    text: root.item.note ? root.item.name : root.item.name + " is live";
                     color: Theme.text;
                     font-size: Theme.fs-body;
                     font-weight: 800;
+                    // A note can be a sentence ("Slow network: ..."): two lines fit.
+                    wrap: root.item.note ? word-wrap : no-wrap;
                     overflow: elide;
                 }
             }
-            Text {
+            if !root.item.note : Text {
                 text: root.item.line;
                 color: Theme.muted;
                 font-size: Theme.fs-small;
@@ -128,6 +131,27 @@ export component StreamCard inherits Rectangle {
             animate opacity { duration: Theme.t-med; easing: ease-out; }
         }
 
+        // *Resume multiview*: up to four of the set's previews, 2×2, each over its tint.
+        if root.item.resume : Rectangle {
+            background: Theme.surface;
+            for cell[i] in root.item.mosaic : Rectangle {
+                x: mod(i, 2) * (parent.width + 2px) / 2;
+                y: floor(i / 2) * (parent.height + 2px) / 2;
+                width: (parent.width - 2px) / 2;
+                height: (parent.height - 2px) / 2;
+                clip: true;
+                background: @linear-gradient(160deg, cell.tint, Theme.surface);
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: cell.thumbnail;
+                    image-fit: cover;
+                    opacity: self.source.width > 0 ? 1.0 : 0.0;
+                    animate opacity { duration: Theme.t-med; easing: ease-out; }
+                }
+            }
+        }
+
         // Which platform, for Kick cards: a dot and the name, never a logo.
         Rectangle {
             visible: root.item.kick && !root.item.loading;
@@ -177,7 +201,7 @@ export component StreamCard inherits Rectangle {
                 overflow: elide;
             }
             Text {
-                visible: (root.focused || root.shape == 2) && root.item.title != "";
+                visible: (root.focused || root.shape == 2 || root.item.resume) && root.item.title != "";
                 text: root.item.title;
                 color: Theme.text;
                 font-size: Theme.fs-small;
@@ -242,6 +266,27 @@ export component StreamCard inherits Rectangle {
             }
         }
 
+        // Picked for multiview: a tick at the top right.
+        if root.item.picked && !root.item.loading : Rectangle {
+            x: parent.width - self.width - 10px;
+            y: 10px;
+            width: 30px;
+            height: 30px;
+            border-radius: 15px;
+            border-width: 2px;
+            border-color: #0e0e10;
+            background: Theme.accent;
+            Path {
+                width: 18px;
+                height: 18px;
+                viewbox-width: 18;
+                viewbox-height: 18;
+                commands: "M 3 9.5 L 7.5 14 L 15 5";
+                stroke: #ffffff;
+                stroke-width: 3px;
+            }
+        }
+
         // Focus ring: accent border drawn above everything else.
         Rectangle {
             border-radius: parent.border-radius;
@@ -268,13 +313,14 @@ export component Hint inherits TouchArea {
     row := HorizontalLayout {
         spacing: 10px;
 
+        // A circle, or a pill for a longer glyph ("View").
         Rectangle {
-            width: 34px;
+            width: max(34px, glyph-text.preferred-width + 18px);
             height: 34px;
             border-radius: 17px;
             border-width: 2px;
             border-color: root.has-hover ? Theme.accent-light : root.button-color;
-            Text {
+            glyph-text := Text {
                 text: root.glyph;
                 color: root.button-color;
                 font-size: Theme.fs-small;

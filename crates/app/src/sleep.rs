@@ -288,6 +288,6 @@ mod tests {
             minutes: 15
         }));
         assert!(Sleep::handles(&Command::CancelSleepTimer));
-        assert!(!Sleep::handles(&Command::StopPlayback));
+        assert!(!Sleep::handles(&Command::StopPlayback { slot: 0 }));
     }
 }

@@ -670,5 +670,5 @@ fn the_session_runs_only_its_own_commands() {
     assert!(Session::handles(&Command::CancelLogin));
     assert!(Session::handles(&Command::SignOut));
     assert!(!Session::handles(&Command::LeaveChat));
-    assert!(!Session::handles(&Command::StopPlayback));
+    assert!(!Session::handles(&Command::StopPlayback { slot: 0 }));
 }

@@ -1,0 +1,839 @@
+// Multiview (plan.md, section 2): the grid of streams, the picker that adds one, the View popup
+// (on every screen) and the strip over full screen. Pure views: where things are and which one has
+// focus comes from htpc_core (layout::rects, reduce/multiview.rs) through view_model.rs.
+import { Theme } from "theme.slint";
+import { StreamItem, ChatMsg, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
+import { ChatList, RaidCard } from "player.slint";
+
+// A speaker, with sound waves or crossed out.
+component SpeakerIcon inherits Rectangle {
+    in property <bool> muted;
+    in property <color> tone: Theme.text;
+    width: 18px;
+    height: 18px;
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M3 9h4l5-4v14l-5-4H3z";
+        fill: root.tone;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.muted ? "M16 9l5 6M21 9l-5 6" : "M16 8.5a5 5 0 0 1 0 7";
+        stroke: root.tone;
+        stroke-width: 2px;
+    }
+}
+
+// Three bars bouncing next to "Sound": which tile is heard, at a glance. mpv reports no audio
+// level, so they only move while the stream plays, they do not follow its loudness.
+component LevelMeter inherits Rectangle {
+    in property <bool> playing;
+    width: 13px;
+    height: 14px;
+    property <float> t: animation-tick() / 1ms;
+    for i in 3 : Rectangle {
+        property <float> phase: root.playing ? 0.5 + 0.5 * Math.sin((root.t / (600 + i * 150) + i * 0.37) * 360deg) : 0.0;
+        x: i * 5px;
+        width: 3px;
+        height: root.height * (0.25 + 0.75 * self.phase);
+        y: root.height - self.height;
+        border-radius: 1px;
+        background: #ffffff;
+    }
+}
+
+// The A button glyph and what it does, in a pill.
+component ActionPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> small;
+    width: pill-row.preferred-width + 24px;
+    height: root.small ? 36px : 44px;
+    border-radius: self.height / 2;
+    background: #0e0e10d0;
+    pill-row := HorizontalLayout {
+        x: 6px;
+        spacing: 10px;
+        alignment: start;
+        Rectangle {
+            y: (root.height - self.height) / 2;
+            width: root.small ? 24px : 30px;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: Theme.btn-a;
+            Text {
+                text: "A";
+                color: #111111;
+                font-size: root.small ? 13px : Theme.fs-small;
+                font-weight: 800;
+            }
+        }
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: root.small ? Theme.fs-small : Theme.fs-body;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The platform dot in front of a channel name.
+component PlatformDot inherits Rectangle {
+    in property <bool> kick;
+    width: 9px;
+    height: 9px;
+    border-radius: 4.5px;
+    background: root.kick ? Theme.kick : Theme.twitch;
+}
+
+// What a tile shows over its picture: the quality chip and sound badge, the caption, and the focus
+// ring with what A does.
+component TileChrome inherits Rectangle {
+    in property <MvTile> tile;
+    in property <bool> small;
+
+    // Top right: the quality chip and the sound badge.
+    HorizontalLayout {
+        x: parent.width - self.width - 10px;
+        y: 10px;
+        width: self.preferred-width;
+        height: 30px;
+        spacing: 8px;
+        if !root.small && root.tile.quality != "" : Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: q-text.preferred-width + 16px;
+            height: 24px;
+            border-radius: 6px;
+            background: #0000008c;
+            q-text := Text {
+                text: root.tile.lowered ? root.tile.quality + " ↓" : root.tile.quality;
+                color: root.tile.lowered ? Theme.amber : Theme.muted;
+                font-size: Theme.fs-chip;
+                font-weight: root.tile.lowered ? 700 : 400;
+            }
+        }
+        Rectangle {
+            width: badge-row.preferred-width + 20px;
+            border-radius: 15px;
+            background: root.tile.sound ? Theme.accent : #00000099;
+            badge-row := HorizontalLayout {
+                x: 10px;
+                spacing: 6px;
+                alignment: start;
+                SpeakerIcon {
+                    y: (parent.height - self.height) / 2;
+                    muted: !root.tile.sound;
+                    tone: root.tile.sound ? #ffffff : Theme.muted;
+                }
+                if root.tile.sound : LevelMeter {
+                    y: (parent.height - self.height) / 2;
+                    playing: root.tile.state == 1;
+                }
+                if root.tile.sound : Text {
+                    text: "Sound";
+                    color: #ffffff;
+                    font-size: Theme.fs-chip;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Bottom: the channel and, on bigger tiles, the platform, category and viewers.
+    if !root.tile.empty : Rectangle {
+        y: parent.height - self.height;
+        height: caption.preferred-height;
+        background: @linear-gradient(180deg, #00000000, #000000c8);
+        caption := VerticalLayout {
+            padding-left: root.small ? 12px : 16px;
+            padding-right: root.small ? 12px : 16px;
+            padding-top: root.small ? 22px : 32px;
+            padding-bottom: root.small ? 8px : 12px;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                PlatformDot {
+                    y: (parent.height - self.height) / 2;
+                    kick: root.tile.kick;
+                }
+                Text {
+                    text: root.tile.channel;
+                    color: Theme.text;
+                    font-size: root.small ? 17px : Theme.fs-body;
+                    font-weight: 800;
+                    overflow: elide;
+                }
+            }
+            if !root.small && root.tile.line != "" : Text {
+                text: root.tile.line;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+    }
+
+    // Focus: the ring, and what A does here.
+    if !root.tile.empty && root.tile.focused : Rectangle {
+        border-radius: 10px;
+        border-width: 4px;
+        border-color: Theme.accent;
+    }
+    if !root.tile.empty && root.tile.focused && root.tile.action != "" : ActionPill {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        label: root.tile.action;
+        small: root.small;
+    }
+}
+
+// One place of the grid: a stream, or an *Add a stream* slot.
+component TileView inherits Rectangle {
+    in property <MvTile> tile;
+    in property <image> video;
+    // Captions, badges and focus shown. Off while the grid is idle: only the pictures (and what a
+    // stream that does not play is doing) stay.
+    in property <bool> chrome: true;
+    property <bool> small: root.width < Theme.mv-small-w;
+
+    border-radius: 10px;
+    clip: true;
+    background: root.tile.empty ? transparent : #000000;
+
+    if root.tile.empty : Rectangle {
+        opacity: root.chrome ? 1.0 : 0.35;
+        animate opacity { duration: Theme.t-med; }
+        border-radius: 10px;
+        border-width: root.tile.focused ? 4px : 2px;
+        border-color: root.tile.focused ? Theme.accent : #3a3a44;
+        background: #ffffff05;
+        VerticalLayout {
+            alignment: center;
+            spacing: root.small ? 8px : 12px;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: root.small ? 40px : 56px;
+                    height: self.width;
+                    border-radius: self.width / 2;
+                    background: root.tile.focused ? Theme.accent : Theme.surface-high;
+                    Path {
+                        width: 24px;
+                        height: 24px;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: "M11 4h2v16h-2zM4 11h16v2H4z";
+                        fill: Theme.text;
+                    }
+                }
+            }
+            Text {
+                text: "Add a stream";
+                color: root.tile.focused ? Theme.text : Theme.muted;
+                font-size: root.small ? Theme.fs-small : Theme.fs-body;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // The picture, once playing. The texture is rendered at this tile's size.
+    if !root.tile.empty && root.tile.state == 1 : Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.video;
+        image-fit: fill;
+    }
+    // Loading, offline or failed: the stream's tint, and what is going on.
+    if !root.tile.empty && root.tile.state != 1 : Rectangle {
+        background: @linear-gradient(135deg, root.tile.tint, #000000);
+        opacity: root.tile.state == 0 ? 0.8 : 0.5;
+    }
+    if !root.tile.empty && root.tile.state != 1 : Text {
+        y: (parent.height - self.height) / 2 - (root.tile.focused ? 40px : 0px);
+        width: parent.width - 24px;
+        x: 12px;
+        text: root.tile.state == 0 ? "Starting…" : (root.tile.state == 2 ? "Offline" : "Could not play");
+        color: root.tile.state == 3 ? Theme.btn-b : Theme.text;
+        font-size: root.small ? Theme.fs-small : Theme.fs-body;
+        font-weight: 700;
+        horizontal-alignment: center;
+    }
+
+    // Muted streams are a little darker than the one with sound.
+    if !root.tile.empty && !root.tile.sound : Rectangle {
+        background: #00000052;
+    }
+
+    // Everything over the picture fades together while the grid is idle.
+    if !root.tile.empty : Rectangle {
+        opacity: root.chrome ? 1.0 : 0.0;
+        animate opacity { duration: Theme.t-med; }
+        TileChrome {
+            tile: root.tile;
+            small: root.small;
+        }
+    }
+}
+
+
+// A pill of the header or the picker's tabs.
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> faded;
+    width: max(36px, chip-text.preferred-width + 20px);
+    height: 30px;
+    border-radius: 15px;
+    background: root.on ? Theme.surface-high : Theme.surface;
+    border-width: root.on ? 2px : 0px;
+    border-color: Theme.accent;
+    chip-text := Text {
+        text: root.label;
+        color: root.on ? Theme.text : (root.faded ? #4a4a54 : Theme.muted);
+        font-size: Theme.fs-small;
+        font-weight: root.on ? 700 : 400;
+    }
+}
+
+// A shoulder button glyph (LB, RB) as in the hints bar.
+component ShoulderGlyph inherits Rectangle {
+    in property <string> label;
+    width: 34px;
+    height: 26px;
+    border-radius: 8px;
+    background: Theme.surface-high;
+    border-width: 1px;
+    border-color: #44444e;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 13px;
+        font-weight: 700;
+    }
+}
+
+// The panel that adds a stream: tabs (LB/RB), then the live channels (and on Favorites the offline
+// ones, greyed), A adds the focused one, Y stars it.
+component PickerPanel inherits Rectangle {
+    // 0 Favorites, 1 Following.
+    in property <int> tab;
+    in property <[StreamItem]> items;
+    // Same order as `items`: the channel is already in multiview.
+    in property <[bool]> watching;
+    // Same order as `items`: the channel is a favorite (a star before its name).
+    in property <[bool]> starred;
+    in property <int> focused-row;
+    // What to say while there is nothing to list.
+    in property <string> empty-text;
+    property <length> list-top: 150px;
+    property <length> list-h: root.height - self.list-top - 16px;
+    property <int> fits: max(1, floor(self.list-h / Theme.picker-row-h));
+    // Scrolls so the focused row stays in view, one row of air below it.
+    property <int> first: max(0, min(root.focused-row - self.fits + 2, root.items.length - self.fits));
+
+    background: Theme.surface;
+    clip: true;
+    TouchArea { }
+
+    Text {
+        x: 32px;
+        y: 28px;
+        text: "Add a stream";
+        color: Theme.text;
+        font-size: Theme.fs-title;
+        font-weight: 800;
+    }
+    HorizontalLayout {
+        x: 32px;
+        y: 72px;
+        height: 30px;
+        spacing: 10px;
+        alignment: start;
+        ShoulderGlyph { y: 2px; label: "LB"; }
+        Chip { label: "Favorites"; on: root.tab == 0; }
+        Chip { label: "Following"; on: root.tab == 1; }
+        ShoulderGlyph { y: 2px; label: "RB"; }
+    }
+    Text {
+        x: 32px;
+        y: 112px;
+        text: root.tab == 0 ? "Your starred channels, Kick and Twitch" : "Twitch channels you follow, live now";
+        color: Theme.muted;
+        font-size: Theme.fs-small;
+    }
+
+    if root.items.length == 0 : Text {
+        x: 32px;
+        y: root.list-top + 8px;
+        width: parent.width - 64px;
+        text: root.empty-text;
+        color: Theme.muted;
+        font-size: Theme.fs-body;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        y: root.list-top;
+        height: root.list-h;
+        clip: true;
+        for item[i] in root.items : picker-row := Rectangle {
+            property <bool> focused: i == root.focused-row;
+            property <bool> in-view: i < root.watching.length && root.watching[i];
+            property <bool> star: i < root.starred.length && root.starred[i];
+            // Greyed: already watched, or an offline favorite (nothing to add).
+            property <bool> dim: self.in-view || item.offline;
+            x: 16px;
+            y: (i - root.first) * Theme.picker-row-h;
+            animate y { duration: Theme.t-fast; easing: ease-out; }
+            width: parent.width - 32px;
+            height: Theme.picker-row-h - 4px;
+            border-radius: 10px;
+            background: self.focused ? Theme.surface-high : transparent;
+            border-width: self.focused ? 2px : 0px;
+            border-color: Theme.accent;
+
+            Rectangle {
+                x: 14px;
+                y: (parent.height - self.height) / 2;
+                width: 96px;
+                height: 54px;
+                border-radius: 6px;
+                clip: true;
+                background: @linear-gradient(160deg, item.tint, Theme.surface);
+                opacity: picker-row.dim ? 0.45 : 1.0;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: item.thumbnail;
+                    image-fit: cover;
+                }
+            }
+            VerticalLayout {
+                x: 124px;
+                width: parent.width - self.x - (picker-row.in-view ? 104px : 14px);
+                alignment: center;
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    PlatformDot {
+                        y: (parent.height - self.height) / 2;
+                        kick: item.kick;
+                    }
+                    if picker-row.star : Text {
+                        text: "★";
+                        color: Theme.accent-light;
+                        font-size: Theme.fs-body;
+                    }
+                    Text {
+                        text: item.channel;
+                        color: picker-row.dim ? Theme.muted : Theme.text;
+                        font-size: Theme.fs-body;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                }
+                Text {
+                    text: (item.kick ? "Kick" : "Twitch") + (item.offline ? " · Offline" : (item.category != "" ? " · " + item.category : "") + (item.viewers != "" ? " · " + item.viewers : ""));
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                    overflow: elide;
+                }
+            }
+            if picker-row.in-view : Rectangle {
+                x: parent.width - self.width - 14px;
+                y: (parent.height - self.height) / 2;
+                width: watching-text.preferred-width + 16px;
+                height: 24px;
+                border-radius: 12px;
+                background: Theme.bg;
+                watching-text := Text {
+                    text: "Watching";
+                    color: Theme.muted;
+                    font-size: 13px;
+                }
+            }
+        }
+    }
+}
+
+// Multiview's grid: the header with the layouts, the tiles, an optional chat side panel and the
+// picker over the right. The hints bar is main.slint's.
+export component MultiviewScreen inherits Rectangle {
+    in property <[MvTile]> tiles;
+    // Each slot's latest frame, by slot (htpc_ui::show_video).
+    in property <[image]> tile-videos;
+    in property <[MvLayoutChip]> layouts;
+    // "3 streams".
+    in property <string> count-text;
+    // How much the 1152x632 tile area is scaled (narrower with the chat open, bigger while idle),
+    // and where its top left is drawn.
+    in property <float> k: 1.0;
+    in property <length> grid-x: Theme.mv-area-x;
+    in property <length> grid-y: Theme.mv-area-y;
+    // Where the header sits: over the tile area as it is with the controls shown.
+    in property <length> header-x: Theme.mv-area-x;
+    in property <length> header-w: Theme.mv-area-w;
+    // Nothing pressed for a while: the header and the tiles' captions fade (main.slint `mv-idle`).
+    in property <bool> idle;
+    in property <[ChatMsg]> chat;
+    in property <bool> chat-open;
+    in property <string> chat-status;
+    in property <bool> raid-open;
+    in property <string> raid-title;
+    in property <string> raid-viewers;
+    in property <int> raid-seconds;
+    in property <bool> picker-open;
+    in property <int> picker-tab;
+    in property <[StreamItem]> picker-items;
+    in property <[bool]> picker-watching;
+    in property <[bool]> picker-starred;
+    in property <int> picker-focus;
+    in property <string> picker-empty;
+    // The 1280x800 layout, centred in a window of another shape.
+    property <length> oy: (root.height - 800px) / 2;
+
+    // Black while idle, so the bigger tiles sit on the same black as the video.
+    background: root.idle ? #000000 : Theme.bg;
+    animate background { duration: Theme.t-med; }
+
+    // Header: the name, how many, and the layouts LB/RB step through.
+    HorizontalLayout {
+        x: root.header-x;
+        y: root.oy + 18px;
+        width: root.header-w;
+        height: 40px;
+        spacing: 14px;
+        opacity: root.idle ? 0.0 : 1.0;
+        animate opacity { duration: Theme.t-med; }
+        Text {
+            text: "Multiview";
+            color: Theme.text;
+            font-size: Theme.fs-title;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.count-text;
+            color: Theme.muted;
+            font-size: 18px;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: end;
+            ShoulderGlyph { y: 7px; label: "LB"; }
+            for chip in root.layouts : Chip {
+                y: 5px;
+                label: chip.label;
+                on: chip.on;
+                faded: !chip.fits;
+            }
+            ShoulderGlyph { y: 7px; label: "RB"; }
+        }
+    }
+
+    for tile in root.tiles : TileView {
+        x: root.grid-x + (tile.x * 1px - Theme.mv-area-x) * root.k;
+        y: root.grid-y + (tile.y * 1px - Theme.mv-area-y) * root.k;
+        width: tile.w * 1px * root.k;
+        height: tile.h * 1px * root.k;
+        animate x, y, width, height { duration: Theme.t-med; easing: ease-out; }
+        tile: tile;
+        video: root.tile-videos[tile.slot];
+        chrome: !root.idle;
+    }
+
+    // The chat of the stream with sound, as a side panel that slides in from the right.
+    Rectangle {
+        x: root.width - (root.chat-open ? Theme.chat-w : 0px);
+        y: 0px;
+        width: Theme.chat-w;
+        height: root.height;
+        background: Theme.surface;
+        clip: true;
+        animate x { duration: Theme.t-med; easing: ease-out; }
+        VerticalLayout {
+            padding: Theme.chat-pad;
+            padding-bottom: Theme.hints-h + 8px;
+            spacing: 12px;
+            HorizontalLayout {
+                Text {
+                    text: "CHAT";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-small;
+                    font-weight: 800;
+                    letter-spacing: 3px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.chat-status;
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                }
+            }
+            ChatList {
+                chat: root.chat;
+                vertical-stretch: 1;
+            }
+        }
+    }
+
+    if root.raid-open : RaidCard {
+        x: (root.width - self.width) / 2;
+        y: root.height - Theme.hints-h - self.height - 32px;
+        width: min(560px, root.width - 32px);
+        title: root.raid-title;
+        viewers: root.raid-viewers;
+        seconds: root.raid-seconds;
+    }
+
+    // The picker slides over the right of the grid, above the hints bar.
+    PickerPanel {
+        x: root.width - (root.picker-open ? self.width : 0px);
+        y: 0px;
+        width: Theme.picker-w;
+        height: root.height - Theme.hints-h;
+        visible: self.x < root.width;
+        animate x { duration: Theme.t-med; easing: ease-out; }
+        tab: root.picker-tab;
+        items: root.picker-items;
+        watching: root.picker-watching;
+        starred: root.picker-starred;
+        focused-row: root.picker-focus;
+        empty-text: root.picker-empty;
+    }
+}
+
+// The View button's popup, over whatever screen it was opened on. Up/Down pick a row, A runs it,
+// Left/Right step the layout row (htpc_core reduce/multiview.rs `popup_intent`).
+export component ViewPopup inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;
+    in property <[PopupItem]> rows;
+    in property <int> focused-row;
+
+    // The scrim swallows clicks: nothing underneath reacts while it is open.
+    background: #00000073;
+    TouchArea { }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - Theme.hints-h - self.height) / 2;
+        width: Theme.popup-w;
+        height: popup-layout.preferred-height;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: #33333c;
+        background: Theme.surface;
+
+        popup-layout := VerticalLayout {
+            padding-top: 22px;
+            padding-bottom: 16px;
+            spacing: 4px;
+            HorizontalLayout {
+                padding-left: 28px;
+                padding-right: 28px;
+                spacing: 10px;
+                alignment: start;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: view-glyph.preferred-width + 18px;
+                    height: 28px;
+                    border-radius: 8px;
+                    background: Theme.surface-high;
+                    border-width: 1px;
+                    border-color: #44444e;
+                    view-glyph := Text {
+                        text: "View";
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 700;
+                    }
+                }
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-size: Theme.fs-title;
+                    font-weight: 800;
+                    overflow: elide;
+                }
+            }
+            if root.sub != "" : HorizontalLayout {
+                padding-left: 28px;
+                padding-right: 28px;
+                padding-bottom: 10px;
+                Text {
+                    text: root.sub;
+                    color: Theme.muted;
+                    font-size: Theme.fs-small;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 2px;
+                for row[i] in root.rows : popup-row := Rectangle {
+                    property <bool> focused: i == root.focused-row;
+                    height: Theme.popup-row-h;
+                    border-radius: 10px;
+                    background: self.focused ? Theme.surface-high : transparent;
+                    border-width: self.focused ? 2px : 0px;
+                    border-color: Theme.accent;
+                    animate background { duration: Theme.t-fast; }
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 12px;
+                        Text {
+                            text: row.label;
+                            color: Theme.text;
+                            font-size: Theme.fs-body;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if row.value != "" : Text {
+                            text: popup-row.focused ? "◀  " + row.value + "  ▶" : row.value;
+                            color: popup-row.focused ? Theme.accent-light : Theme.muted;
+                            font-size: Theme.fs-small;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Over multiview's full screen, for a moment after LB/RB (or going full screen): which stream this
+// is, and a strip of all of them with this one marked.
+export component FullScreenStrip inherits Rectangle {
+    in property <StreamItem> stream;
+    // "2 of 5 in multiview".
+    in property <string> position;
+    in property <[MvStripItem]> items;
+    in property <[image]> tile-videos;
+    in property <bool> shown;
+    // Nine full-size thumbnails are wider than the screen: they shrink to fit between the margins.
+    property <length> gap: 14px;
+    property <length> thumb-w: min(Theme.strip-thumb-w, (root.width - 2 * Theme.safe-x - (root.items.length - 1) * self.gap) / max(1, root.items.length));
+    property <length> thumb-h: self.thumb-w * 9 / 16;
+
+    opacity: root.shown ? 1.0 : 0.0;
+    animate opacity { duration: Theme.t-med; }
+
+    // Info box, top left.
+    Rectangle {
+        x: Theme.safe-x;
+        y: root.shown ? 40px : 32px;
+        animate y { duration: Theme.t-med; easing: ease-out; }
+        width: min(620px, info.preferred-width + 44px);
+        height: info.preferred-height + 36px;
+        border-radius: 12px;
+        background: #0e0e10c8;
+        info := VerticalLayout {
+            x: 22px;
+            y: 18px;
+            width: parent.width - 44px;
+            height: self.preferred-height;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                Text {
+                    text: root.stream.channel;
+                    color: Theme.text;
+                    font-size: Theme.fs-title;
+                    font-weight: 800;
+                    overflow: elide;
+                }
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: live-text.preferred-width + 14px;
+                    height: 20px;
+                    border-radius: 4px;
+                    background: Theme.live;
+                    live-text := Text {
+                        text: "LIVE";
+                        color: #ffffff;
+                        font-size: 13px;
+                        font-weight: 800;
+                        letter-spacing: 1px;
+                    }
+                }
+            }
+            if root.stream.title != "" : Text {
+                text: root.stream.title;
+                color: Theme.text;
+                font-size: Theme.fs-body;
+                overflow: elide;
+            }
+            Text {
+                text: (root.stream.kick ? "Kick" : "Twitch") + (root.stream.category != "" ? " · " + root.stream.category : "") + (root.stream.viewers != "" ? " · " + root.stream.viewers + " watching" : "") + " · " + root.position;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+    }
+
+    // The strip, above the hints bar.
+    if root.items.length > 1 : HorizontalLayout {
+        x: (root.width - self.width) / 2;
+        y: root.height - Theme.hints-h - 12px - self.height + (root.shown ? 0px : 10px);
+        animate y { duration: Theme.t-med; easing: ease-out; }
+        width: self.preferred-width;
+        height: root.thumb-h + 28px;
+        spacing: root.gap;
+        for item in root.items : Rectangle {
+            width: root.thumb-w;
+            border-radius: 8px;
+            clip: true;
+            background: Theme.surface;
+            Image {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: root.thumb-h;
+                source: root.tile-videos[item.slot];
+                image-fit: fill;
+            }
+            HorizontalLayout {
+                x: 9px;
+                y: root.thumb-h;
+                width: parent.width - 18px;
+                height: 28px;
+                spacing: 6px;
+                alignment: start;
+                PlatformDot {
+                    y: (parent.height - self.height) / 2;
+                    kick: item.kick;
+                }
+                Text {
+                    text: item.channel;
+                    color: item.on ? Theme.text : Theme.muted;
+                    font-size: Theme.fs-chip;
+                    font-weight: item.on ? 700 : 400;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            if item.on : Rectangle {
+                border-radius: 8px;
+                border-width: 3px;
+                border-color: Theme.accent;
+            }
+        }
+    }
+}

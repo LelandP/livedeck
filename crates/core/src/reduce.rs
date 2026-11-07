@@ -3,6 +3,11 @@
 //! All navigation behaviour lives here, not in the Slint files: the back stack, paged feeds (Home,
 //! Browse, Category) and the commands needed to fetch data.
 
+mod favorites;
+mod multiview;
+mod network;
+mod resume;
+
 use std::collections::HashSet;
 
 use crate::domain::{
@@ -10,11 +15,11 @@ use crate::domain::{
     Stream, Tile,
 };
 use crate::keyboard::{self, Key};
-use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
+use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption, MAIN_SLOT};
 use crate::state::{
     default_quick_messages, subscribe_url, AppState, CategoryFeed, Compose, Feed, Playback,
     PlayerMenuRow, RaidOffer, RailEntry, Screen, SearchState, Sending, SettingsRow, SleepTimer,
-    Toast, RAID_SECONDS, TOASTS_KEPT,
+    Toast, ToastKind, RAID_SECONDS, TOASTS_KEPT,
 };
 
 /// A horizontal row loads its next page once focus is within this many tiles of its end.
@@ -41,6 +46,10 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
         Msg::Intent(intent) => on_intent(&mut next, intent, &mut cmds),
         Msg::Event(event) => on_event(&mut next, event, &mut cmds),
     }
+    // Wherever it changed: the running multiview session is saved, and Home's resume card kept
+    // where it belongs.
+    multiview::track_saved(&mut next, &mut cmds);
+    resume::settle(&mut next);
     (next, cmds)
 }
 
@@ -59,22 +68,33 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         exit_prompt_intent(s, intent, cmds);
         return;
     }
+    if s.popup.is_some() {
+        multiview::popup_intent(s, intent, cmds);
+        return;
+    }
     match s.screen {
         Screen::Login => login_intent(s, intent, cmds),
         Screen::Player => player_intent(s, intent, cmds),
+        // Any button shows the grid's controls again (they fade while idle, main.slint).
+        Screen::Multiview => {
+            multiview::grid_intent(s, intent, cmds);
+            pulse_hud(s);
+        }
         // Settings has no cards, but shares the rail handling and the Left-opens-the-rail rule.
         Screen::Home
         | Screen::Browse
         | Screen::Category
         | Screen::Following
+        | Screen::Favorites
         | Screen::Search
         | Screen::Settings => home_intent(s, intent, cmds),
     }
 }
 
 /// What a physical keyboard's typing means here. Only the Search keyboard and the chat compose
-/// panel take text (while they have focus and nothing is in front of them). Everywhere else `y`
-/// and `r` stay the chat and retry shortcuts, Backspace is Back, and other characters do nothing.
+/// panel take text (while they have focus and nothing is in front of them). Everywhere else `y`,
+/// `r` and `v` stay the chat, retry and View shortcuts, Backspace is Back, and other characters do
+/// nothing.
 fn typed_key(s: &AppState, intent: Intent) -> Option<Intent> {
     let in_front = s.exit_prompt || s.sleep.is_some_and(|t| t.warning);
     let searching = s.screen == Screen::Search && !s.rail.focused;
@@ -84,6 +104,7 @@ fn typed_key(s: &AppState, intent: Intent) -> Option<Intent> {
         Intent::Text(_) | Intent::Erase if typing => Some(intent),
         Intent::Text('y' | 'Y') => Some(Intent::ToggleChat),
         Intent::Text('r' | 'R') => Some(Intent::Retry),
+        Intent::Text('v' | 'V') => Some(Intent::View),
         Intent::Text(_) => None,
         Intent::Erase => Some(Intent::Back),
         other => Some(other),
@@ -247,7 +268,11 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         player_menu_intent(s, row, intent, cmds);
         return;
     }
+    if s.multiview.is_some() && multiview::full_screen_intent(s, intent, cmds) {
+        return;
+    }
     match intent {
+        Intent::View => multiview::player_view(s),
         // Start opens the player menu on its first row.
         Intent::Menu => {
             s.player_menu = Some(PlayerMenuRow::default());
@@ -373,6 +398,7 @@ fn compose_common(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         | Intent::Left
         | Intent::Right
         | Intent::Select
+        | Intent::View
         | Intent::Pick { .. }
         | Intent::RailPick(_) => {}
     }
@@ -465,6 +491,7 @@ fn player_menu_intent(
         Intent::Back | Intent::Menu => s.player_menu = None,
         Intent::ToggleChat => s.chat_open = !s.chat_open,
         Intent::Retry
+        | Intent::View
         | Intent::Pick { .. }
         | Intent::RailPick(_)
         | Intent::Text(_)
@@ -489,11 +516,11 @@ fn change_player_option(
         PlayerMenuRow::Quality if s.audio_only => {}
         PlayerMenuRow::Quality => {
             s.session.quality = Some(s.quality().cycled(forward));
-            start_playback(s, cmds);
+            reload_playback(s, cmds);
         }
         PlayerMenuRow::Latency => {
             s.session.latency = s.session.latency.cycled(forward);
-            start_playback(s, cmds);
+            reload_playback(s, cmds);
         }
         PlayerMenuRow::Hwdec => {
             s.session.hwdec = s.session.hwdec.cycled(forward);
@@ -510,12 +537,17 @@ fn change_player_option(
             if !s.session.stats {
                 s.stats = None;
             }
-            cmds.push(Command::SetStats(s.session.stats));
+            cmds.push(Command::SetStats {
+                slot: s.sound_slot(),
+                on: s.session.stats,
+            });
         }
+        // Multiview's tiles are video: their quality comes from their size.
+        PlayerMenuRow::AudioOnly if s.multiview.is_some() => {}
         // Both directions toggle. The quality is kept, so turning it off goes back to it.
         PlayerMenuRow::AudioOnly => {
             s.audio_only = !s.audio_only;
-            start_playback(s, cmds);
+            reload_playback(s, cmds);
         }
         // Every step starts the timer again at the new length, counted from now.
         PlayerMenuRow::SleepTimer => {
@@ -571,7 +603,7 @@ fn raided(
     cmds: &mut Vec<Command>,
 ) {
     let on_screen = s.is_signed_in()
-        && s.screen == Screen::Player
+        && s.stream_on_screen()
         && s.now_playing
             .as_ref()
             .is_some_and(|p| p.channel.is_same(&ChannelRef::twitch(&from)));
@@ -588,6 +620,7 @@ fn raided(
     let id = s.last_raid_id;
     s.player_menu = None;
     s.subscribe_card = false;
+    s.popup = None;
     s.raid = Some(RaidOffer {
         id,
         from,
@@ -610,11 +643,13 @@ fn raided(
 /// to the browse screens). Chat moves along, and the player menu's choices, the sleep timer and
 /// audio only carry over: following a raid feels like the same session. Title and category are
 /// empty until `Event::StreamInfo` brings them, with the user id for the next raid.
+///
+/// In multiview the raided channel replaces the stream with sound in its tile, on the same player.
 fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     let Some(offer) = s.raid.take() else {
         return;
     };
-    if s.screen != Screen::Player {
+    if !s.stream_on_screen() {
         return;
     }
     let tint = s.now_playing.as_ref().map(|p| p.tint).unwrap_or_default();
@@ -627,6 +662,24 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
         tint,
         thumbnail: None,
     };
+    if let Some(mv) = s.multiview.as_mut() {
+        let sound = mv.sound;
+        if let Some(tile) = mv.tile_mut(sound) {
+            tile.stream = stream.clone();
+        }
+    }
+    switch_now_playing(s, stream, cmds);
+    start_playback(s, cmds);
+    cmds.push(Command::FetchStreamInfo {
+        channel: ChannelRef::twitch(offer.to_login),
+    });
+}
+
+/// The stream with sound becomes `stream`: a raid was followed, or multiview moved the sound.
+/// Chat is cleared and joins the new channel ("Connecting…"), raids and the hype train are watched
+/// there instead, and what belonged to the old channel (menus, the text being written, its
+/// numbers) goes. Playback is the caller's business.
+fn switch_now_playing(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.player_menu = None;
     s.subscribe_card = false;
     s.chat.clear();
@@ -642,11 +695,8 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     // The old channel's train is not this one's.
     s.hype_train = None;
     watch_hype_train(&stream, cmds);
+    s.stats = None;
     s.now_playing = Some(stream);
-    start_playback(s, cmds);
-    cmds.push(Command::FetchStreamInfo {
-        channel: ChannelRef::twitch(offer.to_login),
-    });
 }
 
 /// Signed in, asks for raids of the stream on screen: by its user id, or after looking it up when
@@ -663,7 +713,7 @@ fn watch_hype_train(stream: &Stream, cmds: &mut Vec<Command>) {
 }
 
 fn watch_raids(s: &AppState, cmds: &mut Vec<Command>) {
-    if !s.is_signed_in() || s.screen != Screen::Player || !s.on_screen_features().raids {
+    if !s.is_signed_in() || !s.stream_on_screen() || !s.on_screen_features().raids {
         return;
     }
     let Some(stream) = &s.now_playing else {
@@ -680,10 +730,10 @@ fn watch_raids(s: &AppState, cmds: &mut Vec<Command>) {
     }
 }
 
-/// Fills in what Twitch knows of the stream on screen. A user id that was missing starts the raid
-/// watch.
+/// Fills in what Twitch knows of the stream on screen (and of its multiview tile). A user id that
+/// was missing starts the raid watch.
 fn stream_info(s: &mut AppState, info: Stream, cmds: &mut Vec<Command>) {
-    if s.screen != Screen::Player {
+    if !s.stream_on_screen() {
         return;
     }
     let Some(p) = s
@@ -712,7 +762,14 @@ fn stream_info(s: &mut AppState, info: Stream, cmds: &mut Vec<Command>) {
             cmds.push(Command::FetchThumbnails { urls: vec![url] });
         }
     }
-    if !had_id && !p.user_id.is_empty() {
+    let now = p.clone();
+    if let Some(mv) = s.multiview.as_mut() {
+        let sound = mv.sound;
+        if let Some(tile) = mv.tile_mut(sound) {
+            tile.stream = now.clone();
+        }
+    }
+    if !had_id && !now.user_id.is_empty() {
         watch_raids(s, cmds);
     }
 }
@@ -744,12 +801,39 @@ fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
     if s.now_playing.is_none() {
         return;
     }
+    if s.multiview.is_some() {
+        multiview::play_sound(s, cmds);
+        pulse_hud(s);
+        return;
+    }
     s.playback = Playback::Loading;
     s.rechecking = false;
     s.paused = false;
     s.background_paused = false;
     // The numbers of the last stream mean nothing for this one.
     s.stats = None;
+    pulse_hud(s);
+    push_play(s, cmds);
+}
+
+/// The stream on screen again at another quality or latency, or as sound only. While it plays it
+/// stays `Playing`: the app loads the new one behind it and swaps at its first frame, so the
+/// picture never stops. A stream that does not play starts again as in `start_playback`.
+fn reload_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.now_playing.is_none() {
+        return;
+    }
+    if s.multiview.is_some() {
+        multiview::reload_sound(s, cmds);
+        pulse_hud(s);
+        return;
+    }
+    if s.playback != Playback::Playing || s.rechecking {
+        start_playback(s, cmds);
+        return;
+    }
+    s.paused = false;
+    s.background_paused = false;
     pulse_hud(s);
     push_play(s, cmds);
 }
@@ -773,12 +857,14 @@ fn recheck_failed(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
 }
 
-/// Asks for the stream on screen, as `start_playback` does, but leaves the state alone.
+/// Asks the single player for the stream on screen, as `start_playback` does, but leaves the
+/// state alone.
 fn push_play(s: &AppState, cmds: &mut Vec<Command>) {
     let Some(channel) = s.now_playing.as_ref().map(|p| p.channel.clone()) else {
         return;
     };
     cmds.push(Command::Play {
+        slot: MAIN_SLOT,
         channel,
         stream: s.stream_kind(),
         latency: s.session.latency,
@@ -786,16 +872,23 @@ fn push_play(s: &AppState, cmds: &mut Vec<Command>) {
     // Leaving the player stops the reports, so a stream started with the stats box on asks for
     // them again. This is what keeps the box on from stream to stream.
     if s.session.stats {
-        cmds.push(Command::SetStats(true));
+        cmds.push(Command::SetStats {
+            slot: MAIN_SLOT,
+            on: true,
+        });
     }
 }
 
+/// A on the single player's live stream.
 fn toggle_pause(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.paused = !s.paused;
     // From here the pause (or the playing) is the user's choice, not the background's.
     s.background_paused = false;
     pulse_hud(s);
-    cmds.push(Command::SetPaused(s.paused));
+    cmds.push(Command::SetPaused {
+        slot: MAIN_SLOT,
+        paused: s.paused,
+    });
 }
 
 /// The window gained or lost focus. Without background play, a stream playing when the user
@@ -808,27 +901,36 @@ fn window_focus(s: &mut AppState, focused: bool, cmds: &mut Vec<Command>) {
     }
     if std::mem::take(&mut s.background_paused)
         && s.screen == Screen::Player
+        && s.multiview.is_none()
         && s.playback == Playback::Playing
         && s.paused
     {
         s.paused = false;
         pulse_hud(s);
-        cmds.push(Command::SetPaused(false));
+        cmds.push(Command::SetPaused {
+            slot: MAIN_SLOT,
+            paused: false,
+        });
     }
 }
 
 /// Pauses the playing stream if the app is in the background and the setting says not to play
 /// there. Also run when a stream starts, since one can finish loading after the user left.
+/// Multiview is never paused this way: its grid never pauses.
 fn pause_in_background(s: &mut AppState, cmds: &mut Vec<Command>) {
     if s.in_background
         && !s.settings.background_play
+        && s.multiview.is_none()
         && s.screen == Screen::Player
         && s.playback == Playback::Playing
         && !s.paused
     {
         s.paused = true;
         s.background_paused = true;
-        cmds.push(Command::SetPaused(true));
+        cmds.push(Command::SetPaused {
+            slot: MAIN_SLOT,
+            paused: true,
+        });
     }
 }
 
@@ -876,6 +978,10 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             Intent::Right | Intent::Back => s.rail.focused = false,
             _ => {}
         }
+        return;
+    }
+    if intent == Intent::View {
+        multiview::browse_view(s);
         return;
     }
 
@@ -927,8 +1033,12 @@ fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Intent::Back | Intent::Erase if s.search.query.is_empty() => s.exit_prompt = true,
         Intent::Back | Intent::Erase => edit_search(s, cmds, keyboard::backspace),
         Intent::Text(c) => type_on_search(s, c, cmds),
-        // Search has one page of keys.
-        Intent::Pick { .. } | Intent::RailPick(_) | Intent::PageLeft | Intent::PageRight => {}
+        // Search has one page of keys. View is handled before (`home_intent`).
+        Intent::Pick { .. }
+        | Intent::RailPick(_)
+        | Intent::PageLeft
+        | Intent::PageRight
+        | Intent::View => {}
     }
 }
 
@@ -1056,7 +1166,10 @@ fn feed_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
 
 fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
     match event {
-        Event::FeedLoaded { feed, rows } => {
+        Event::FeedLoaded { feed, mut rows } => {
+            if feed == FeedId::Home {
+                resume::home_loaded(s, &mut rows);
+            }
             // A category the user already left has no feed any more, so its answer is dropped.
             if let Some(f) = s.feed_mut(&feed) {
                 f.rows = rows;
@@ -1064,6 +1177,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 f.error = None;
                 f.clamp_focus();
                 fetch_thumbnails(f.rows.iter().flat_map(|r| &r.tiles), cmds);
+            }
+            if matches!(feed, FeedId::Favorites | FeedId::Home) {
+                favorites::prune(s);
             }
         }
         Event::FeedFailed { feed, message } => {
@@ -1097,6 +1213,35 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.chat_status = status;
             }
         }
+        // In multiview a resolver answer belongs to the tile showing its channel (two tiles never
+        // show the same one), whichever has sound.
+        Event::StreamOffline { channel } if s.multiview.is_some() => {
+            multiview::tile_offline(s, &channel);
+        }
+        Event::PlaybackFailed { channel, message } if s.multiview.is_some() => {
+            multiview::tile_failed(s, &channel, message);
+        }
+        // And a player's report to the tile playing on its slot.
+        Event::PlaybackStarted { slot } if s.multiview.is_some() => {
+            multiview::tile_started(s, slot);
+        }
+        Event::PlaybackEnded { slot } if s.multiview.is_some() => {
+            multiview::tile_ended(s, slot);
+        }
+        Event::PlaybackError { slot, message } if s.multiview.is_some() => {
+            multiview::tile_error(s, slot, message);
+        }
+        Event::QualitySettleDue(id) => multiview::settle_due(s, id, cmds),
+        Event::PlayerHealth {
+            slot,
+            at_ms,
+            health,
+        } => network::health(s, slot, at_ms, health, cmds),
+        // Without multiview only the single player's slot has a stream on screen.
+        Event::PlaybackStarted { slot }
+        | Event::PlaybackEnded { slot }
+        | Event::PlaybackError { slot, .. }
+            if slot != MAIN_SLOT => {}
         Event::StreamOffline { channel } => {
             if watching(s, &channel) {
                 if s.playback == Playback::Loading {
@@ -1118,7 +1263,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         }
         // The player's own events carry no channel. They are only trusted while a stream is on
         // screen, in the state that can produce them.
-        Event::PlaybackStarted => {
+        Event::PlaybackStarted { .. } => {
             let rechecked = s.rechecking && s.playback == Playback::Offline;
             if s.screen == Screen::Player && (s.playback == Playback::Loading || rechecked) {
                 s.playback = Playback::Playing;
@@ -1127,12 +1272,12 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 pause_in_background(s, cmds);
             }
         }
-        Event::PlaybackEnded => {
+        Event::PlaybackEnded { .. } => {
             if s.screen == Screen::Player && s.playback == Playback::Playing {
                 go_offline(s, cmds);
             }
         }
-        Event::PlaybackError(message) => {
+        Event::PlaybackError { message, .. } => {
             let active = matches!(s.playback, Playback::Loading | Playback::Playing);
             if s.screen == Screen::Player && active {
                 s.playback = Playback::Failed(message);
@@ -1143,9 +1288,17 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::WindowFocus(focused) => window_focus(s, focused, cmds),
+        Event::DisplaySize { w, h } => {
+            if w > 0 && h > 0 && s.display != (w, h) {
+                s.display = (w, h);
+                // Every tile's size in pixels changed.
+                multiview::schedule_settle(s, cmds);
+            }
+        }
         Event::OfflineRecheckDue(id) => {
             let due = id == s.offline_recheck && !s.rechecking;
-            if due && s.screen == Screen::Player && s.playback == Playback::Offline {
+            let single = s.screen == Screen::Player && s.multiview.is_none();
+            if due && single && s.playback == Playback::Offline {
                 s.rechecking = true;
                 push_play(s, cmds);
             }
@@ -1175,6 +1328,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             // Home gains the Followed row. The Following tab loads when it is opened.
             reload_home(s, cmds);
             s.following = Feed::default();
+            s.favorites_feed = Feed::default();
             if s.wants_live_watch() {
                 cmds.push(Command::StartLiveWatch);
             }
@@ -1186,6 +1340,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.login_problem = None;
                 match s.after_login.take() {
                     Some(Screen::Following) => open_following(s, cmds),
+                    Some(Screen::Favorites) => favorites::open(s, cmds),
                     Some(Screen::Search) => open_root(s, Screen::Search, cmds),
                     // Signed in again for chat: back on the stream, ready to write.
                     Some(Screen::Player) => {
@@ -1201,6 +1356,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::SignedOut => {
             s.user = None;
             s.following = Feed::default();
+            // The favorites stay (they are LiveDeck's own), but are only shown signed in.
+            s.favorites_feed = Feed::default();
             // Live notifications are about the account's follows.
             s.toasts.clear();
             cmds.push(Command::StopLiveWatch);
@@ -1209,6 +1366,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             cmds.push(Command::DisconnectRaids);
             // So does writing in chat. The room's rules still apply to what is on screen.
             s.compose = Compose::default();
+            // Multiview is for signed-in users.
+            s.picked.clear();
             // The results came from the account. The id carries on, so a late answer to an
             // old search can never pass for a new one.
             s.search = SearchState {
@@ -1268,7 +1427,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         }
         Event::StreamInfo(info) => stream_info(s, info, cmds),
         Event::HypeTrain { channel, train } => {
-            let on_screen = s.screen == Screen::Player
+            let on_screen = s.stream_on_screen()
                 && s.now_playing
                     .as_ref()
                     .is_some_and(|p| p.channel.is_same(&ChannelRef::twitch(&channel)));
@@ -1315,7 +1474,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 // Like pressing B: the stream stops and chat is left, so nothing reconnects in
                 // the background and the browse screens are there on wake. With nothing playing
                 // it still suspends: the user asked for sleep.
-                if s.screen == Screen::Player {
+                if s.multiview.is_some() {
+                    multiview::leave(s, cmds);
+                } else if s.screen == Screen::Player {
                     back(s, cmds);
                 }
                 cmds.push(Command::Suspend);
@@ -1333,30 +1494,37 @@ fn went_live(s: &mut AppState, streams: Vec<Stream>, cmds: &mut Vec<Command>) {
     }
     let mut fresh = Vec::new();
     for stream in streams {
-        let on_screen = s.screen == Screen::Player
+        let on_screen = s.stream_on_screen()
             && s.now_playing
                 .as_ref()
                 .is_some_and(|p| p.channel.is_same(&stream.channel));
         let shown = s
             .toasts
             .iter()
-            .any(|t| t.stream.channel.is_same(&stream.channel));
+            .filter_map(Toast::stream)
+            .any(|t| t.channel.is_same(&stream.channel));
         if on_screen || shown {
             continue;
         }
-        s.last_toast_id = s.last_toast_id.wrapping_add(1);
-        let id = s.last_toast_id;
-        cmds.push(Command::ExpireToast { id });
         fresh.push(Tile::Stream(stream.clone()));
-        s.toasts.insert(0, Toast { id, stream });
+        push_toast(s, ToastKind::Live(stream), cmds);
     }
-    s.toasts.truncate(TOASTS_KEPT);
     fetch_thumbnails(fresh.iter(), cmds);
 }
 
-/// True while the Player screen shows `channel`. Late answers for a channel already left fail it.
+/// Shows a toast, newest first, and asks the app to take it away again later.
+fn push_toast(s: &mut AppState, kind: ToastKind, cmds: &mut Vec<Command>) {
+    s.last_toast_id = s.last_toast_id.wrapping_add(1);
+    let id = s.last_toast_id;
+    cmds.push(Command::ExpireToast { id });
+    s.toasts.insert(0, Toast { id, kind });
+    s.toasts.truncate(TOASTS_KEPT);
+}
+
+/// True while `channel` is the stream on screen (with sound, in multiview). Late answers for a
+/// channel already left fail it.
 fn watching(s: &AppState, channel: &ChannelRef) -> bool {
-    s.screen == Screen::Player
+    s.stream_on_screen()
         && s.now_playing
             .as_ref()
             .is_some_and(|p| p.channel == *channel)
@@ -1448,7 +1616,7 @@ fn fetch_chat_images(lines: &[ChatMessage], cmds: &mut Vec<Command>) {
 fn fetch_thumbnails<'a>(tiles: impl Iterator<Item = &'a Tile>, cmds: &mut Vec<Command>) {
     let mut seen = HashSet::new();
     let urls: Vec<String> = tiles
-        .filter_map(Tile::thumbnail)
+        .flat_map(Tile::thumbnails)
         .filter(|u| seen.insert(*u))
         .map(str::to_owned)
         .collect();
@@ -1551,6 +1719,7 @@ fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
             push_screen(s, Screen::Category);
             cmds.push(Command::LoadFeed { feed });
         }
+        Some(Tile::Resume(card)) => multiview::resume(s, card, cmds),
         None => {}
     }
 }
@@ -1575,15 +1744,18 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     watch_raids(s, cmds);
 }
 
-/// Where a rail entry leads. Following and Search while signed out go to Login (and on to the
-/// screen once the login succeeds). The account entry is Login while signed out and Settings,
-/// where the account can be managed, while signed in.
+/// Where a rail entry leads. Following, Favorites and Search while signed out go to Login (and on
+/// to the screen once the login succeeds). The account entry is Login while signed out and
+/// Settings, where the account can be managed, while signed in.
 fn rail_target(s: &AppState, entry: RailEntry) -> Screen {
     match entry {
         RailEntry::Account if s.is_signed_in() => Screen::Settings,
         RailEntry::Account => Screen::Login,
-        RailEntry::Following | RailEntry::Search if !s.is_signed_in() => Screen::Login,
+        RailEntry::Following | RailEntry::Favorites | RailEntry::Search if !s.is_signed_in() => {
+            Screen::Login
+        }
         RailEntry::Following => Screen::Following,
+        RailEntry::Favorites => Screen::Favorites,
         RailEntry::Search => Screen::Search,
         RailEntry::Browse => Screen::Browse,
         RailEntry::Settings => Screen::Settings,
@@ -1604,12 +1776,15 @@ fn activate_rail(s: &mut AppState, entry: RailEntry, cmds: &mut Vec<Command>) {
         // Login sits on top of the current screen, so Back returns there.
         let then = match entry {
             RailEntry::Following => Some(Screen::Following),
+            RailEntry::Favorites => Some(Screen::Favorites),
             RailEntry::Search => Some(Screen::Search),
             _ => None,
         };
         open_login(s, then, cmds);
     } else if target == Screen::Following {
         open_following(s, cmds);
+    } else if target == Screen::Favorites {
+        favorites::open(s, cmds);
     } else {
         open_root(s, target, cmds);
     }
@@ -1634,31 +1809,14 @@ fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
 fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     match s.screen {
         Screen::Player => {
-            s.now_playing = None;
-            // Audio only belongs to the stream that was left, not to the next one.
-            s.audio_only = false;
-            s.playback = Playback::Idle;
-            s.rechecking = false;
-            s.paused = false;
-            s.background_paused = false;
-            s.chat.clear();
-            s.chat_status = ChatStatus::Idle;
-            reset_chat_room(s);
-            // The menu's choices stay for the next stream. Its numbers do not.
-            s.player_menu = None;
-            s.subscribe_card = false;
-            s.raid = None;
-            s.stats = None;
-            s.hype_train = None;
-            cmds.push(Command::StopPlayback);
+            cmds.push(Command::StopPlayback { slot: MAIN_SLOT });
             if s.session.stats {
-                cmds.push(Command::SetStats(false));
+                cmds.push(Command::SetStats {
+                    slot: MAIN_SLOT,
+                    on: false,
+                });
             }
-            cmds.push(Command::LeaveChat);
-            cmds.push(Command::StopHypeTrain);
-            if s.is_signed_in() {
-                cmds.push(Command::StopRaids);
-            }
+            stop_watching(s, cmds);
         }
         Screen::Login => leave_login(s, cmds),
         Screen::Category => s.category = None,
@@ -1666,6 +1824,32 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
     s.chat_open = false;
     pop_screen(s);
+}
+
+/// Forgets the stream on screen and everything that hangs off it (chat, raids, hype train, the
+/// player's overlays). The players themselves are the caller's to stop.
+fn stop_watching(s: &mut AppState, cmds: &mut Vec<Command>) {
+    s.now_playing = None;
+    // Audio only belongs to the stream that was left, not to the next one.
+    s.audio_only = false;
+    s.playback = Playback::Idle;
+    s.rechecking = false;
+    s.paused = false;
+    s.background_paused = false;
+    s.chat.clear();
+    s.chat_status = ChatStatus::Idle;
+    reset_chat_room(s);
+    // The menu's choices stay for the next stream. Its numbers do not.
+    s.player_menu = None;
+    s.subscribe_card = false;
+    s.raid = None;
+    s.stats = None;
+    s.hype_train = None;
+    cmds.push(Command::LeaveChat);
+    cmds.push(Command::StopHypeTrain);
+    if s.is_signed_in() {
+        cmds.push(Command::StopRaids);
+    }
 }
 
 fn push_screen(s: &mut AppState, screen: Screen) {

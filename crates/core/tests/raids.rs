@@ -61,7 +61,7 @@ fn run(s: &AppState, msgs: Vec<Msg>) -> (AppState, Vec<Command>) {
 /// Watching `ender` (user id 100), playing.
 fn watching(signed_in: bool) -> AppState {
     let (s, _) = reduce(&home(signed_in), Intent::Select);
-    reduce(&s, Event::PlaybackStarted).0
+    reduce(&s, Event::PlaybackStarted { slot: 0 }).0
 }
 
 fn raid(from: &str, to: &str) -> Event {
@@ -170,7 +170,7 @@ fn the_card_opens_while_playing_and_while_offline() {
     assert_eq!(offer.seconds_left, RAID_SECONDS);
 
     // The stream already ended: the offline screen is up.
-    let offline = reduce(&watching(true), Event::PlaybackEnded).0;
+    let offline = reduce(&watching(true), Event::PlaybackEnded { slot: 0 }).0;
     assert_eq!(offline.playback, Playback::Offline);
     let (s, _) = reduce(&offline, raid("ender", "next_up"));
     assert!(s.raid.is_some());
@@ -226,7 +226,7 @@ fn assert_followed(before: &AppState, s: &AppState, cmds: &[Command]) {
     }));
     assert!(has(
         cmds,
-        |c| matches!(c, Command::Play { channel, .. } if channel.login == "next_up")
+        |c| matches!(c, Command::Play { slot: 0, channel, .. } if channel.login == "next_up")
     ));
     assert!(cmds.contains(&Command::FetchStreamInfo {
         channel: ChannelRef::twitch("next_up")
@@ -309,6 +309,7 @@ fn audio_only_and_the_session_carry_over() {
     assert!(s.audio_only);
     assert_eq!(s.sleep.unwrap().id, 3);
     assert!(cmds.contains(&Command::Play {
+        slot: 0,
         channel: ChannelRef::twitch("next_up"),
         stream: StreamKind::AudioOnly,
         latency: Latency::Low,

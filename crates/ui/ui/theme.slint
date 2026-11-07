@@ -54,6 +54,31 @@ export global Theme {
     out property <length> compose-chip-h: 40px;
     // 16 padding + chips + 12 gap + five rows of keys (5 * 50 + 4 * 8) + 16 padding.
     out property <length> compose-h: 366px;
+    // Multiview. The tile area is htpc_core::layout::AREA (64,72 1152x632 in the 1280x800 layout);
+    // these must match it. The grid's chat side panel is `chat-w` wide and shrinks the tiles.
+    out property <length> mv-area-x: 64px;
+    out property <length> mv-area-y: 72px;
+    out property <length> mv-area-w: 1152px;
+    out property <length> mv-area-h: 632px;
+    // A tile narrower than this drops its second caption line and quality chip.
+    out property <length> mv-small-w: 420px;
+    // After `mv-idle-after` without a button the grid's header, hints and captions fade, and the
+    // tiles grow to fill the window up to this margin.
+    out property <duration> mv-idle-after: 5s;
+    out property <length> mv-idle-margin: 8px;
+    // The picker panel on the right, its rows, and the View popup in the middle.
+    out property <length> picker-w: 480px;
+    out property <length> picker-row-h: 72px;
+    out property <length> popup-w: 560px;
+    out property <length> popup-row-h: 50px;
+    // The strip of streams over full screen (LB/RB), one thumbnail each.
+    out property <length> strip-thumb-w: 176px;
+    out property <length> strip-thumb-h: 99px;
+    // The platform dot in captions: Twitch in the accent's light violet, Kick in `kick`.
+    out property <color> twitch: #a594ff;
+    // A quality chip the slow-network rule lowered.
+    out property <color> amber: #f0a030;
+
     // Live-notification popups, stacked at the top right.
     out property <length> toast-w: 440px;
     out property <length> toast-h: 96px;

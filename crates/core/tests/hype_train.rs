@@ -99,7 +99,7 @@ fn following_a_raid_watches_the_new_channel_and_drops_the_old_train() {
     )
     .0;
     let (s, _) = reduce(&s, Intent::Select);
-    let (s, _) = reduce(&s, Event::PlaybackStarted);
+    let (s, _) = reduce(&s, Event::PlaybackStarted { slot: 0 });
     let (s, _) = reduce(&s, hype("ender", Some(train(5))));
     let (s, _) = reduce(
         &s,

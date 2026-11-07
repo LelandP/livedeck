@@ -1,0 +1,8 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+screen=Player channel="grandmaster_k" video_slot=0 position="1 of 3 in multiview" strip=[0grandmaster_k* 1ash 2birch] select="Pause" paused=false
+screen=Player channel="ash" video_slot=1 position="2 of 3 in multiview" strip=[0grandmaster_k 1ash* 2birch] select="Pause" paused=false
+screen=Player channel="ash" video_slot=1 position="2 of 3 in multiview" strip=[0grandmaster_k 1ash* 2birch] select="Play live" paused=true
+screen=Multiview channel="ash" video_slot=1 position="2 of 3 in multiview" strip=[0grandmaster_k 1ash* 2birch] select="Full screen" paused=false

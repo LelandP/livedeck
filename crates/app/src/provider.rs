@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{
     grid_rows, Category, Channel, ChannelRef, Command, Event, FeedId, HypeTrain, PageOutcome,
-    Paging, Platform, Rgb, Row, RowId, RowKind, SendProblem, Stream, Tile,
+    Paging, Platform, Rgb, Row, RowId, RowKind, SendProblem, Stream, Tile, RESUME_MIN_LIVE,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
@@ -67,7 +67,28 @@ pub trait Provider: Send + Sync + 'static {
     fn set_kick(&self, on: bool) {
         let _ = on;
     }
+
+    /// The favorites to check (`Command::SaveFavorites`, and the saved list at startup). Called
+    /// by the store before the commands after it.
+    fn set_favorites(&self, favorites: Vec<ChannelRef>) {
+        let _ = favorites;
+    }
+
+    /// The channels of the last multiview session, for Home's *Resume multiview* card
+    /// (`Command::SaveMultiview`, and the saved set at startup). Called by the store before the
+    /// commands after it.
+    fn set_resume_set(&self, channels: Vec<ChannelRef>) {
+        let _ = channels;
+    }
 }
+
+/// Twitch logins asked per `/streams` request (Helix's limit).
+const FAVORITE_BATCH: usize = 100;
+/// Kick favorites looked up at once (one request each).
+const KICK_LOOKUPS: usize = 3;
+
+/// Live favorites (most viewers first), then the others as dimmed cards in the order starred.
+type FavoriteTiles = (Vec<Tile>, Vec<Tile>);
 
 pub struct ApiProvider<A> {
     api: A,
@@ -85,6 +106,10 @@ pub struct ApiProvider<A> {
     kick: Option<Arc<dyn KickFeed>>,
     /// "Show Kick": off, Kick is never asked.
     kick_on: AtomicBool,
+    /// The starred channels, for the Favorites feed and Home's row.
+    favorites: Mutex<Vec<ChannelRef>>,
+    /// The last multiview session's channels, for Home's *Resume multiview* card.
+    resume_set: Mutex<Vec<ChannelRef>>,
 }
 
 impl<A: TwitchApi> ApiProvider<A> {
@@ -97,7 +122,118 @@ impl<A: TwitchApi> ApiProvider<A> {
             send_limit: Mutex::new(SendLimit::default()),
             kick: None,
             kick_on: AtomicBool::new(false),
+            favorites: Mutex::new(Vec::new()),
+            resume_set: Mutex::new(Vec::new()),
         }
+    }
+
+    fn favorites(&self) -> Vec<ChannelRef> {
+        self.favorites
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn resume_set(&self) -> Vec<ChannelRef> {
+        self.resume_set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Which favorites are live: the live ones by viewers, then the others in the order starred.
+    async fn favorite_tiles(&self) -> Result<FavoriteTiles, String> {
+        let tiles = self.channel_tiles(&self.favorites()).await?;
+        let (mut live, offline): (Vec<Tile>, Vec<Tile>) = tiles
+            .into_iter()
+            .partition(|t| matches!(t, Tile::Stream(_)));
+        live.sort_by_key(|t| match t {
+            Tile::Stream(s) => std::cmp::Reverse(s.viewers),
+            _ => std::cmp::Reverse(0),
+        });
+        Ok((live, offline))
+    }
+
+    /// `channels` in their order, each a stream card if live or a channel card if not. Twitch is
+    /// asked in batches of logins; Kick a few channels at a time, and only while "Show Kick" is
+    /// on (its channels are left out otherwise). A failed Twitch request fails the whole answer,
+    /// rather than showing live channels as offline.
+    async fn channel_tiles(&self, channels: &[ChannelRef]) -> Result<Vec<Tile>, String> {
+        use futures_util::stream::{self, StreamExt};
+
+        let bucket = refresh_bucket();
+        let twitch: Vec<String> = channels
+            .iter()
+            .filter(|c| c.is_twitch())
+            .map(|c| c.login.clone())
+            .collect();
+        let twitch_live = async {
+            let mut live = Vec::new();
+            for batch in twitch.chunks(FAVORITE_BATCH) {
+                live.extend(self.api.streams_by_login(batch).await?);
+            }
+            Ok::<_, htpc_twitch_api::Error>(live)
+        };
+        let kick = async {
+            let Some(kick) = self.kick() else {
+                return Vec::new();
+            };
+            let slugs: Vec<String> = channels
+                .iter()
+                .filter(|c| c.platform == Platform::Kick)
+                .map(|c| c.login.clone())
+                .collect();
+            stream::iter(slugs)
+                .map(|slug| async move { kick.channel(&slug).await })
+                .buffered(KICK_LOOKUPS)
+                .collect::<Vec<Tile>>()
+                .await
+        };
+        let (twitch_live, kick) = tokio::join!(twitch_live, kick);
+        let twitch_live = twitch_live.map_err(|err| {
+            tracing::warn!(%err, "could not check which channels are live");
+            err.to_string()
+        })?;
+
+        let mut kick = kick.into_iter();
+        let mut tiles = Vec::new();
+        for channel in channels {
+            let tile = match channel.platform {
+                Platform::Twitch => twitch_live
+                    .iter()
+                    .find(|s| s.user_login.eq_ignore_ascii_case(&channel.login))
+                    .map_or_else(
+                        || {
+                            Tile::Channel(Channel {
+                                channel: channel.clone(),
+                                name: channel.login.clone(),
+                                tint: tint_for(&channel.login),
+                            })
+                        },
+                        |s| stream(s, bucket),
+                    ),
+                // In the order asked, while Kick is on.
+                Platform::Kick => match kick.next() {
+                    Some(tile) => tile,
+                    None => continue,
+                },
+            };
+            tiles.push(tile);
+        }
+        Ok(tiles)
+    }
+
+    /// The Favorites screen: the live favorites, then the others dimmed.
+    async fn load_favorites(&self) -> Result<Vec<Row>, String> {
+        let (live, offline) = self.favorite_tiles().await?;
+        let mut rows = Vec::new();
+        if !live.is_empty() {
+            rows.push(Row::new(RowKind::FavoritesLive, live));
+        }
+        if !offline.is_empty() {
+            rows.push(Row::new(RowKind::FavoritesOffline, offline));
+        }
+        Ok(rows)
     }
 
     /// Adds Kick's rows, while "Show Kick" is on.
@@ -157,6 +293,7 @@ impl<A: TwitchApi> ApiProvider<A> {
         let result = match &feed {
             FeedId::Home => self.load_home().await,
             FeedId::Following => self.load_following().await,
+            FeedId::Favorites => self.load_favorites().await,
             FeedId::Browse => self.load_browse().await,
             FeedId::Category(game) => self.load_category(game).await,
             FeedId::Search(text) => self.load_search(text).await,
@@ -168,8 +305,8 @@ impl<A: TwitchApi> ApiProvider<A> {
     }
 
     /// The home rows, fetched concurrently: the hero (the most-watched stream), Followed Live,
-    /// Top Live and Categories. Failed and empty rows are skipped. If every row fails, the error
-    /// text is returned instead.
+    /// the live favorites, Top Live and Categories. Failed and empty rows are skipped. If every
+    /// row fails, the error text is returned instead.
     async fn load_home(&self) -> Result<Vec<Row>, String> {
         let page = || PageRequest::first(HOME_PAGE_SIZE);
         let bucket = refresh_bucket();
@@ -185,12 +322,39 @@ impl<A: TwitchApi> ApiProvider<A> {
                 None => None,
             }
         };
-        let (followed, top, games, kick) = tokio::join!(
+        // Favorites are for signed-in users.
+        let favorites = async {
+            if self.favorites().is_empty() || self.viewer_id().await.is_none() {
+                return Vec::new();
+            }
+            // A failure only leaves the row out (it is logged).
+            self.favorite_tiles()
+                .await
+                .map(|(live, _)| live)
+                .unwrap_or_default()
+        };
+        // Which of the last multiview session are live, for the *Resume multiview* card. Signed
+        // in only, like multiview, and only for a set that could start (two or more).
+        let resume = async {
+            let set = self.resume_set();
+            if set.len() < RESUME_MIN_LIVE || self.viewer_id().await.is_none() {
+                return None;
+            }
+            // A failure only leaves the card out.
+            self.channel_tiles(&set).await.ok()
+        };
+        let (followed, top, games, kick, favorites, resume) = tokio::join!(
             followed,
             self.api.top_streams(page()),
             self.api.top_categories(page()),
             kick,
+            favorites,
+            resume,
         );
+        let favorites_row =
+            (!favorites.is_empty()).then(|| Row::new(RowKind::FavoritesLive, favorites));
+        // Last, so it moves no row: the reducer turns it into the card.
+        let resume_row = resume.map(|tiles| Row::new(RowKind::Resume, tiles));
 
         let mut errors = Vec::new();
         let mut note = |what: &str, err: &htpc_twitch_api::Error| {
@@ -255,15 +419,22 @@ impl<A: TwitchApi> ApiProvider<A> {
             }
         }
 
-        let rows: Vec<Row> = [hero, followed_row, top_row, kick_row, categories_row]
-            .into_iter()
-            .flatten()
-            .collect();
+        let mut rows: Vec<Row> = [
+            hero,
+            followed_row,
+            favorites_row,
+            top_row,
+            kick_row,
+            categories_row,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         if rows.is_empty() && !errors.is_empty() {
-            Err(errors.join("; "))
-        } else {
-            Ok(rows)
+            return Err(errors.join("; "));
         }
+        rows.extend(resume_row);
+        Ok(rows)
     }
 
     /// The Following tab: the live followed channels first, then every other followed channel as
@@ -721,10 +892,12 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::DisconnectRaids
             | Command::StartRaidCountdown { .. }
             | Command::Play { .. }
-            | Command::SetPaused(_)
-            | Command::StopPlayback
+            | Command::SetPaused { .. }
+            | Command::SetMuted { .. }
+            | Command::StopPlayback { .. }
             | Command::SetPlayerOption(_)
-            | Command::SetStats(_)
+            | Command::SetStats { .. }
+            | Command::SettleQuality { .. }
             | Command::FetchThumbnails { .. }
             | Command::FetchChatImages { .. }
             | Command::JoinChat { .. }
@@ -733,6 +906,8 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::CancelLogin
             | Command::SignOut
             | Command::SaveSettings(_)
+            | Command::SaveFavorites(_)
+            | Command::SaveMultiview(_)
             | Command::StartSleepTimer { .. }
             | Command::CancelSleepTimer
             | Command::Suspend
@@ -762,6 +937,14 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
 
     fn set_kick(&self, on: bool) {
         self.kick_on.store(on, Ordering::SeqCst);
+    }
+
+    fn set_favorites(&self, favorites: Vec<ChannelRef>) {
+        *self.favorites.lock().unwrap_or_else(|e| e.into_inner()) = favorites;
+    }
+
+    fn set_resume_set(&self, channels: Vec<ChannelRef>) {
+        *self.resume_set.lock().unwrap_or_else(|e| e.into_inner()) = channels;
     }
 
     async fn hype_train(&self, channel: &str) -> Option<Option<HypeTrain>> {
@@ -931,6 +1114,7 @@ mod tests {
             Tile::Stream(s) => &s.channel.login,
             Tile::Category(c) => &c.name,
             Tile::Channel(c) => &c.channel.login,
+            Tile::Resume(_) => "resume",
         }
     }
 
@@ -1064,6 +1248,188 @@ mod tests {
         assert_eq!(
             offline.tiles.last().unwrap().key(),
             (Platform::Kick, "ziggy-sleeps")
+        );
+    }
+
+    // ---- favorites ------------------------------------------------------------------------
+
+    fn keys_of(row: &Row) -> Vec<(Platform, &str)> {
+        row.tiles.iter().map(Tile::key).collect()
+    }
+
+    #[tokio::test]
+    async fn favorites_are_the_live_ones_by_viewers_then_the_others_in_order() {
+        let kick = htpc_kick_api::FakeKick::new()
+            .with_pages(vec![vec![htpc_kick_api::fake_live("ziggy_k", 70)]])
+            .with_offline("napper", "Napper");
+        let provider = with_kick(kick, true);
+        provider.set_favorites(vec![
+            ChannelRef::twitch("sleepy_fox"),
+            ChannelRef::twitch("lofi_lena"),
+            ChannelRef::kick("napper"),
+            // Sources disagree on case.
+            ChannelRef::twitch("PixelPilgrim"),
+            ChannelRef::kick("ziggy_k"),
+        ]);
+        let rows = rows_of(provider.load_feed(FeedId::Favorites).await);
+        assert_eq!(
+            kinds(&rows),
+            [RowKind::FavoritesLive, RowKind::FavoritesOffline]
+        );
+        assert_eq!(
+            keys_of(&rows[0]),
+            [
+                (Platform::Twitch, "pixelpilgrim"),
+                (Platform::Twitch, "lofi_lena"),
+                (Platform::Kick, "ziggy_k"),
+            ]
+        );
+        assert_eq!(
+            keys_of(&rows[1]),
+            [(Platform::Twitch, "sleepy_fox"), (Platform::Kick, "napper")]
+        );
+        let Tile::Channel(napper) = &rows[1].tiles[1] else {
+            panic!("an offline card")
+        };
+        assert_eq!(napper.name, "Napper");
+    }
+
+    #[tokio::test]
+    async fn kick_favorites_are_left_out_while_kick_is_off() {
+        let kick = htpc_kick_api::FakeKick::new().with_offline("napper", "Napper");
+        let provider = with_kick(kick.clone(), false);
+        provider.set_favorites(vec![
+            ChannelRef::kick("napper"),
+            ChannelRef::twitch("marrow"),
+        ]);
+        let rows = rows_of(provider.load_feed(FeedId::Favorites).await);
+        assert_eq!(kinds(&rows), [RowKind::FavoritesLive]);
+        assert_eq!(keys_of(&rows[0]), [(Platform::Twitch, "marrow")]);
+        assert_eq!(kick.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn no_favorites_is_no_rows() {
+        let provider = ApiProvider::new(fake_api());
+        assert!(rows_of(provider.load_feed(FeedId::Favorites).await).is_empty());
+    }
+
+    #[tokio::test]
+    async fn home_has_a_row_of_live_favorites_after_followed() {
+        let provider = ApiProvider::new(fake_api());
+        provider.set_favorites(vec![
+            ChannelRef::twitch("sleepy_fox"),
+            ChannelRef::twitch("tidewatch"),
+        ]);
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        assert_eq!(
+            kinds(&rows),
+            [
+                RowKind::Featured,
+                RowKind::FollowedLive,
+                RowKind::FavoritesLive,
+                RowKind::TopLive,
+                RowKind::Categories
+            ]
+        );
+        assert_eq!(keys_of(&rows[2]), [(Platform::Twitch, "tidewatch")]);
+    }
+
+    #[tokio::test]
+    async fn signed_out_home_has_no_favorites_row() {
+        let api = FakeApi {
+            me: None,
+            ..fake_api()
+        };
+        let provider = ApiProvider::new(api);
+        provider.set_favorites(vec![ChannelRef::twitch("tidewatch")]);
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        assert!(rows.iter().all(|r| r.kind != RowKind::FavoritesLive));
+    }
+
+    #[tokio::test]
+    async fn home_checks_the_last_multiview_set_in_its_order_last() {
+        let provider = ApiProvider::new(fake_api());
+        provider.set_resume_set(vec![
+            ChannelRef::twitch("tidewatch"),
+            ChannelRef::twitch("sleepy_fox"),
+            ChannelRef::twitch("LOFI_LENA"),
+        ]);
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        assert_eq!(kinds(&rows).last(), Some(&RowKind::Resume));
+        let resume = rows.last().unwrap();
+        assert_eq!(
+            keys_of(resume),
+            [
+                (Platform::Twitch, "tidewatch"),
+                (Platform::Twitch, "sleepy_fox"),
+                (Platform::Twitch, "lofi_lena"),
+            ]
+        );
+        // Live ones are streams, the others channel cards.
+        assert!(matches!(resume.tiles[0], Tile::Stream(_)));
+        assert!(matches!(resume.tiles[1], Tile::Channel(_)));
+        assert!(matches!(resume.tiles[2], Tile::Stream(_)));
+    }
+
+    #[tokio::test]
+    async fn home_checks_no_set_signed_out_or_with_one_channel() {
+        let signed_out = ApiProvider::new(FakeApi {
+            me: None,
+            ..fake_api()
+        });
+        let set = vec![
+            ChannelRef::twitch("tidewatch"),
+            ChannelRef::twitch("lofi_lena"),
+        ];
+        signed_out.set_resume_set(set.clone());
+        let rows = rows_of(signed_out.load_feed(FeedId::Home).await);
+        assert!(rows.iter().all(|r| r.kind != RowKind::Resume));
+
+        let provider = ApiProvider::new(fake_api());
+        provider.set_resume_set(set[..1].to_vec());
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        assert!(rows.iter().all(|r| r.kind != RowKind::Resume));
+    }
+
+    #[tokio::test]
+    async fn twitch_favorites_are_asked_in_batches_of_a_hundred() {
+        let server = MockServer::start().await;
+        Mock::given(path("/streams"))
+            .respond_with(json(serde_json::json!({ "data": [], "pagination": {} })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let provider = ApiProvider::new(helix(&server));
+        provider.set_favorites(
+            (0..150)
+                .map(|i| ChannelRef::twitch(format!("c{i}")))
+                .collect(),
+        );
+        let rows = rows_of(provider.load_feed(FeedId::Favorites).await);
+        assert_eq!(kinds(&rows), [RowKind::FavoritesOffline]);
+        assert_eq!(rows[0].tiles.len(), 150);
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_is_an_error_not_a_row_of_offline_channels() {
+        let server = MockServer::start().await;
+        Mock::given(path("/streams"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let provider = ApiProvider::new(helix(&server));
+        provider.set_favorites(vec![ChannelRef::twitch("marrow")]);
+        let event = provider.load_feed(FeedId::Favorites).await;
+        assert!(
+            matches!(
+                event,
+                Event::FeedFailed {
+                    feed: FeedId::Favorites,
+                    ..
+                }
+            ),
+            "{event:?}"
         );
     }
 
@@ -1475,6 +1841,7 @@ mod tests {
             Tile::Stream(s) => &s.channel.login,
             Tile::Channel(c) => &c.channel.login,
             Tile::Category(c) => &c.id,
+            Tile::Resume(_) => "resume",
         }
     }
 

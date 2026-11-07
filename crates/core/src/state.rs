@@ -2,11 +2,16 @@
 
 use crate::chat::ChatBuffer;
 use crate::domain::{
-    ChatStatus, DeviceCode, Features, FeedId, HypeTrain, LoginProblem, Platform, PlayerStats,
-    RoomMode, Row, SendProblem, Stream, Tile, User,
+    Channel, ChannelRef, ChatStatus, DeviceCode, Features, FeedId, HypeTrain, LoginProblem,
+    Platform, PlayerStats, RoomMode, Row, SendProblem, Stream, Tile, User,
 };
 use crate::keyboard::{Board, KeyboardState, Shift};
-use crate::msg::StreamKind;
+use crate::layout::MAX_STREAMS;
+use crate::msg::{Slot, StreamKind, MAIN_SLOT};
+use crate::multiview::PickerTab;
+use crate::multiview::{Multiview, SavedSet, ViewPopup};
+use crate::netlimit::{NetLimit, Tier};
+use crate::quality::{FrameRate, Rendition};
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -19,12 +24,19 @@ pub enum Screen {
     Category,
     /// Followed channels, live first. Signed in only.
     Following,
+    /// LiveDeck's own starred channels, Kick and Twitch, live first. Signed in only.
+    Favorites,
     /// Find channels and categories by name with the on-screen keyboard. Signed in only.
     Search,
+    /// The stream on screen, alone. With `AppState::multiview` set it is multiview's full screen:
+    /// the stream with sound, the others playing on behind it.
     Player,
     /// Settings: the account (sign in / sign out), chat layout and stream quality.
     Settings,
     Login,
+    /// Multiview's grid: several streams at once, one with sound. Signed in only to start, and
+    /// not a root: Back returns to the screen it was started from.
+    Multiview,
 }
 
 impl Screen {
@@ -32,13 +44,18 @@ impl Screen {
     pub fn is_root(self) -> bool {
         matches!(
             self,
-            Screen::Home | Screen::Browse | Screen::Following | Screen::Search | Screen::Settings
+            Screen::Home
+                | Screen::Browse
+                | Screen::Following
+                | Screen::Favorites
+                | Screen::Search
+                | Screen::Settings
         )
     }
 
     /// Screens that only exist while signed in. Signing out leaves them for Home.
     pub fn needs_account(self) -> bool {
-        matches!(self, Screen::Following | Screen::Search)
+        matches!(self, Screen::Following | Screen::Favorites | Screen::Search)
     }
 }
 
@@ -48,6 +65,7 @@ pub enum RailEntry {
     #[default]
     Home,
     Following,
+    Favorites,
     Browse,
     Search,
     Settings,
@@ -56,9 +74,10 @@ pub enum RailEntry {
 }
 
 impl RailEntry {
-    pub const ALL: [RailEntry; 6] = [
+    pub const ALL: [RailEntry; 7] = [
         RailEntry::Home,
         RailEntry::Following,
+        RailEntry::Favorites,
         RailEntry::Browse,
         RailEntry::Search,
         RailEntry::Settings,
@@ -298,13 +317,35 @@ impl Default for Compose {
     }
 }
 
-/// A "<channel> is live" popup. It only informs: no button acts on it, and the app removes it
+/// A popup over every screen. It only informs: no button acts on it, and the app removes it
 /// after a few seconds (`Event::ToastExpired`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toast {
     /// Goes up with every toast, never repeats.
     pub id: u32,
-    pub stream: Stream,
+    pub kind: ToastKind,
+}
+
+/// What a toast says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToastKind {
+    /// "<channel> is live" (live notifications).
+    Live(Stream),
+    /// *Resume multiview* left out this many channels of the set: they were offline.
+    OfflineSkipped(usize),
+    /// The network could not keep up, and the quality went down for the first time this run:
+    /// of the muted streams (`muted`), or of the stream with sound (the single player's).
+    SlowNetwork { muted: bool },
+}
+
+impl Toast {
+    /// The stream of a "<channel> is live" toast.
+    pub fn stream(&self) -> Option<&Stream> {
+        match &self.kind {
+            ToastKind::Live(stream) => Some(stream),
+            ToastKind::OfflineSkipped(_) | ToastKind::SlowNetwork { .. } => None,
+        }
+    }
 }
 
 /// Toasts drawn at once. More are summed up as "+N more".
@@ -469,6 +510,11 @@ pub struct AppState {
     pub home: Feed,
     /// The Following tab: live followed channels, then the offline ones. Empty while signed out.
     pub following: Feed,
+    /// LiveDeck's own starred channels (`favorites.toml`), Kick and Twitch, in the order starred.
+    /// Kept while signed out, but only used signed in.
+    pub favorites: Vec<ChannelRef>,
+    /// Which favorites are live: the Favorites screen, and the picker's Favorites tab.
+    pub favorites_feed: Feed,
     /// The category directory.
     pub browse: Feed,
     /// The open category, while the Category screen is on the back stack or on screen.
@@ -531,6 +577,9 @@ pub struct AppState {
     /// The platform can open a web page in a browser the user will see. False in Game Mode on
     /// the Deck, where a browser opens behind gamescope or not at all. Set once at startup.
     pub can_open_browser: bool,
+    /// The window's size in physical pixels (`Event::DisplaySize`), (0, 0) until the first report.
+    /// Multiview's tile quality comes from it (`layout::pixel_height`).
+    pub display: (u32, u32),
     /// "<channel> is live" popups, newest first. Drawn over every screen.
     pub toasts: Vec<Toast>,
     /// The id of the last toast, kept so ids never repeat.
@@ -550,6 +599,25 @@ pub struct AppState {
     pub quick_messages: Vec<String>,
     /// The hype train in the channel on screen, while one runs.
     pub hype_train: Option<HypeTrain>,
+    /// Multiview, while it runs (the grid, or one of its streams in full screen).
+    pub multiview: Option<Multiview>,
+    /// The View popup, over whatever screen it was opened on. It takes all input.
+    pub popup: Option<ViewPopup>,
+    /// The streams picked on browse cards for multiview (at most `MAX_STREAMS`, live ones only),
+    /// in the order picked. Leaving multiview leaves its streams picked here, the one with sound
+    /// first, so the set can be grown and started again. Signed in only.
+    pub picked: Vec<Stream>,
+    /// The id of the last `Command::SettleQuality`, kept so ids never repeat.
+    pub last_settle_id: u32,
+    /// The last multiview session (`multiview.toml`), for Home's *Resume multiview* card. Loaded
+    /// at startup, and saved again whenever a running session changes (`Command::SaveMultiview`).
+    /// Leaving multiview keeps it; nothing clears it.
+    pub last_multiview: Option<SavedSet>,
+    /// The slow-network limit (plan.md, section 4): how far the network lowered each kind of
+    /// stream. It lasts while the app runs, so leaving and resuming multiview keeps it.
+    pub net: NetLimit,
+    /// The slow-network toast has been shown this run (it is shown once).
+    pub net_told: bool,
 }
 
 /// The Twitch page to subscribe to `channel`. The channel is a Twitch login (letters, digits and
@@ -591,12 +659,22 @@ impl AppState {
         self.session.quality.unwrap_or(self.settings.quality)
     }
 
-    /// What the stream on screen is played as: sound only, or video at `quality()`.
+    /// What the single player plays: sound only, or video at `quality()`, lowered as far as the
+    /// network limit lowered the stream with sound.
     pub fn stream_kind(&self) -> StreamKind {
         if self.audio_only {
-            StreamKind::AudioOnly
+            return StreamKind::AudioOnly;
+        }
+        let quality = self.quality();
+        let ceiling = Rendition::ceiling(quality);
+        let lowered = ceiling.lowered(self.net.steps(Tier::Sound));
+        if lowered < ceiling {
+            StreamKind::Tile {
+                rendition: lowered,
+                rate: FrameRate::Smooth,
+            }
         } else {
-            StreamKind::Video(self.quality())
+            StreamKind::Video(quality)
         }
     }
 
@@ -605,14 +683,119 @@ impl AppState {
         match screen {
             Screen::Home => Some(FeedId::Home),
             Screen::Following => Some(FeedId::Following),
+            Screen::Favorites => Some(FeedId::Favorites),
             Screen::Browse => Some(FeedId::Browse),
             Screen::Category => self
                 .category
                 .as_ref()
                 .map(|c| FeedId::Category(c.id.clone())),
             Screen::Search => Some(FeedId::Search(self.search.results_for.clone())),
-            Screen::Player | Screen::Login | Screen::Settings => None,
+            Screen::Player | Screen::Login | Screen::Settings | Screen::Multiview => None,
         }
+    }
+
+    /// The player slot of the stream with sound: multiview's sound tile, or the single player.
+    pub fn sound_slot(&self) -> Slot {
+        self.multiview
+            .as_ref()
+            .and_then(Multiview::sound_tile)
+            .map_or(MAIN_SLOT, |t| t.slot)
+    }
+
+    /// `channel` is in the picked set (its card shows a tick).
+    pub fn is_picked(&self, channel: &ChannelRef) -> bool {
+        self.picked.iter().any(|p| p.channel.is_same(channel))
+    }
+
+    /// The streams *Watch together* starts multiview with, the first one with sound.
+    ///
+    /// - On a browse card (`card`): the picked set, and the card after them if it is not picked
+    ///   yet and there is room.
+    /// - On the single player (`None`): the stream on screen, then the picked ones.
+    pub fn watch_set(&self, card: Option<&Stream>) -> Vec<Stream> {
+        let mut set: Vec<Stream> = Vec::new();
+        match card {
+            Some(card) => {
+                set.extend(self.picked.iter().cloned());
+                if !self.is_picked(&card.channel) {
+                    set.push(card.clone());
+                }
+            }
+            None => {
+                set.extend(self.now_playing.iter().cloned());
+                let now = self.now_playing.as_ref().map(|n| &n.channel);
+                set.extend(
+                    self.picked
+                        .iter()
+                        .filter(|p| now.is_none_or(|n| !p.channel.is_same(n)))
+                        .cloned(),
+                );
+            }
+        }
+        set.truncate(MAX_STREAMS);
+        set
+    }
+
+    /// `channel` is one of the favorites (starred).
+    pub fn is_favorite(&self, channel: &ChannelRef) -> bool {
+        self.favorites.iter().any(|f| f.is_same(channel))
+    }
+
+    /// What the View popup's *Add to favorites* row is about: the card it was opened on, the
+    /// multiview place, or the single player's stream. A stream known to be offline counts as an
+    /// offline channel (it joins the offline row).
+    pub fn favorite_target(&self, popup: &ViewPopup) -> Option<Tile> {
+        if let Some(card) = &popup.card {
+            return Some(card.clone());
+        }
+        let (stream, offline) = match (&self.multiview, popup.place) {
+            (Some(mv), Some(place)) => {
+                let tile = mv.tile(place)?;
+                let stream = match &self.now_playing {
+                    // The stream with sound knows more by now (title, user id).
+                    Some(now) if place == mv.sound && now.channel.is_same(&tile.stream.channel) => {
+                        now
+                    }
+                    _ => &tile.stream,
+                };
+                (stream, tile.state == Playback::Offline)
+            }
+            _ => (
+                self.now_playing.as_ref()?,
+                self.playback == Playback::Offline,
+            ),
+        };
+        Some(if offline {
+            Tile::Channel(Channel {
+                channel: stream.channel.clone(),
+                name: stream.channel.login.clone(),
+                tint: stream.tint,
+            })
+        } else {
+            Tile::Stream(stream.clone())
+        })
+    }
+
+    /// What the multiview picker lists on `tab`, in order: live streams, and on Favorites the
+    /// offline channels after them (greyed, A does nothing on them).
+    pub fn picker_rows(&self, tab: PickerTab) -> Vec<&Tile> {
+        let tiles = match tab {
+            PickerTab::Favorites => &self.favorites_feed,
+            PickerTab::Following => &self.following,
+        }
+        .rows
+        .iter()
+        .flat_map(|r| &r.tiles);
+        match tab {
+            PickerTab::Favorites => tiles.filter(|t| !matches!(t, Tile::Category(_))).collect(),
+            PickerTab::Following => tiles.filter(|t| matches!(t, Tile::Stream(_))).collect(),
+        }
+    }
+
+    /// The stream with sound (`now_playing`) is on screen: the Player screen, or multiview's grid.
+    /// Its chat, raids and hype trains are followed only then.
+    pub fn stream_on_screen(&self) -> bool {
+        matches!(self.screen, Screen::Player | Screen::Multiview)
     }
 
     /// The feed of the current screen.
@@ -637,6 +820,7 @@ impl AppState {
         match id {
             FeedId::Home => Some(&self.home),
             FeedId::Following => Some(&self.following),
+            FeedId::Favorites => Some(&self.favorites_feed),
             FeedId::Browse => Some(&self.browse),
             FeedId::Category(game) => self
                 .category
@@ -651,6 +835,7 @@ impl AppState {
         match id {
             FeedId::Home => Some(&mut self.home),
             FeedId::Following => Some(&mut self.following),
+            FeedId::Favorites => Some(&mut self.favorites_feed),
             FeedId::Browse => Some(&mut self.browse),
             FeedId::Category(game) => self
                 .category

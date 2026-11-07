@@ -6,6 +6,7 @@
 //! - The control thread made here makes every other libmpv call, so the UI thread never waits on
 //!   the mpv core. [`MpvPlayer`]'s methods only queue a command for it.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,13 +16,28 @@ use libmpv2::{mpv_end_file_reason, Mpv};
 
 use crate::output::VideoOutput;
 use crate::recent::RecentLog;
-use crate::{Latency, LoadOptions, Player, PlayerEvent, PlayerOption, PlayerStats, Zoom};
+use crate::{
+    Latency, LoadOptions, Player, PlayerEvent, PlayerHealth, PlayerOption, PlayerStats, Zoom,
+};
 
 /// How often the control thread looks for mpv events when no command arrives.
 const POLL: Duration = Duration::from_millis(50);
 
 /// How often stats are read while they are on.
 const STATS_EVERY: Duration = Duration::from_secs(1);
+
+/// How often health is reported while a stream plays.
+const HEALTH_EVERY: Duration = Duration::from_secs(1);
+
+/// How long a load waits for the player's render context (`VideoOutput`'s `ready`). It is made at
+/// the next frame the window draws, so this only runs out if nothing is drawn: then the stream
+/// loads anyway, without a picture.
+const RENDER_WAIT: Duration = Duration::from_secs(2);
+
+/// Buffered less than this, a playing stream has run dry. With low latency the buffer reads 0.00
+/// while the picture is frozen; anything that still plays had at least 0.1 s (live Twitch, slowed
+/// to half its bitrate, 2026-11-07).
+const DRY_BUFFER_MS: u32 = 50;
 
 /// What a latency means in mpv options: `(option, low, normal)`. The low values are mpv's own
 /// `low-latency` profile (set once at start), the normal ones mpv's defaults plus a longer
@@ -72,11 +88,14 @@ fn set_volume(mpv: &Mpv, volume: f64) {
 
 pub struct MpvPlayer {
     tx: Mutex<Sender<Control>>,
+    /// Lives as long as the player. Its `VideoOutput` holds a weak reference, so the renderer
+    /// frees the render context once the player is dropped (see `VideoOutputs`).
+    _alive: Arc<()>,
 }
 
 impl MpvPlayer {
     /// Starts mpv and its control thread. `on_event` runs on that thread. Fails if libmpv cannot
-    /// be loaded or initialised.
+    /// be loaded or initialised. The [`VideoOutput`] goes to `VideoOutputs::insert`.
     pub fn new(
         on_event: impl Fn(PlayerEvent) + Send + 'static,
     ) -> Result<(Self, VideoOutput), String> {
@@ -119,12 +138,22 @@ impl MpvPlayer {
 
         let (tx, rx) = channel();
         let core = Arc::clone(&mpv);
+        let ready = Arc::new(AtomicBool::new(false));
+        let can_show = Arc::clone(&ready);
         std::thread::Builder::new()
             .name("mpv-control".into())
-            .spawn(move || control_loop(&core, &rx, &on_event))
+            .spawn(move || control_loop(&core, &rx, &can_show, &on_event))
             .map_err(|e| format!("could not start the mpv thread: {e}"))?;
 
-        Ok((Self { tx: Mutex::new(tx) }, VideoOutput::new(mpv)))
+        let alive = Arc::new(());
+        let output = VideoOutput::new(mpv, Arc::downgrade(&alive), ready);
+        Ok((
+            Self {
+                tx: Mutex::new(tx),
+                _alive: alive,
+            },
+            output,
+        ))
     }
 
     fn send(&self, control: Control) {
@@ -195,6 +224,9 @@ fn apply_option(mpv: &Mpv, option: PlayerOption) {
         // `vid=no` leaves the video track unselected: nothing is decoded or rendered. As an
         // option it also holds for the next `loadfile`.
         PlayerOption::Video(on) => mpv.set_property("vid", if on { "auto" } else { "no" }),
+        // `mute` moves the sound between tiles at once and without dropped frames (phase 0 of
+        // plan.md). The audio is still decoded; `aid=no` would save that but is untested.
+        PlayerOption::Muted(muted) => mpv.set_property("mute", muted),
     };
     if let Err(e) = result {
         tracing::warn!(?option, %e, "mpv option not changed");
@@ -237,6 +269,24 @@ fn read_stats(mpv: &Mpv) -> PlayerStats {
         dropped_frames: whole("frame-drop-count"),
         decoder_dropped_frames: whole("decoder-frame-drop-count"),
     }
+}
+
+/// Reads the health report. `None` while paused by the user: a paused stream only fills its
+/// buffer, which says nothing about the network.
+fn read_health(mpv: &Mpv) -> Option<PlayerHealth> {
+    if mpv.get_property::<bool>("pause").unwrap_or(false) {
+        return None;
+    }
+    let buffer_ms = number(mpv, "demuxer-cache-duration").map_or(0, |s| {
+        u32::try_from((s * 1000.0).round() as u64).unwrap_or(u32::MAX)
+    });
+    let waiting = mpv
+        .get_property::<bool>("paused-for-cache")
+        .unwrap_or(false);
+    Some(PlayerHealth {
+        stalled: waiting || buffer_ms < DRY_BUFFER_MS,
+        buffer_ms,
+    })
 }
 
 /// libmpv refuses to start (`mpv_create` returns NULL) unless `LC_NUMERIC` is "C". Rust never
@@ -295,38 +345,38 @@ fn describe(e: &libmpv2::Error) -> String {
     format!("{what} (mpv error {raw})")
 }
 
-fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEvent)) {
+fn control_loop(
+    mpv: &Mpv,
+    rx: &Receiver<Control>,
+    can_show: &AtomicBool,
+    on_event: &impl Fn(PlayerEvent),
+) {
     // True from `Load` until the first frame, so `Playing` is reported once per stream.
     let mut starting = false;
+    // A load waiting for the render context, and since when.
+    let mut waiting: Option<(String, LoadOptions, Instant)> = None;
     // What mpv warned about since the current stream started, shown with a failure.
     let mut recent = RecentLog::default();
     // When the next stats report is due, while stats are on.
     let mut stats_due: Option<Instant> = None;
     // A volume fade in progress: when it started and how long it takes.
     let mut fade: Option<(Instant, Duration)> = None;
+    // When the next health report is due: from the first frame of a stream until it stops.
+    let mut health_due: Option<Instant> = None;
     loop {
+        let mut load = None;
         match rx.recv_timeout(POLL) {
-            Ok(Control::Load(url, options)) => {
-                recent.clear();
-                apply_latency(mpv, options.latency);
-                let _ = mpv.set_property("pause", false);
-                // A fade only quietens the stream it ran on.
-                fade = None;
-                set_volume(mpv, FULL_VOLUME);
-                match mpv.command("loadfile", &[url.as_str(), "replace"]) {
-                    Ok(()) => starting = true,
-                    Err(e) => on_event(PlayerEvent::Failed(
-                        recent.report(&format!("loadfile failed: {}", describe(&e))),
-                    )),
-                }
-            }
+            // Held until the render context exists (see `RENDER_WAIT`). A newer load replaces it.
+            Ok(Control::Load(url, options)) => waiting = Some((url, options, Instant::now())),
             Ok(Control::Pause(paused)) => {
                 if let Err(e) = mpv.set_property("pause", paused) {
                     tracing::warn!(%e, "could not change the pause state");
                 }
             }
             Ok(Control::Stop) => {
+                waiting = None;
                 starting = false;
+                health_due = None;
                 if let Err(e) = mpv.command("stop", &[]) {
                     tracing::warn!(%e, "could not stop mpv");
                 }
@@ -344,14 +394,40 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
             Err(RecvTimeoutError::Disconnected) => break,
         }
 
+        if waiting.as_ref().is_some_and(|(_, _, since)| {
+            can_show.load(Ordering::SeqCst) || since.elapsed() >= RENDER_WAIT
+        }) {
+            load = waiting.take();
+        }
+        if let Some((url, options, since)) = load {
+            if !can_show.load(Ordering::SeqCst) {
+                tracing::warn!(waited = ?since.elapsed(), "loading without a render context");
+            }
+            recent.clear();
+            health_due = None;
+            apply_latency(mpv, options.latency);
+            let _ = mpv.set_property("pause", false);
+            // A fade only quietens the stream it ran on.
+            fade = None;
+            set_volume(mpv, FULL_VOLUME);
+            match mpv.command("loadfile", &[url.as_str(), "replace"]) {
+                Ok(()) => starting = true,
+                Err(e) => on_event(PlayerEvent::Failed(
+                    recent.report(&format!("loadfile failed: {}", describe(&e))),
+                )),
+            }
+        }
+
         while let Some(event) = mpv.wait_event(0.0) {
             match event {
                 Ok(Event::PlaybackRestart) if starting => {
                     starting = false;
+                    health_due = Some(Instant::now() + HEALTH_EVERY);
                     on_event(PlayerEvent::Playing);
                 }
                 Ok(Event::EndFile(reason)) if reason == mpv_end_file_reason::Eof => {
                     starting = false;
+                    health_due = None;
                     on_event(PlayerEvent::Ended);
                 }
                 // `Stop` and `Redirect` are our own doing (a new load or `stop`).
@@ -370,6 +446,7 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
                 // An end-of-file with an error code arrives as an `Err`.
                 Err(e) => {
                     starting = false;
+                    health_due = None;
                     tracing::warn!(%e, "mpv could not play the stream");
                     on_event(PlayerEvent::Failed(recent.report(&describe(&e))));
                 }
@@ -391,6 +468,16 @@ fn control_loop(mpv: &Mpv, rx: &Receiver<Control>, on_event: &impl Fn(PlayerEven
             if now >= due {
                 on_event(PlayerEvent::Stats(read_stats(mpv)));
                 stats_due = Some(now + STATS_EVERY);
+            }
+        }
+
+        if let Some(due) = health_due {
+            let now = Instant::now();
+            if now >= due {
+                if let Some(health) = read_health(mpv) {
+                    on_event(PlayerEvent::Health(health));
+                }
+                health_due = Some(now + HEALTH_EVERY);
             }
         }
     }

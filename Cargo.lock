@@ -3262,6 +3262,7 @@ name = "livedeck"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "htpc-chat",
  "htpc-core",
  "htpc-input",

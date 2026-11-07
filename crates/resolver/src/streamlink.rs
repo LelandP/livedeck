@@ -58,16 +58,29 @@ fn page_url(site: Site, channel: &str) -> String {
     }
 }
 
-/// Quality names are `best`, `worst` or `720p60`-like. Anything else falls back to `best`.
+/// The most names a fallback list may have (a 1080p list has 16).
+const MAX_NAMES: usize = 24;
+
+/// `quality` is a rendition name (`best`, `worst`, `720p60`-like) or a comma-separated fallback
+/// list of them, which Streamlink tries in order. Anything else becomes `best`. A list that does
+/// not end in `best` or `worst` gets `best` added, so a stream without any of the names still
+/// plays instead of failing.
 fn quality_arg(quality: &str) -> String {
     let q = quality.trim().to_ascii_lowercase();
-    let known =
-        !q.is_empty() && q.len() <= 12 && q.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    match q.as_str() {
-        _ if !known => "best".to_owned(),
-        "best" | "worst" => q,
-        // A missing variant falls back to the best one instead of failing.
-        _ => format!("{q},best"),
+    let names: Vec<&str> = q.split(',').map(str::trim).collect();
+    let known = names.len() <= MAX_NAMES
+        && names.iter().all(|n| {
+            !n.is_empty()
+                && n.len() <= 12
+                && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+    if !known {
+        return "best".to_owned();
+    }
+    let list = names.join(",");
+    match names.last() {
+        Some(&("best" | "worst")) => list,
+        _ => format!("{list},best"),
     }
 }
 

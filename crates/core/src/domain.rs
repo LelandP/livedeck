@@ -137,6 +137,19 @@ pub struct Channel {
     pub tint: Rgb,
 }
 
+/// Home's *Resume multiview* card: the streams of the last multiview session that are live, in
+/// their saved order. Shown with at least two (`RESUME_MIN_LIVE`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeCard {
+    pub streams: Vec<Stream>,
+}
+
+/// The fewest live streams the *Resume multiview* card is shown with: multiview needs two.
+pub const RESUME_MIN_LIVE: usize = 2;
+
+/// The `Tile::key` of the *Resume multiview* card. No login or game id looks like it.
+const RESUME_KEY: &str = "\0resume";
+
 /// One card in a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tile {
@@ -144,15 +157,40 @@ pub enum Tile {
     Category(Category),
     /// A followed channel that is offline.
     Channel(Channel),
+    /// *Resume multiview*, at the start of Home's first row of cards.
+    Resume(ResumeCard),
 }
 
 impl Tile {
-    /// The image to show on the card, if the source gave one.
+    /// The image to show on the card, if the source gave one. The *Resume multiview* card shows
+    /// several: see [`Tile::thumbnails`].
     pub fn thumbnail(&self) -> Option<&str> {
         match self {
             Tile::Stream(s) => s.thumbnail.as_deref(),
             Tile::Category(c) => c.thumbnail.as_deref(),
-            Tile::Channel(_) => None,
+            Tile::Channel(_) | Tile::Resume(_) => None,
+        }
+    }
+
+    /// Every image the card shows: its thumbnail, or the *Resume multiview* card's mosaic.
+    pub fn thumbnails(&self) -> Vec<&str> {
+        match self {
+            Tile::Resume(card) => card
+                .streams
+                .iter()
+                .take(RESUME_MOSAIC)
+                .filter_map(|s| s.thumbnail.as_deref())
+                .collect(),
+            other => other.thumbnail().into_iter().collect(),
+        }
+    }
+
+    /// The channel of a stream or channel card. `None` for a category and the resume card.
+    pub fn channel(&self) -> Option<&ChannelRef> {
+        match self {
+            Tile::Stream(s) => Some(&s.channel),
+            Tile::Channel(c) => Some(&c.channel),
+            Tile::Category(_) | Tile::Resume(_) => None,
         }
     }
 
@@ -165,9 +203,13 @@ impl Tile {
             Tile::Stream(s) => (s.channel.platform, &s.channel.login),
             Tile::Category(c) => (Platform::Twitch, &c.id),
             Tile::Channel(c) => (c.channel.platform, &c.channel.login),
+            Tile::Resume(_) => (Platform::Twitch, RESUME_KEY),
         }
     }
 }
+
+/// Streams shown in the *Resume multiview* card's 2×2 mosaic.
+pub const RESUME_MOSAIC: usize = 4;
 
 /// What a row shows. The view-model maps this to a (later translatable) title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -187,6 +229,15 @@ pub enum RowKind {
     SearchCategories,
     /// Search: channels whose name matches that are not live, dimmed.
     SearchOffline,
+    /// Starred channels that are live (the Favorites screen, and a Home row).
+    FavoritesLive,
+    /// Starred channels that are not live, dimmed, after the live ones (the Favorites screen).
+    FavoritesOffline,
+    /// Home: the last multiview session's channels, live (streams) or not (channels), in their
+    /// saved order. The provider sends it with Home's rows; the reducer turns it into the
+    /// *Resume multiview* card at the start of the first row, and it is never drawn as a row
+    /// itself, except to hold that card when Home has no other row of streams.
+    Resume,
 }
 
 /// How a row continues past the tiles it already has.
@@ -306,12 +357,18 @@ pub enum FeedId {
     Category(String),
     /// The results for this search text (horizontal rows: live, categories, offline).
     Search(String),
+    /// LiveDeck's own starred channels, Kick and Twitch: live ones first, then the offline ones
+    /// (horizontal rows). Signed in only.
+    Favorites,
 }
 
 impl FeedId {
     /// Grid feeds scroll vertically through rows of [`grid_cols`] and page on their last row.
     pub fn is_grid(&self) -> bool {
-        !matches!(self, FeedId::Home | FeedId::Following | FeedId::Search(_))
+        !matches!(
+            self,
+            FeedId::Home | FeedId::Following | FeedId::Search(_) | FeedId::Favorites
+        )
     }
 }
 

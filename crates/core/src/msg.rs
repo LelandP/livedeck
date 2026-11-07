@@ -4,6 +4,9 @@ use crate::domain::{
     ChannelRef, ChatMessage, ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation,
     PlayerStats, RoomModeChange, Row, RowId, SendProblem, Stream, Tile, User,
 };
+use crate::multiview::SavedSet;
+use crate::netlimit::Health;
+use crate::quality::{FrameRate, Rendition};
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
 
@@ -40,7 +43,17 @@ pub enum Intent {
     PageLeft,
     /// RB / Page Down: the next page of an on-screen keyboard (chat compose).
     PageRight,
+    /// The View button (View, Back/Select or Create/Share, left of the face buttons) / `v`:
+    /// multiview things on every screen (the View popup).
+    View,
 }
+
+/// Which of the app's players a playback command or event is about: 0 is the single player, 1 to
+/// 8 the other multiview tiles (`layout::MAX_STREAMS` in all).
+pub type Slot = u8;
+
+/// The single player's slot. Multiview started from the single player keeps that stream here.
+pub const MAIN_SLOT: Slot = 0;
 
 /// Side effects requested by the reducer. The app runs them off the UI thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,24 +71,33 @@ pub enum Command {
     /// Download and decode these thumbnails and hand them to the window. There is no `Event`:
     /// images never enter `AppState`, a card just shows its image once it has arrived.
     FetchThumbnails { urls: Vec<String> },
-    /// Resolve the channel's playlist and play it. Answered with `Event::StreamOffline` or
-    /// `Event::PlaybackFailed` if that fails, and later with the player's own events
-    /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`). `stream` says which rendition to
-    /// play, `latency` sets the player's buffers for this stream.
+    /// Resolve the channel's playlist and play it on the player of `slot`, replacing what it
+    /// plays. Answered with `Event::StreamOffline` or `Event::PlaybackFailed` if that fails, and
+    /// later with the player's own events (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`)
+    /// carrying `slot`. `stream` says which rendition to play, `latency` sets the player's
+    /// buffers for this stream.
     Play {
+        slot: Slot,
         channel: ChannelRef,
         stream: StreamKind,
         latency: Latency,
     },
-    /// Pause or resume the player.
-    SetPaused(bool),
+    /// Pause or resume the player of `slot`.
+    SetPaused { slot: Slot, paused: bool },
+    /// Silence (or let be heard) the player of `slot`, which keeps playing. It lasts for the
+    /// streams loaded there later, so a reloaded muted tile stays muted.
+    SetMuted { slot: Slot, muted: bool },
     /// Change a player option that applies at once, without reloading the stream. It lasts until
-    /// the app quits (or the next change).
+    /// the app quits (or the next change), and applies to every slot.
     SetPlayerOption(PlayerOption),
-    /// Start or stop the player's stats reports (`Event::PlayerStats`, about once a second).
-    SetStats(bool),
-    /// Stop the player and drop the stream.
-    StopPlayback,
+    /// Start or stop the stats reports of the player of `slot` (`Event::PlayerStats`, about once
+    /// a second).
+    SetStats { slot: Slot, on: bool },
+    /// Stop the player of `slot` and drop its stream.
+    StopPlayback { slot: Slot },
+    /// Send `Event::QualitySettleDue(id)` in 2 s. Multiview reloads tiles at their new quality
+    /// only once the layout has stayed put that long (plan.md, section 3).
+    SettleQuality { id: u32 },
     /// Start receiving chat for a channel, leaving any other one. The client stays connected
     /// (and reconnects on its own) until `LeaveChat`. Answered over time with
     /// `Event::ChatStatus`, `Event::ChatMessages` and `Event::ChatModerated`.
@@ -95,6 +117,15 @@ pub enum Command {
     SignOut,
     /// Write these settings to the config file. There is no `Event`: the state already holds them.
     SaveSettings(Settings),
+    /// The favorites changed: this is the whole list, in the order starred. The store hands it to
+    /// the provider before the commands after it (so a `LoadFeed { feed: FeedId::Favorites }`
+    /// that follows already checks it) and writes it to `favorites.toml`. There is no `Event`.
+    SaveFavorites(Vec<ChannelRef>),
+    /// The running multiview session changed (a stream added, removed or replaced by a raid, the
+    /// layout, the sound): this is the whole set. The store hands its channels to the provider
+    /// (Home's next load checks which are live for the *Resume multiview* card) and writes it to
+    /// `multiview.toml`. There is no `Event`.
+    SaveMultiview(SavedSet),
     /// Start a sleep timer of `minutes`, replacing any running one. Answered over time with
     /// `Event::SleepTimerTick` once a minute, `Event::SleepTimerWarning` 60 s before the end, and
     /// `Event::SleepTimerFired` (after fading the sound out), all carrying `id`.
@@ -169,6 +200,12 @@ pub enum StreamKind {
     /// Sound only: the stream's audio rendition, with video decoding off in the player. A stream
     /// without one falls back to video, still without decoding it.
     AudioOnly,
+    /// A multiview tile: this height (a fallback list, see `Rendition::streamlink_list`), with
+    /// this frame rate first.
+    Tile {
+        rendition: Rendition,
+        rate: FrameRate,
+    },
 }
 
 /// A player option that can change while a stream plays.
@@ -237,14 +274,31 @@ pub enum Event {
         channel: ChannelRef,
         message: String,
     },
-    /// The player shows the first frame.
-    PlaybackStarted,
-    /// The stream ended by itself: the channel went offline or the connection dropped.
-    PlaybackEnded,
-    /// The player could not play the stream.
-    PlaybackError(String),
+    /// The player of `slot` shows the first frame.
+    PlaybackStarted {
+        slot: Slot,
+    },
+    /// The stream of `slot` ended by itself: the channel went offline or the connection dropped.
+    PlaybackEnded {
+        slot: Slot,
+    },
+    /// The player of `slot` could not play the stream.
+    PlaybackError {
+        slot: Slot,
+        message: String,
+    },
+    /// The `Command::SettleQuality` timer `id` ran out. Ignored unless it is the latest.
+    QualitySettleDue(u32),
     /// The player's latest numbers for the stats box. Ignored unless the box is on.
     PlayerStats(PlayerStats),
+    /// How the player of `slot` is doing: sent about once a second while it plays (not while it
+    /// loads or is paused). `at_ms` is when, in milliseconds on the app's own clock, which only
+    /// goes forward. The slow-network rule (`NetLimit`) judges from these.
+    PlayerHealth {
+        slot: Slot,
+        at_ms: u64,
+        health: Health,
+    },
     DeviceCodeIssued(DeviceCode),
     /// The login finished and the credentials are in place. Feeds are reloaded for the account.
     SignedIn(User),
@@ -288,6 +342,12 @@ pub enum Event {
     /// app. Without `Settings::background_play`, losing it pauses the stream and regaining it
     /// resumes.
     WindowFocus(bool),
+    /// The window is `w` x `h` physical pixels: sent at startup and on every resize. Multiview
+    /// picks each tile's quality from it. An empty (minimised) window is ignored.
+    DisplaySize {
+        w: u32,
+        h: u32,
+    },
     /// `from_login` raided `to_login`, taking `viewers` along. Ignored unless `from_login` is the
     /// channel on screen and the user is signed in.
     Raided {

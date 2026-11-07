@@ -35,7 +35,7 @@ fn home() -> AppState {
 /// The first stream, playing.
 fn playing() -> AppState {
     let (s, _) = reduce(&home(), Intent::Select);
-    reduce(&s, Event::PlaybackStarted).0
+    reduce(&s, Event::PlaybackStarted { slot: 0 }).0
 }
 
 fn run(s: &AppState, intents: &[Intent]) -> (AppState, Vec<Command>) {
@@ -117,10 +117,12 @@ fn changing_quality_reloads_the_stream_and_is_not_saved() {
         Quality::Best,
         "the saved setting is untouched"
     );
-    assert_eq!(s.playback, Playback::Loading);
+    // The old quality stays on screen until the new one's first frame.
+    assert_eq!(s.playback, Playback::Playing);
     assert_eq!(
         cmds,
         vec![Command::Play {
+            slot: 0,
             channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::P1080),
             latency: Latency::Low,
@@ -141,6 +143,7 @@ fn the_menu_quality_is_kept_for_the_next_stream() {
     assert_eq!(s.player_menu, None);
     let (_, cmds) = run(&s, &[Intent::Right, Intent::Select]);
     assert!(cmds.contains(&Command::Play {
+        slot: 0,
         channel: ChannelRef::twitch("other"),
         stream: StreamKind::Video(Quality::Worst),
         latency: Latency::Low,
@@ -169,6 +172,7 @@ fn changing_latency_reloads_the_stream_with_it() {
     assert_eq!(
         cmds,
         vec![Command::Play {
+            slot: 0,
             channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::Best),
             latency: Latency::Normal,
@@ -228,7 +232,7 @@ fn stats_on() -> (AppState, Vec<Command>) {
 fn the_stats_row_starts_and_stops_the_reports() {
     let (s, cmds) = stats_on();
     assert!(s.session.stats);
-    assert_eq!(cmds, vec![Command::SetStats(true)]);
+    assert_eq!(cmds, vec![Command::SetStats { slot: 0, on: true }]);
 
     let s = reduce(&s, Event::PlayerStats(stats())).0;
     assert_eq!(s.stats, Some(stats()));
@@ -236,7 +240,7 @@ fn the_stats_row_starts_and_stops_the_reports() {
     let (s, cmds) = reduce(&s, Intent::Left);
     assert!(!s.session.stats);
     assert_eq!(s.stats, None, "turning it off hides the numbers at once");
-    assert_eq!(cmds, vec![Command::SetStats(false)]);
+    assert_eq!(cmds, vec![Command::SetStats { slot: 0, on: false }]);
 }
 
 #[test]
@@ -248,7 +252,10 @@ fn stats_are_only_accepted_while_on_and_on_the_player() {
     let (s, _) = stats_on();
     let (s, cmds) = run(&s, &[Intent::Back, Intent::Back]);
     assert_eq!(s.screen, Screen::Home);
-    assert!(cmds.contains(&Command::SetStats(false)), "{cmds:?}");
+    assert!(
+        cmds.contains(&Command::SetStats { slot: 0, on: false }),
+        "{cmds:?}"
+    );
     let s = reduce(&s, Event::PlayerStats(stats())).0;
     assert_eq!(s.stats, None);
 }
@@ -263,16 +270,19 @@ fn stats_stay_on_into_the_next_stream() {
 
     let (s, cmds) = run(&s, &[Intent::Right, Intent::Select]);
     assert_eq!(s.screen, Screen::Player);
-    assert!(cmds.contains(&Command::SetStats(true)), "{cmds:?}");
+    assert!(
+        cmds.contains(&Command::SetStats { slot: 0, on: true }),
+        "{cmds:?}"
+    );
     let s = reduce(&s, Event::PlayerStats(stats())).0;
     assert_eq!(s.stats, Some(stats()));
 }
 
 #[test]
-fn a_reload_clears_the_old_numbers() {
+fn a_reload_keeps_the_numbers_until_the_new_quality_reports() {
     let (s, _) = stats_on();
     let s = reduce(&s, Event::PlayerStats(stats())).0;
-    // Up to the quality row and change it: the stream starts again.
+    // Up to the quality row and change it: the new quality loads behind the old one.
     let (s, cmds) = run(
         &s,
         &[
@@ -283,9 +293,24 @@ fn a_reload_clears_the_old_numbers() {
             Intent::Right,
         ],
     );
+    assert_eq!(s.playback, Playback::Playing);
+    assert_eq!(s.stats, Some(stats()));
+    assert!(matches!(cmds[0], Command::Play { slot: 0, .. }), "{cmds:?}");
+
+    // A stream that does not play starts over, without the old numbers.
+    let failed = reduce(
+        &s,
+        Event::PlaybackError {
+            slot: 0,
+            message: "x".into(),
+        },
+    )
+    .0;
+    let (s, _) = reduce(&failed, Intent::Back); // close the menu
+    let (s, cmds) = reduce(&s, Intent::Retry);
     assert_eq!(s.playback, Playback::Loading);
     assert_eq!(s.stats, None);
-    assert!(cmds.contains(&Command::SetStats(true)));
+    assert!(cmds.contains(&Command::SetStats { slot: 0, on: true }));
 }
 
 #[test]
@@ -315,10 +340,11 @@ fn audio_only_reloads_the_stream_as_sound_only() {
     assert!(!s.audio_only, "every stream starts as video");
     let (s, cmds) = reduce(&s, Intent::Right);
     assert!(s.audio_only);
-    assert_eq!(s.playback, Playback::Loading);
+    assert_eq!(s.playback, Playback::Playing);
     assert_eq!(
         cmds,
         vec![Command::Play {
+            slot: 0,
             channel: ChannelRef::twitch("chan"),
             stream: StreamKind::AudioOnly,
             latency: Latency::Low,
@@ -332,7 +358,7 @@ fn turning_audio_only_off_goes_back_to_the_session_quality() {
     // Pick 720p in the menu first, then go audio only.
     let (s, _) = run(&playing(), &[Intent::Menu, Intent::Right, Intent::Right]);
     assert_eq!(s.quality(), Quality::P720);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let (s, _) = run(&s, &[Intent::Down; 5]);
     let (s, _) = reduce(&s, Intent::Select);
     assert!(s.audio_only);
@@ -343,6 +369,7 @@ fn turning_audio_only_off_goes_back_to_the_session_quality() {
     assert_eq!(
         cmds,
         vec![Command::Play {
+            slot: 0,
             channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::P720),
             latency: Latency::Low,
@@ -353,7 +380,7 @@ fn turning_audio_only_off_goes_back_to_the_session_quality() {
 #[test]
 fn the_quality_row_is_locked_while_audio_only_is_on() {
     let (s, _) = reduce(&on_audio_row(), Intent::Right);
-    let s = reduce(&s, Event::PlaybackStarted).0;
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let (s, _) = run(&s, &[Intent::Up; 6]);
     assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
     let (s, cmds) = run(&s, &[Intent::Right, Intent::Left, Intent::Select]);
@@ -365,10 +392,11 @@ fn the_quality_row_is_locked_while_audio_only_is_on() {
 #[test]
 fn a_retry_stays_audio_only() {
     let (s, _) = reduce(&on_audio_row(), Intent::Right);
+    // The sound-only stream fails once it plays (a failed resolve leaves the old one playing).
     let s = reduce(
         &s,
-        Event::PlaybackFailed {
-            channel: ChannelRef::twitch("chan"),
+        Event::PlaybackError {
+            slot: 0,
             message: "x".into(),
         },
     )
@@ -376,6 +404,7 @@ fn a_retry_stays_audio_only() {
     let (s, _) = reduce(&s, Intent::Back); // close the menu
     let (_, cmds) = reduce(&s, Intent::Retry);
     assert!(cmds.contains(&Command::Play {
+        slot: 0,
         channel: ChannelRef::twitch("chan"),
         stream: StreamKind::AudioOnly,
         latency: Latency::Low,
@@ -391,6 +420,7 @@ fn the_next_stream_starts_as_video_again() {
     let (s, cmds) = run(&s, &[Intent::Right, Intent::Select]);
     assert!(!s.audio_only);
     assert!(cmds.contains(&Command::Play {
+        slot: 0,
         channel: ChannelRef::twitch("other"),
         stream: StreamKind::Video(Quality::Best),
         latency: Latency::Low,

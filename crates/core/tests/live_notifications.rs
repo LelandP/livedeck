@@ -48,7 +48,8 @@ fn went_live(s: &AppState, channels: &[&str]) -> (AppState, Vec<Command>) {
 fn toast_channels(s: &AppState) -> Vec<&str> {
     s.toasts
         .iter()
-        .map(|t| t.stream.channel.login.as_str())
+        .filter_map(|t| t.stream())
+        .map(|s| s.channel.login.as_str())
         .collect()
 }
 
@@ -179,7 +180,7 @@ fn a_burst_keeps_only_the_newest() {
     let (s, _) = went_live(&signed_in(), &names);
     assert_eq!(s.toasts.len(), TOASTS_KEPT);
     assert_eq!(
-        s.toasts[0].stream.channel.login,
+        s.toasts[0].stream().unwrap().channel.login,
         format!("c{}", TOASTS_KEPT + 4)
     );
 }

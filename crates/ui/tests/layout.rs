@@ -733,4 +733,276 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     }
     ui.window()
         .set_size(slint::PhysicalSize::new(WIDTH, HEIGHT));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+
+    multiview(&ui);
+    resume_card(&ui);
+}
+
+/// Home's *Resume multiview* card lays out its mosaic, and a preview that arrives later is
+/// patched into its cell.
+fn resume_card(ui: &MainWindow) {
+    let live = |login: &str| {
+        Tile::Stream(Stream {
+            channel: ChannelRef::twitch(login),
+            user_id: String::new(),
+            title: String::new(),
+            category: String::new(),
+            viewers: 10,
+            tint: Rgb::new(40, 60, 90),
+            thumbnail: Some(format!("https://cdn/{login}.jpg")),
+        })
+    };
+    let (mut s, _) = init();
+    s.user = Some(htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    });
+    let rows = vec![
+        Row::new(RowKind::TopLive, vec![live("top")]),
+        Row::new(RowKind::Resume, vec![live("a"), live("b"), live("c")]),
+    ];
+    let (s, _) = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows,
+        },
+    );
+    assert!(matches!(s.home.tile(0, 0), Some(Tile::Resume(_))));
+    Update::full(view_model(&s)).apply(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let violet = |p: &Rgba8Pixel| p.r > 180 && p.g < 130 && p.b > 220;
+    let before = count(&render(ui), 0..WIDTH, 0..HINTS_TOP, violet);
+    htpc_ui::apply_thumbnail(ui, "https://cdn/b.jpg", &picture(16, 9));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let after = count(&render(ui), 0..WIDTH, 0..HINTS_TOP, violet);
+    assert!(
+        after > before + 2_000,
+        "the mosaic cell shows the preview ({before} -> {after} violet pixels)"
+    );
+}
+
+/// Signed in, watching `main`, then multiview with `main` and three followed channels in a grid of
+/// 4, all playing, the picker closed and the focus on the top-right tile.
+fn multiview_of_four() -> AppState {
+    let user = htpc_core::User {
+        login: "me".into(),
+        can_chat: true,
+    };
+    let live = |login: &str| {
+        Tile::Stream(Stream {
+            channel: ChannelRef::twitch(login),
+            user_id: String::new(),
+            title: "a title".into(),
+            category: "cat".into(),
+            viewers: 10,
+            tint: Rgb::new(40, 60, 90),
+            thumbnail: None,
+        })
+    };
+    let (s, _) = init();
+    let mut s = [
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows: vec![Row::new(RowKind::TopLive, vec![live("main")])],
+        },
+        Event::SignedIn(user),
+        Event::FeedLoaded {
+            feed: FeedId::Following,
+            rows: vec![Row::new(
+                RowKind::FollowedLive,
+                ["one", "two", "three"].map(live).to_vec(),
+            )],
+        },
+    ]
+    .into_iter()
+    .fold(s, |s, e| reduce(&s, e).0);
+    for intent in [
+        Intent::Select,
+        Intent::View,
+        Intent::Select,
+        Intent::Select,
+        Intent::Down,
+        Intent::Select,
+        Intent::Down,
+        Intent::Select,
+        Intent::Back,
+    ] {
+        s = reduce(&s, intent).0;
+    }
+    let mv = s.multiview.as_ref().expect("multiview runs");
+    assert_eq!(mv.count(), 4);
+    assert!(mv.picker.is_none());
+    let slots: Vec<u8> = mv.tiles.iter().flatten().map(|t| t.slot).collect();
+    for slot in slots {
+        s = reduce(&s, Event::PlaybackStarted { slot }).0;
+    }
+    s.multiview.as_mut().unwrap().focus = 1;
+    s
+}
+
+/// Multiview's grid, picker, popup and full screen lay out and draw where they belong, and each
+/// player renders at the size it is shown.
+fn multiview(ui: &MainWindow) {
+    let accent =
+        |p: &Rgba8Pixel| (100..150).contains(&p.r) && (75..120).contains(&p.g) && p.b > 230;
+    let grid = multiview_of_four();
+    let slot_of =
+        |s: &AppState, place: usize| s.multiview.as_ref().unwrap().tile(place).unwrap().slot;
+    let (sound_slot, focus_slot) = (slot_of(&grid, 0), slot_of(&grid, 1));
+    Update::full(view_model(&grid)).apply(ui);
+    render(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(ui);
+
+    // Grid of 4 at 1280x800: tiles of 547.6x308, top right from (648, 72), bottom left from
+    // (84, 396). The focused one has the accent ring, the sound badge is accent too (top left
+    // tile's top right corner), and the muted, unfocused bottom-left tile has neither.
+    assert!(
+        count(&image, 648..1196, 72..80, accent) > 1_000,
+        "the focused tile has no focus ring"
+    );
+    assert!(
+        count(&image, 480..632, 76..116, accent) > 200,
+        "the stream with sound has no sound badge"
+    );
+    assert_eq!(
+        count(&image, 84..632, 396..704, accent),
+        0,
+        "an unfocused muted tile is drawn with the accent"
+    );
+    // Each stream renders at its tile's size; a slot not in multiview is hidden.
+    assert_eq!(htpc_ui::video_size(ui, focus_slot), (548, 308));
+    assert_eq!(htpc_ui::video_size(ui, sound_slot), (548, 308));
+    assert_eq!(htpc_ui::video_size(ui, 8), (0, 0));
+    // A frame lands in its slot, and the stream with sound's in `video` too.
+    let frame = |c: u8| {
+        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(4, 4);
+        buffer.make_mut_slice().fill(Rgba8Pixel::new(c, c, c, 255));
+        slint::Image::from_rgba8(buffer)
+    };
+    htpc_ui::show_video(ui, focus_slot, frame(10));
+    htpc_ui::show_video(ui, sound_slot, frame(20));
+    assert_eq!(
+        ui.get_video().size().width,
+        4,
+        "the sound slot's frame is not the video"
+    );
+
+    // Five seconds without a button: the header, hints and captions fade, and the tiles grow to
+    // fill the window (8 px margin): 1264 / 1152 = 1.097 times their size.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5_500));
+    render(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(ui);
+    assert!(ui.get_mv_idle(), "the grid did not go idle");
+    assert_eq!(htpc_ui::video_size(ui, focus_slot), (601, 338));
+    assert_eq!(
+        count(&image, 0..WIDTH, 0..HEIGHT, accent),
+        0,
+        "focus ring or sound badge still shown while idle"
+    );
+    let a_button = |p: &Rgba8Pixel| p.g > 150 && p.r < 150 && p.b < 120;
+    assert_eq!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button),
+        0,
+        "the hints bar is still shown while idle"
+    );
+    // Any button brings them back, at the usual size.
+    let (moved, _) = reduce(&grid, Intent::Left);
+    Update::full(view_model(&moved)).apply(ui);
+    render(ui);
+    assert!(!ui.get_mv_idle());
+    assert_eq!(htpc_ui::video_size(ui, focus_slot), (548, 308));
+
+    // Y: the chat panel takes the right 380 px, and the tiles shrink to make room.
+    let (chatting, _) = reduce(&grid, Intent::ToggleChat);
+    Update::full(view_model(&chatting)).apply(ui);
+    render(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(ui);
+    let (w, h) = htpc_ui::video_size(ui, focus_slot);
+    assert!(
+        w < 548 && w > 300 && (w * 9).abs_diff(h * 16) < 32,
+        "tile with chat: {w}x{h}"
+    );
+    assert_eq!(
+        count(&image, WIDTH - 380..WIDTH, 0..HINTS_TOP, accent),
+        0,
+        "a tile is drawn under the chat panel"
+    );
+
+    // The picker (View, *Add a stream*) slides over the right with its first row focused.
+    let (popup, _) = reduce(&grid, Intent::View);
+    Update::full(view_model(&popup)).apply(ui);
+    render(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(ui);
+    // The popup's focused row (its accent border) in the middle of the screen.
+    assert!(
+        count(&image, 360..920, 200..600, accent) > 500,
+        "the View popup is not drawn"
+    );
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0,
+        "the popup has no A in the hints bar"
+    );
+
+    // Full screen: A on the stream with sound. It fills the window; the strip is up for a moment,
+    // its thumbnails rendering small, then hidden again.
+    let mut on_sound = grid.clone();
+    on_sound.multiview.as_mut().unwrap().focus = 0;
+    let (full, _) = reduce(&on_sound, Intent::Select);
+    assert_eq!(full.screen, htpc_core::Screen::Player);
+    Update::full(view_model(&full)).apply(ui);
+    render(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    assert_eq!(htpc_ui::video_size(ui, sound_slot), (WIDTH, HEIGHT));
+    assert_eq!(
+        htpc_ui::video_size(ui, focus_slot),
+        (176, 99),
+        "no strip thumbnail"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(3_000));
+    render(ui);
+    assert_eq!(
+        htpc_ui::video_size(ui, focus_slot),
+        (0, 0),
+        "the strip stays up"
+    );
+
+    // The picker: View, then *Add a stream* (the first row).
+    let (picking, _) = reduce(&grid, Intent::View);
+    let (picking, _) = reduce(&picking, Intent::Select);
+    assert!(picking.multiview.as_ref().unwrap().picker.is_some());
+    Update::full(view_model(&picking)).apply(ui);
+    render(ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(ui);
+    assert!(
+        count(&image, WIDTH - 480..WIDTH, 140..240, accent) > 500,
+        "the picker's focused row is not drawn at the top right"
+    );
+
+    // B: back on Home with the four still picked. The tray sits in the bottom right corner,
+    // above the hints bar, with an accent border.
+    let tray = |ui: &MainWindow, s: &AppState| {
+        Update::full(view_model(s)).apply(ui);
+        render(ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        let image = render(ui);
+        count(
+            &image,
+            WIDTH - 520..WIDTH,
+            HINTS_TOP - 80..HINTS_TOP,
+            accent,
+        )
+    };
+    let (home, _) = reduce(&grid, Intent::Back);
+    assert_eq!(home.picked.len(), 4);
+    assert!(tray(ui, &home) > 200, "the tray is not drawn");
+    let mut cleared = home.clone();
+    cleared.picked.clear();
+    assert_eq!(tray(ui, &cleared), 0, "the tray shows with nothing picked");
 }

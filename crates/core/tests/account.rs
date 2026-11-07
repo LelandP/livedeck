@@ -288,7 +288,7 @@ fn a_live_followed_channel_plays_and_back_returns_to_following() {
     assert_eq!(s.screen, Screen::Player);
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if channel.login == "live0")));
+        .any(|c| matches!(c, Command::Play { slot: 0, channel, .. } if channel.login == "live0")));
 
     let (s, _) = reduce(&s, Intent::Back);
     assert_eq!(s.screen, Screen::Following);
@@ -306,7 +306,7 @@ fn an_offline_followed_channel_still_tries_to_play() {
     );
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if channel.login == "off0")));
+        .any(|c| matches!(c, Command::Play { slot: 0, channel, .. } if channel.login == "off0")));
     let join = Command::JoinChat {
         channel: ChannelRef::twitch("off0"),
     };

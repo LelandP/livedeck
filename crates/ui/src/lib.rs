@@ -9,25 +9,16 @@ slint::include_modules!();
 pub mod view_model;
 
 pub use view_model::{
-    apply_chat_image, apply_thumbnail, format_bitrate, format_fps, format_viewers,
-    readable_name_colour, room_mode_text, send_problem_text, view_model, CardVm, ChatLineKind,
-    ChatLineVm, KeyVm, PieceVm, PlaybackId, RowVm, ScreenId, Shape, Thumbnail, ToastVm, Update,
-    ViewModel, CHAT_LINES_SHOWN,
+    apply_chat_image, apply_thumbnail, format_bitrate, format_fps, format_viewers, layout_name,
+    readable_name_colour, room_mode_text, send_problem_text, show_video, video_size, view_model,
+    CardVm, ChatLineKind, ChatLineVm, KeyVm, LayoutChipVm, MultiviewVm, MvTileVm, PieceVm,
+    PlaybackId, PopupRowVm, RowVm, ScreenId, Shape, StripVm, Thumbnail, ToastVm, Update, ViewModel,
+    CHAT_LINES_SHOWN,
 };
 
-/// The size the layout is designed for, in logical px (`Theme` in `theme.slint`).
-pub const DESIGN_WIDTH: f32 = 1280.0;
-pub const DESIGN_HEIGHT: f32 = 800.0;
-
-/// The scale factor that makes the 1280x800 design fill a window of `width` x `height` physical
-/// pixels with nothing cut off: 1.0 on a Steam Deck, 1.35 on a 1080p TV, 2.7 on a 4K one. A window
-/// of another shape gets extra room on one axis. `None` for an empty (minimised) window.
-pub fn fit_scale(width: u32, height: u32) -> Option<f32> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-    Some((width as f32 / DESIGN_WIDTH).min(height as f32 / DESIGN_HEIGHT))
-}
+/// The size the layout is designed for and the scale that fits it to a window. They live in core,
+/// as multiview's tile quality depends on them too.
+pub use htpc_core::layout::{fit_scale, DESIGN_HEIGHT, DESIGN_WIDTH};
 
 #[cfg(test)]
 mod tests {

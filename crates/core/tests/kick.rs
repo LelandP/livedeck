@@ -46,7 +46,7 @@ fn home() -> AppState {
 
 fn watching_kick() -> (AppState, Vec<Command>) {
     let (s, cmds) = reduce(&home(), Intent::Select);
-    (reduce(&s, Event::PlaybackStarted).0, cmds)
+    (reduce(&s, Event::PlaybackStarted { slot: 0 }).0, cmds)
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn a_kick_stream_plays_and_joins_kick_chat_without_twitch_watches() {
     }));
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if *channel == kick)));
+        .any(|c| matches!(c, Command::Play { slot: 0, channel, .. } if *channel == kick)));
     // The hype-train watch of an earlier Twitch stream stops; nothing watches raids.
     assert!(cmds.contains(&Command::StopHypeTrain));
     assert!(!cmds.iter().any(|c| matches!(

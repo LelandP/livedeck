@@ -11,13 +11,28 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
-    Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Platform, Playback, PlayerMenuRow, Rgb,
-    RoomMode, Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift, Stream, Tile,
-    Toast, CHAT_MAX, TOASTS_SHOWN,
+    Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Platform, Playback, PlayerMenuRow,
+    RailEntry, Rgb, RoomMode, Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift,
+    Stream, Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC, TOASTS_SHOWN,
 };
-use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint::{
+    Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
+};
 
-use crate::{ChatMsg, ChatPiece, MainWindow, RowData, SearchKey, StreamItem, ToastItem};
+use crate::{
+    ChatMsg, ChatPiece, MainWindow, MosaicCell, MvLayoutChip, MvStripItem, MvTile, PopupItem,
+    RowData, SearchKey, StreamItem, ToastItem,
+};
+
+mod multiview;
+
+pub use multiview::{layout_name, LayoutChipVm, MultiviewVm, MvTileVm, PopupRowVm, StripVm};
+
+/// Players whose frames the window keeps (`tile-videos`): one per multiview stream.
+const VIDEO_SLOTS: usize = htpc_core::layout::MAX_STREAMS;
+
+/// A thumbnail of the strip over multiview's full screen, in logical px (`Theme.strip-thumb-w/h`).
+const STRIP_THUMB: (f32, f32) = (176.0, 99.0);
 
 /// Name colour for chatters who have not picked one. Matches the scaffold's mock colour.
 pub const DEFAULT_CHAT_NAME: Rgb = Rgb::new(214, 255, 58);
@@ -54,6 +69,8 @@ pub enum ScreenId {
     Settings = 4,
     /// Search: the text, the on-screen keyboard and the result rows.
     Search = 5,
+    /// Multiview's grid. Its full screen is `Player`.
+    Multiview = 6,
 }
 
 /// What the Player screen shows. The values are what `main.slint` switches on.
@@ -95,6 +112,20 @@ pub struct CardVm {
     pub offline: bool,
     /// A Kick channel: drawn with a "Kick" chip. Twitch cards have none.
     pub kick: bool,
+    /// Picked for multiview: drawn with a tick badge.
+    pub picked: bool,
+    /// Home's *Resume multiview* card: `mosaic` instead of the thumbnail, `title` says how many.
+    pub resume: bool,
+    /// The resume card's 2×2 mosaic: up to four of its streams.
+    pub mosaic: Vec<MosaicVm>,
+}
+
+/// One stream of the *Resume multiview* card's mosaic.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MosaicVm {
+    pub tint: Rgb,
+    /// Cache key of the stream preview. Empty without one.
+    pub thumb_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -136,12 +167,15 @@ pub struct ChatLineVm {
     pub pieces: Vec<PieceVm>,
 }
 
-/// A "<channel> is live" popup.
+/// A "<channel> is live" popup, or a note ("2 offline, skipped").
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToastVm {
     /// The toast's id: the window keeps each popup's element (and its animations) by it.
     pub id: i32,
+    /// The channel, or a note's whole text.
     pub name: String,
+    /// A note: `name` alone, without "is live", a preview or a second line.
+    pub note: bool,
     /// The stream title and category, as far as known.
     pub line: String,
     pub tint: Rgb,
@@ -150,7 +184,7 @@ pub struct ToastVm {
 }
 
 /// Everything `MainWindow` displays.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ViewModel {
     pub screen: ScreenId,
     pub sel_row: i32,
@@ -187,12 +221,20 @@ pub struct ViewModel {
     pub feed_empty: bool,
     /// What to say about an empty feed.
     pub empty_text: String,
-    /// What A does on the focused card: "Watch" or "Open".
+    /// What A does on the focused card: "Watch", "Open", or "Resume" (multiview).
     pub select_label: String,
     /// Something failed and X would try again.
     pub can_retry: bool,
     /// B has somewhere to go on this feed screen (only the Category screen).
     pub can_back: bool,
+    /// A stream or channel card has focus on a browse screen: View opens its popup.
+    pub can_view: bool,
+    /// What the hints bar calls that: "Multiview" on a live stream, "Favorites" on an offline
+    /// channel. Empty when `can_view` is off.
+    pub view_label: String,
+    /// The tray above the hints bar on browse screens: "Multiview · 3 picked". Empty while
+    /// nothing is picked.
+    pub tray_text: String,
     /// Focused row of the Settings screen (`SettingsRow` order: account, chat layout, quality).
     pub settings_focus: i32,
     pub chat_layout_label: String,
@@ -304,6 +346,10 @@ pub struct ViewModel {
     pub rows: Vec<RowVm>,
     pub chat: Vec<ChatLineVm>,
     pub now_playing: CardVm,
+    /// The player slot of the stream with sound: its frames are the Player screen's `video`.
+    pub video_slot: i32,
+    /// Multiview's grid, picker, strip and the View popup.
+    pub mv: MultiviewVm,
 }
 
 /// One key of an on-screen keyboard: its text and where it sits on the 10-column grid.
@@ -621,18 +667,23 @@ fn hype_permille(t: &HypeTrain) -> i32 {
     to_i32(p.min(1000) as usize)
 }
 
-fn row_title(kind: RowKind, platform: Platform, grid: bool) -> &'static str {
+fn row_title(kind: RowKind, platform: Platform, feed: &FeedId) -> &'static str {
     match kind {
         // Grid screens have a heading instead of row titles, and the hero speaks for itself.
-        _ if grid => "",
+        _ if feed.is_grid() => "",
         RowKind::Featured | RowKind::CategoryStreams => "",
         RowKind::FollowedLive => "Followed · Live",
-        RowKind::FollowedOffline => "Offline",
+        RowKind::FollowedOffline | RowKind::FavoritesOffline => "Offline",
+        // The Favorites screen's heading already says whose they are.
+        RowKind::FavoritesLive if *feed == FeedId::Favorites => "Live",
+        RowKind::FavoritesLive => "Favorites · Live",
         RowKind::TopLive if platform == Platform::Kick => "Top Live on Kick",
         RowKind::TopLive => "Top Live",
         RowKind::Categories | RowKind::SearchCategories => "Categories",
         RowKind::SearchLive => "Live channels",
         RowKind::SearchOffline => "Offline channels",
+        // Only drawn when it holds the resume card alone (Home has no other row of streams).
+        RowKind::Resume => "Multiview",
     }
 }
 
@@ -645,7 +696,10 @@ fn shape_of(kind: RowKind) -> Shape {
         | RowKind::TopLive
         | RowKind::CategoryStreams
         | RowKind::SearchLive
-        | RowKind::SearchOffline => Shape::Landscape,
+        | RowKind::SearchOffline
+        | RowKind::FavoritesLive
+        | RowKind::FavoritesOffline
+        | RowKind::Resume => Shape::Landscape,
     }
 }
 
@@ -662,9 +716,12 @@ fn stream_card(s: &Stream) -> CardVm {
     }
 }
 
-fn tile_card(tile: &Tile) -> CardVm {
+fn tile_card(state: &AppState, tile: &Tile) -> CardVm {
     match tile {
-        Tile::Stream(s) => stream_card(s),
+        Tile::Stream(s) => CardVm {
+            picked: state.is_picked(&s.channel),
+            ..stream_card(s)
+        },
         Tile::Category(c) => CardVm {
             channel: c.name.clone(),
             tint: c.tint,
@@ -676,6 +733,21 @@ fn tile_card(tile: &Tile) -> CardVm {
             tint: c.tint,
             offline: true,
             kick: c.channel.platform == Platform::Kick,
+            ..CardVm::default()
+        },
+        Tile::Resume(card) => CardVm {
+            channel: "Resume multiview".to_owned(),
+            title: format!("{} streams", card.streams.len()),
+            resume: true,
+            mosaic: card
+                .streams
+                .iter()
+                .take(RESUME_MOSAIC)
+                .map(|s| MosaicVm {
+                    tint: s.tint,
+                    thumb_url: s.thumbnail.clone().unwrap_or_default(),
+                })
+                .collect(),
             ..CardVm::default()
         },
     }
@@ -707,7 +779,9 @@ fn skeleton_rows(id: &FeedId) -> Vec<RowVm> {
             row(Shape::Hero, 1),
             row(Shape::Landscape, SKELETON_HOME_COLS),
         ],
-        FeedId::Following | FeedId::Search(_) => vec![row(Shape::Landscape, SKELETON_HOME_COLS)],
+        FeedId::Following | FeedId::Favorites | FeedId::Search(_) => {
+            vec![row(Shape::Landscape, SKELETON_HOME_COLS)]
+        }
         FeedId::Browse => vec![
             row(Shape::Portrait, grid_cols(RowKind::Categories)),
             row(Shape::Portrait, grid_cols(RowKind::Categories)),
@@ -739,8 +813,8 @@ fn push_grid_tail(rows: &mut Vec<RowVm>, cols: usize, extra: Vec<CardVm>) {
 }
 
 /// The rows to draw for a feed: its tiles, skeleton cards for what is still loading and a retry
-/// card where a page failed.
-fn feed_rows(id: &FeedId, feed: &Feed) -> Vec<RowVm> {
+/// card where a page failed. Picked streams wear a tick.
+fn feed_rows(state: &AppState, id: &FeedId, feed: &Feed) -> Vec<RowVm> {
     if feed.rows.is_empty() {
         return if feed.loading {
             skeleton_rows(id)
@@ -753,9 +827,9 @@ fn feed_rows(id: &FeedId, feed: &Feed) -> Vec<RowVm> {
         .rows
         .iter()
         .map(|r: &Row| RowVm {
-            title: row_title(r.kind, r.platform, grid).to_owned(),
+            title: row_title(r.kind, r.platform, id).to_owned(),
             shape: shape_of(r.kind),
-            cards: r.tiles.iter().map(tile_card).collect(),
+            cards: r.tiles.iter().map(|t| tile_card(state, t)).collect(),
         })
         .collect();
     if grid {
@@ -848,17 +922,19 @@ fn chat_status_text(state: &AppState) -> &'static str {
     }
 }
 
-/// Rail index of a root screen. `None` for overlays (Player, Login).
+/// Rail index of a root screen (`RailEntry` order). `None` for overlays (Player, Login).
 fn rail_slot(screen: Screen) -> Option<i32> {
-    match screen {
-        Screen::Home => Some(0),
-        Screen::Following => Some(1),
+    let entry = match screen {
+        Screen::Home => RailEntry::Home,
+        Screen::Following => RailEntry::Following,
+        Screen::Favorites => RailEntry::Favorites,
         // The category screen belongs to the Browse entry.
-        Screen::Browse | Screen::Category => Some(2),
-        Screen::Search => Some(3),
-        Screen::Settings => Some(4),
-        Screen::Player | Screen::Login => None,
-    }
+        Screen::Browse | Screen::Category => RailEntry::Browse,
+        Screen::Search => RailEntry::Search,
+        Screen::Settings => RailEntry::Settings,
+        Screen::Player | Screen::Login | Screen::Multiview => return None,
+    };
+    Some(to_i32(entry.index()))
 }
 
 fn to_i32(v: usize) -> i32 {
@@ -869,6 +945,7 @@ fn heading(state: &AppState, id: &FeedId) -> String {
     match id {
         FeedId::Home => "Live now".to_owned(),
         FeedId::Following => "Following".to_owned(),
+        FeedId::Favorites => "Favorites".to_owned(),
         FeedId::Browse => "Categories".to_owned(),
         FeedId::Category(_) => state
             .category
@@ -896,7 +973,22 @@ fn search_status(state: &AppState) -> String {
 }
 
 fn toast(t: &Toast) -> ToastVm {
-    let s = &t.stream;
+    let note = |name: String| ToastVm {
+        id: t.id as i32,
+        name,
+        note: true,
+        ..ToastVm::default()
+    };
+    let s = match &t.kind {
+        ToastKind::Live(s) => s,
+        ToastKind::OfflineSkipped(n) => return note(format!("{n} offline, skipped")),
+        ToastKind::SlowNetwork { muted: true } => {
+            return note("Slow network: lowered quality of muted streams".to_owned())
+        }
+        ToastKind::SlowNetwork { muted: false } => {
+            return note("Slow network: lowered the quality".to_owned())
+        }
+    };
     let line = match (s.title.is_empty(), s.category.is_empty()) {
         (false, false) => format!("{} · {}", s.title, s.category),
         (false, true) => s.title.clone(),
@@ -908,6 +1000,7 @@ fn toast(t: &Toast) -> ToastVm {
         line,
         tint: s.tint,
         thumb_url: s.thumbnail.clone().unwrap_or_default(),
+        note: false,
     }
 }
 
@@ -929,6 +1022,9 @@ fn key_label(key: Key) -> &'static str {
 fn empty_text(id: &FeedId) -> &'static str {
     match id {
         FeedId::Following => "You are not following anyone yet",
+        FeedId::Favorites => {
+            "No favorites yet. Press View on a channel's card, or while watching, to star it"
+        }
         // Search says it in `search_status`.
         FeedId::Search(_) => "",
         _ => "Nothing is live here right now",
@@ -977,15 +1073,34 @@ fn login_status(state: &AppState) -> String {
 pub fn view_model(state: &AppState) -> ViewModel {
     let screen = match state.screen {
         Screen::Player => ScreenId::Player,
+        Screen::Multiview => ScreenId::Multiview,
         Screen::Login => ScreenId::SignIn,
         Screen::Browse | Screen::Category => ScreenId::Grid,
         Screen::Settings => ScreenId::Settings,
         Screen::Search => ScreenId::Search,
-        // Following draws like Home: horizontal rows.
-        Screen::Home | Screen::Following => ScreenId::Home,
+        // Following and Favorites draw like Home: horizontal rows.
+        Screen::Home | Screen::Following | Screen::Favorites => ScreenId::Home,
     };
     let on_search = state.screen == Screen::Search;
     let search_on_keys = on_search && !state.search.in_results && !state.rail.focused;
+    // The screens of cards, where streams are picked for multiview.
+    let browsing = matches!(
+        state.screen,
+        Screen::Home
+            | Screen::Following
+            | Screen::Favorites
+            | Screen::Browse
+            | Screen::Category
+            | Screen::Search
+    );
+    // What View does on the focused card: multiview on a live stream, favorites on an offline
+    // channel, nothing on a category.
+    let view_label = match state.focused_tile() {
+        _ if !browsing || state.rail.focused || search_on_keys => "",
+        Some(Tile::Stream(_)) => "Multiview",
+        Some(Tile::Channel(_)) => "Favorites",
+        Some(Tile::Category(_) | Tile::Resume(_)) | None => "",
+    };
     // Overlays highlight the root screen underneath them.
     let rail_current = rail_slot(state.screen)
         .or_else(|| state.back_stack.iter().rev().find_map(|s| rail_slot(*s)))
@@ -1019,7 +1134,12 @@ pub fn view_model(state: &AppState) -> ViewModel {
         None => (String::new(), Vec::new(), 0),
     };
     let subscribe_open = subscribe_page.is_some();
-    let raid = state.raid.as_ref().filter(|_| on_player);
+    // The raid card shows over multiview's grid too: the raid is the stream with sound's.
+    let raid = state
+        .raid
+        .as_ref()
+        .filter(|_| on_player || state.screen == Screen::Multiview);
+    let mv = multiview::multiview_vm(state);
     let hype = state.hype_train.as_ref().filter(|_| on_player);
     let composing = state.composing();
     let (compose_status, compose_problem) = compose_status(state);
@@ -1034,7 +1154,12 @@ pub fn view_model(state: &AppState) -> ViewModel {
     let id = state.visible_feed_id();
     let feed = state.feed(&id);
     let (rows, focus, error, loading) = match feed {
-        Some(f) => (feed_rows(&id, f), f.focus, f.error.clone(), f.loading),
+        Some(f) => (
+            feed_rows(state, &id, f),
+            f.focus,
+            f.error.clone(),
+            f.loading,
+        ),
         None => (Vec::new(), Default::default(), None, false),
     };
     // Separate rows keep their own scroll position (see `Feed::row_cols`).
@@ -1052,9 +1177,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
     };
     let failed_page =
         feed.is_some_and(|f| f.rows.iter().any(|r| matches!(r.paging, Paging::Failed(_))));
-    let selects_category = feed
-        .and_then(Feed::focused_tile)
-        .is_some_and(|t| matches!(t, Tile::Category(_)));
+    let focused_card = feed.and_then(Feed::focused_tile);
+    let selects_category = focused_card.is_some_and(|t| matches!(t, Tile::Category(_)));
+    let selects_resume = focused_card.is_some_and(|t| matches!(t, Tile::Resume(_)));
     let (playback, playback_error) = match &state.playback {
         Playback::Idle | Playback::Loading => (PlaybackId::Loading, String::new()),
         Playback::Playing => (PlaybackId::Playing, String::new()),
@@ -1068,7 +1193,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
     };
     // On the Player screen A and X act on the stream, not on the cards underneath. On Settings,
     // A is the account action.
-    let (select_label, can_retry) = if state.screen == Screen::Settings {
+    let mv_select = multiview::select_label(state, &mv);
+    let (select_label, can_retry) = if let (Some(select), None) = (mv_select, raid) {
+        // The popup over any screen, and the grid and its picker.
+        select
+    } else if state.screen == Screen::Settings {
         let label = match state.settings_focus {
             SettingsRow::Account if state.is_signed_in() => "Sign out",
             SettingsRow::Account => "Sign in",
@@ -1110,13 +1239,21 @@ pub fn view_model(state: &AppState) -> ViewModel {
     } else if on_player {
         match playback {
             PlaybackId::Loading => ("", false),
+            // In multiview, play jumps back to live.
+            PlaybackId::Playing if state.paused && mv.active => ("Play live", false),
             PlaybackId::Playing if state.paused => ("Resume", false),
             PlaybackId::Playing => ("Pause", false),
             PlaybackId::Offline | PlaybackId::Failed => ("Retry", true),
         }
     } else {
         (
-            if selects_category { "Open" } else { "Watch" },
+            if selects_category {
+                "Open"
+            } else if selects_resume {
+                "Resume"
+            } else {
+                "Watch"
+            },
             error.is_some() || failed_page,
         )
     };
@@ -1150,6 +1287,13 @@ pub fn view_model(state: &AppState) -> ViewModel {
         feed_error: error.unwrap_or_default(),
         select_label: select_label.to_owned(),
         can_back: state.screen == Screen::Category,
+        can_view: !view_label.is_empty(),
+        view_label: view_label.to_owned(),
+        tray_text: if browsing && !state.picked.is_empty() {
+            format!("Multiview · {} picked", state.picked.len())
+        } else {
+            String::new()
+        },
         settings_focus: to_i32(state.settings_focus.index()),
         chat_layout_label: state.settings.chat_layout.label().to_owned(),
         quality_label: state.settings.quality.label().to_owned(),
@@ -1240,6 +1384,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
             .as_ref()
             .map(stream_card)
             .unwrap_or_default(),
+        video_slot: i32::from(state.sound_slot()),
+        mv,
     }
 }
 
@@ -1303,10 +1449,14 @@ thread_local! {
 /// A view-model plus which list models changed since the previous one.
 ///
 /// Built on the store thread (it is `Send`) and applied on the UI thread.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Update {
     pub vm: ViewModel,
     pub rows_changed: bool,
+    /// Multiview's lists: the picker's rows (and which are watched), the layout chips, the strip
+    /// and the popup's rows. The tiles are synced in place on every update.
+    pub picker_changed: bool,
+    pub mv_lists_changed: bool,
     pub chat_changed: bool,
     /// The QR code changed, so its image is rebuilt.
     pub qr_changed: bool,
@@ -1324,6 +1474,8 @@ impl Update {
         Self {
             vm,
             rows_changed: true,
+            picker_changed: true,
+            mv_lists_changed: true,
             chat_changed: true,
             qr_changed: true,
             subscribe_qr_changed: true,
@@ -1338,8 +1490,15 @@ impl Update {
         if *prev == next {
             return None;
         }
+        let (a, b) = (&prev.mv, &next.mv);
         Some(Self {
             rows_changed: prev.rows != next.rows,
+            picker_changed: a.picker_rows != b.picker_rows
+                || a.picker_watching != b.picker_watching
+                || a.picker_starred != b.picker_starred,
+            mv_lists_changed: a.layouts != b.layouts
+                || a.strip != b.strip
+                || a.popup_rows != b.popup_rows,
             chat_changed: prev.chat != next.chat,
             qr_changed: prev.qr != next.qr,
             subscribe_qr_changed: prev.subscribe_qr != next.subscribe_qr,
@@ -1360,8 +1519,21 @@ impl Update {
             if self.toasts_changed {
                 sync_toasts(ui, &vm.toasts, images);
             }
+            if self.picker_changed {
+                let items: Vec<StreamItem> = vm
+                    .mv
+                    .picker_rows
+                    .iter()
+                    .map(|c| to_stream_item(c, images))
+                    .collect();
+                ui.set_picker_items(ModelRc::new(VecModel::from(items)));
+                ui.set_picker_watching(ModelRc::new(VecModel::from(vm.mv.picker_watching.clone())));
+                ui.set_picker_starred(ModelRc::new(VecModel::from(vm.mv.picker_starred.clone())));
+            }
             ui.set_now_playing(to_stream_item(&vm.now_playing, images));
         });
+        apply_multiview(ui, &vm.mv, self.mv_lists_changed);
+        ui.set_video_slot(vm.video_slot);
         ui.set_toast_more(vm.toast_more);
         if self.chat_changed {
             sync_chat(ui, &vm.chat);
@@ -1391,6 +1563,9 @@ impl Update {
         ui.set_select_label(vm.select_label.into());
         ui.set_can_retry(vm.can_retry);
         ui.set_can_back(vm.can_back);
+        ui.set_can_view(vm.can_view);
+        ui.set_view_label(vm.view_label.into());
+        ui.set_tray_text(vm.tray_text.into());
         ui.set_settings_focus(vm.settings_focus);
         ui.set_chat_layout_label(vm.chat_layout_label.into());
         ui.set_quality_label(vm.quality_label.into());
@@ -1463,6 +1638,154 @@ impl Update {
     }
 }
 
+fn to_mv_tile(t: &MvTileVm) -> MvTile {
+    MvTile {
+        x: t.x,
+        y: t.y,
+        w: t.w,
+        h: t.h,
+        empty: t.empty,
+        slot: t.slot,
+        channel: t.channel.as_str().into(),
+        line: t.line.as_str().into(),
+        kick: t.kick,
+        tint: to_color(t.tint),
+        quality: t.quality.as_str().into(),
+        lowered: t.lowered,
+        sound: t.sound,
+        focused: t.focused,
+        state: t.state as i32,
+        action: t.action.as_str().into(),
+    }
+}
+
+/// Brings the window's tiles in line with `want` in place: a tile whose row is only changed
+/// keeps its element, so its move to a new place animates.
+fn sync_mv_tiles(ui: &MainWindow, want: &[MvTileVm]) {
+    let current = ui.get_mv_tiles();
+    let Some(model) = vec_model(&current) else {
+        let all: Vec<MvTile> = want.iter().map(to_mv_tile).collect();
+        ui.set_mv_tiles(ModelRc::new(VecModel::from(all)));
+        return;
+    };
+    for (i, tile) in want.iter().enumerate() {
+        let new = to_mv_tile(tile);
+        match model.row_data(i) {
+            Some(old) if old == new => {}
+            Some(_) => model.set_row_data(i, new),
+            None => model.push(new),
+        }
+    }
+    while model.row_count() > want.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+/// Multiview's properties. `lists_changed`: the layout chips, the strip or the popup's rows
+/// differ from the last update.
+fn apply_multiview(ui: &MainWindow, mv: &MultiviewVm, lists_changed: bool) {
+    sync_mv_tiles(ui, &mv.tiles);
+    if lists_changed {
+        let chips: Vec<MvLayoutChip> = mv
+            .layouts
+            .iter()
+            .map(|c| MvLayoutChip {
+                label: c.label.as_str().into(),
+                on: c.on,
+                fits: c.fits,
+            })
+            .collect();
+        ui.set_mv_layouts(ModelRc::new(VecModel::from(chips)));
+        let strip: Vec<MvStripItem> = mv
+            .strip
+            .iter()
+            .map(|s| MvStripItem {
+                slot: s.slot,
+                channel: s.channel.as_str().into(),
+                kick: s.kick,
+                on: s.on,
+            })
+            .collect();
+        ui.set_mv_strip(ModelRc::new(VecModel::from(strip)));
+        let rows: Vec<PopupItem> = mv
+            .popup_rows
+            .iter()
+            .map(|r| PopupItem {
+                label: r.label.as_str().into(),
+                value: r.value.as_str().into(),
+            })
+            .collect();
+        ui.set_popup_rows(ModelRc::new(VecModel::from(rows)));
+    }
+    ui.set_mv_active(mv.active);
+    ui.set_mv_count_text(mv.count_text.as_str().into());
+    ui.set_mv_count(mv.count);
+    ui.set_mv_position(mv.position.as_str().into());
+    ui.set_picker_open(mv.picker_open);
+    ui.set_picker_tab(mv.picker_tab);
+    ui.set_picker_focus(mv.picker_focus);
+    ui.set_picker_empty(mv.picker_empty.as_str().into());
+    ui.set_picker_star_label(mv.picker_star_label.as_str().into());
+    ui.set_popup_open(mv.popup_open);
+    ui.set_popup_title(mv.popup_title.as_str().into());
+    ui.set_popup_sub(mv.popup_sub.as_str().into());
+    ui.set_popup_focus(mv.popup_focus);
+    ui.set_popup_on_layout(mv.popup_on_layout);
+}
+
+/// Hands a player's new frame to the window: into `tile-videos` for multiview's tiles and strip,
+/// and into `video` too when it is the stream with sound. Must run on the UI thread.
+pub fn show_video(ui: &MainWindow, slot: u8, image: Image) {
+    let index = usize::from(slot);
+    if index >= VIDEO_SLOTS {
+        return;
+    }
+    let has_room = vec_model(&ui.get_tile_videos()).is_some_and(|m| m.row_count() == VIDEO_SLOTS);
+    if !has_room {
+        let blank = vec![Image::default(); VIDEO_SLOTS];
+        ui.set_tile_videos(ModelRc::new(VecModel::from(blank)));
+    }
+    if i32::from(slot) == ui.get_video_slot() {
+        ui.set_video(image.clone());
+    }
+    let videos = ui.get_tile_videos();
+    if let Some(model) = vec_model(&videos) {
+        model.set_row_data(index, image);
+    }
+}
+
+/// The size in physical pixels a player's video is drawn at now, or (0, 0) while it is not shown
+/// (it then keeps playing into a tiny target, see `htpc_player::VideoOutputs`). Must run on the UI
+/// thread.
+///
+/// - The Player screen (the single player, or multiview's full screen): the stream with sound
+///   fills the video area, and while the strip is up the others are its thumbnails.
+/// - Multiview's grid: each stream is its tile, scaled as the window draws it.
+pub fn video_size(ui: &MainWindow, slot: u8) -> (u32, u32) {
+    let scale = ui.window().scale_factor();
+    let px = |len: f32| (len * scale).round().max(0.0) as u32;
+    let slot = i32::from(slot);
+    let screen = ui.get_screen();
+    if screen == ScreenId::Player as i32 {
+        if slot == ui.get_video_slot() {
+            return (px(ui.get_video_w()), px(ui.get_video_h()));
+        }
+        if ui.get_mv_strip_visible() && ui.get_mv_strip().iter().any(|s| s.slot == slot) {
+            return (px(STRIP_THUMB.0), px(STRIP_THUMB.1));
+        }
+    } else if screen == ScreenId::Multiview as i32 {
+        let k = ui.get_mv_k();
+        if let Some(tile) = ui
+            .get_mv_tiles()
+            .iter()
+            .find(|t| !t.empty && t.slot == slot)
+        {
+            return (px(tile.w * k), px(tile.h * k));
+        }
+    }
+    (0, 0)
+}
+
 fn to_key(k: &KeyVm) -> SearchKey {
     SearchKey {
         label: k.label.as_str().into(),
@@ -1509,12 +1832,41 @@ pub fn apply_thumbnail(ui: &MainWindow, url: &str, thumb: &Thumbnail) {
             continue;
         };
         for (i, card) in row.items.iter().enumerate() {
+            // The resume card's mosaic is patched in its own model.
+            if let Some(mosaic) = vec_model(&card.mosaic) {
+                for (j, cell) in card.mosaic.iter().enumerate() {
+                    if cell.thumb_url.as_str() == url {
+                        mosaic.set_row_data(
+                            j,
+                            MosaicCell {
+                                thumbnail: image.clone(),
+                                ..cell
+                            },
+                        );
+                    }
+                }
+            }
             if card.thumb_url.as_str() == url {
                 model.set_row_data(
                     i,
                     StreamItem {
                         thumbnail: image.clone(),
                         ..card
+                    },
+                );
+            }
+        }
+    }
+    // So does the picker's.
+    let picker = ui.get_picker_items();
+    if let Some(model) = vec_model(&picker) {
+        for (i, item) in picker.iter().enumerate() {
+            if item.thumb_url.as_str() == url {
+                model.set_row_data(
+                    i,
+                    StreamItem {
+                        thumbnail: image.clone(),
+                        ..item
                     },
                 );
             }
@@ -1545,6 +1897,7 @@ fn to_toast_item(t: &ToastVm, images: &ImageMemory) -> ToastItem {
         tint: to_color(t.tint),
         thumbnail: images.get(&t.thumb_url).unwrap_or_default(),
         thumb_url: t.thumb_url.as_str().into(),
+        note: t.note,
     }
 }
 
@@ -1576,7 +1929,7 @@ fn sync_toasts(ui: &MainWindow, want: &[ToastVm], images: &ImageMemory) {
 
 fn on_screen(rows: &ModelRc<RowData>, url: &str) -> bool {
     rows.iter()
-        .any(|row| row.items.iter().any(|c| c.thumb_url.as_str() == url))
+        .any(|row| row.items.iter().any(|c| card_urls(&c).any(|u| u == url)))
 }
 
 /// The `VecModel` behind a `ModelRc`, if that is what it is. Models made here are.
@@ -1602,7 +1955,24 @@ fn to_stream_item(c: &CardVm, images: &ImageMemory) -> StreamItem {
         retry: c.retry,
         offline: c.offline,
         kick: c.kick,
+        picked: c.picked,
+        resume: c.resume,
+        mosaic: ModelRc::new(VecModel::from(
+            c.mosaic
+                .iter()
+                .map(|m| MosaicCell {
+                    tint: to_color(m.tint),
+                    thumbnail: images.get(&m.thumb_url).unwrap_or_default(),
+                    thumb_url: m.thumb_url.as_str().into(),
+                })
+                .collect::<Vec<_>>(),
+        )),
     }
+}
+
+/// The URLs of the images a card in the window shows: its thumbnail, or its mosaic's.
+fn card_urls(card: &StreamItem) -> impl Iterator<Item = slint::SharedString> + '_ {
+    std::iter::once(card.thumb_url.clone()).chain(card.mosaic.iter().map(|m| m.thumb_url))
 }
 
 /// True if the card in the window already shows `new` (the image aside, which only ever
@@ -1618,6 +1988,14 @@ fn same_card(old: &StreamItem, new: &CardVm) -> bool {
         && old.retry == new.retry
         && old.offline == new.offline
         && old.kick == new.kick
+        && old.picked == new.picked
+        && old.resume == new.resume
+        && old.mosaic.row_count() == new.mosaic.len()
+        && old
+            .mosaic
+            .iter()
+            .zip(&new.mosaic)
+            .all(|(o, n)| o.thumb_url.as_str() == n.thumb_url && o.tint == to_color(n.tint))
 }
 
 /// Quiet zone around a QR code, in modules (the specification asks for four).
@@ -2025,7 +2403,7 @@ mod tests {
         assert_eq!(vm.heading, "Categories");
         assert!(vm.rows.iter().all(|r| r.shape == Shape::Portrait));
         assert!(vm.rows.iter().all(|r| r.cards.iter().all(|c| c.loading)));
-        assert_eq!(vm.rail_current, 2);
+        assert_eq!(vm.rail_current, 3);
         assert!(!vm.can_back, "Browse is a root screen");
 
         let vm = view_model(&browse(12, Paging::End));
@@ -2054,7 +2432,7 @@ mod tests {
         assert_eq!(vm.screen, ScreenId::Grid);
         assert_eq!(vm.heading, "G");
         assert!(vm.can_back);
-        assert_eq!(vm.rail_current, 2, "the category belongs to Browse");
+        assert_eq!(vm.rail_current, 3, "the category belongs to Browse");
 
         let rows = grid_rows(RowKind::CategoryStreams, streams(4), Paging::End);
         let feed = FeedId::Category("g0".into());
@@ -2413,7 +2791,7 @@ mod tests {
         let (s, _) = reduce(&loaded(), Intent::RailPick(RailEntry::Settings));
         let vm = view_model(&s);
         assert_eq!(vm.screen, ScreenId::Settings);
-        assert_eq!(vm.rail_current, 4, "after Search");
+        assert_eq!(vm.rail_current, 5, "after Search");
         assert_eq!((vm.select_label.as_str(), vm.can_retry), ("Sign in", false));
 
         let vm = view_model(&signed_in(&s));
@@ -2525,7 +2903,7 @@ mod tests {
         let mut s = loaded();
         s.can_open_browser = can_open_browser;
         let (s, _) = reduce(&s, Intent::Select);
-        let s = reduce(&s, Event::PlaybackStarted).0;
+        let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
         (0..7).fold(reduce(&s, Intent::Menu).0, |s, _| {
             reduce(&s, Intent::Down).0
         })
@@ -2667,7 +3045,7 @@ mod tests {
             can_chat: true,
         });
         let (s, _) = reduce(&s, Intent::Select);
-        let (s, _) = reduce(&s, Event::PlaybackStarted);
+        let (s, _) = reduce(&s, Event::PlaybackStarted { slot: 0 });
         let (s, _) = reduce(&s, Intent::ToggleChat);
         let (open, _) = reduce(&s, Intent::Retry);
         let u = Update::diff(&view_model(&s), view_model(&open)).expect("opened");
