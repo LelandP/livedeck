@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use crate::{
-    ChannelResult, Credentials, FollowedChannel, Game, GqlClient, HelixClient, Page, PageRequest,
-    Result, SendOutcome, StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, Credentials, FollowedChannel, Game, GqlClient, HelixClient, HypeTrain, Page,
+    PageRequest, Result, SendOutcome, StreamInfo, TwitchApi, UserInfo,
 };
 
 #[derive(Debug)]
@@ -148,5 +148,10 @@ impl TwitchApi for HybridApi {
                 .send_chat(broadcaster_id, sender_id, text)
                 .await
         }
+    }
+
+    /// Always GQL: Helix shows hype trains to the broadcaster only.
+    async fn hype_train(&self, login: &str) -> Result<Option<HypeTrain>> {
+        self.parts.gql.hype_train(login).await
     }
 }

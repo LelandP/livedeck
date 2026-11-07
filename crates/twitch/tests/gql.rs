@@ -183,6 +183,84 @@ async fn search_needs_a_sign_in_and_sends_nothing() {
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
+/// The recorded polls of one live train (plan 09's spike): a level up between two polls, then
+/// the train gone.
+#[tokio::test]
+async fn hype_train_from_recorded_polls() {
+    let server = MockServer::start().await;
+    let api = client(&server);
+    let mut got = Vec::new();
+    for name in [
+        "gql_hype_train_level1.json",
+        "gql_hype_train_level2.json",
+        "gql_hype_train_ended.json",
+        "gql_hype_train_none.json",
+    ] {
+        server.reset().await;
+        Mock::given(body_partial_json(
+            json!({ "variables": { "login": "zackrawrr" } }),
+        ))
+        .and(body_string_contains("hypeTrain"))
+        .respond_with(ok(&format!("spikes/{name}")))
+        .expect(1)
+        .mount(&server)
+        .await;
+        got.push(api.hype_train("zackrawrr").await.unwrap());
+    }
+    let one = got[0].as_ref().expect("a train at level 1");
+    assert_eq!(
+        (one.level, one.progress, one.goal, one.seconds_left),
+        (1, 1501, 1600, 211)
+    );
+    assert_eq!(one.all_time_high, 62);
+    let two = got[1].as_ref().expect("a train at level 2");
+    assert_eq!(
+        (two.level, two.progress, two.goal, two.seconds_left),
+        (2, 401, 1800, 297)
+    );
+    assert_eq!(one.id, two.id, "the same train");
+    assert_eq!(got[2], None, "ended");
+    assert_eq!(got[3], None, "never ran");
+}
+
+#[tokio::test]
+async fn an_ended_train_still_listed_counts_as_none() {
+    let server = MockServer::start().await;
+    Mock::given(path("/gql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "data": { "user": { "channel": {
+                "hypeTrain": { "execution": {
+                    "id": "t", "isActive": false, "endedAt": "2026-11-06T20:45:48Z",
+                    "progress": { "level": { "value": 3 }, "goal": 2000, "progression": 10,
+                        "remainingSeconds": 0 },
+                    "allTimeHigh": null
+                } }
+            } } } }),
+        ))
+        .mount(&server)
+        .await;
+    assert_eq!(client(&server).hype_train("x").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn hype_train_of_an_unknown_channel_is_none() {
+    let server = MockServer::start().await;
+    Mock::given(path("/gql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "user": null } })))
+        .mount(&server)
+        .await;
+    assert_eq!(client(&server).hype_train("nobody").await.unwrap(), None);
+}
+
+/// Hits the real gql.twitch.tv. Run by hand to check the hype train query still validates
+/// (the answer is usually `None`: few channels have a train at any moment).
+#[tokio::test]
+#[ignore = "network: real Twitch GQL"]
+async fn live_hype_train_query() {
+    let api = GqlClient::new().unwrap();
+    api.hype_train("xqc").await.unwrap();
+}
+
 /// Hits the real gql.twitch.tv. Run by hand to detect schema / client-ID changes:
 /// `cargo test -p htpc-twitch-api --test gql -- --ignored live_`
 #[tokio::test]

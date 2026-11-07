@@ -1,7 +1,7 @@
 //! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
 
 use crate::domain::{
-    ChatMessage, ChatStatus, DeviceCode, FeedId, LoginProblem, Moderation, PlayerStats,
+    ChatMessage, ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation, PlayerStats,
     RoomModeChange, Row, RowKind, SendProblem, Stream, Tile, User,
 };
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
@@ -133,6 +133,12 @@ pub enum Command {
     /// Count the raid offer `id` down from `seconds`: `Event::RaidTick` every second, then
     /// `Event::RaidCountdownDone`. Replaces any running countdown.
     StartRaidCountdown { id: u32, seconds: u8 },
+    /// Watch `channel` for hype trains, replacing the channel watched so far. Signed in or not
+    /// (the website's GQL API shows them to anyone). The app checks about once a minute, and every
+    /// 10 s while a train runs. Answered over time with `Event::HypeTrain` whenever it changes.
+    WatchHypeTrain { channel: String },
+    /// Stop watching for hype trains (the player was left): no more requests.
+    StopHypeTrain,
     /// Look up the live stream of `channel` (title, category, viewers) and its user id. Answered
     /// with `Event::StreamInfo`, or nothing if the lookup fails.
     FetchStreamInfo { channel: String },
@@ -293,6 +299,12 @@ pub enum Event {
     /// The raid countdown `id` ran out: follow the raid.
     RaidCountdownDone {
         id: u32,
+    },
+    /// The hype train in `channel` now: `None` when none runs (any more). Ignored unless
+    /// `channel` is the one on screen.
+    HypeTrain {
+        channel: String,
+        train: Option<HypeTrain>,
     },
     /// The answer to `FetchStreamInfo`: what Twitch knows of the channel. A channel that is not
     /// live has an empty title and category. Ignored unless it is the channel on screen.

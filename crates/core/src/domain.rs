@@ -309,6 +309,20 @@ pub struct User {
     pub can_chat: bool,
 }
 
+/// A hype train running in the channel on screen, as of the last poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HypeTrain {
+    /// The level being worked on, from 1.
+    pub level: u32,
+    /// Points gathered toward the next level, counted from the start of this one.
+    pub progress: u32,
+    /// Points this level needs. At least 1.
+    pub goal: u32,
+    /// Seconds before it ends at the time of the poll, unless the next level comes first. The
+    /// window counts down from it between polls.
+    pub seconds_left: u32,
+}
+
 /// Who may write in the chat on screen, as the chat server last said (`ROOMSTATE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RoomMode {

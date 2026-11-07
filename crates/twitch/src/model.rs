@@ -127,6 +127,25 @@ pub struct DropReason {
     pub message: String,
 }
 
+/// A hype train running in a channel, as the website's GQL API shows it to any viewer (Helix only
+/// shows it to the broadcaster). Points are Twitch's hype points (bits, subs, gift subs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HypeTrain {
+    /// Twitch's id of this train. It stays the same across its levels.
+    pub id: String,
+    /// The level being worked on, from 1.
+    pub level: u32,
+    /// Points gathered toward the next level, counted from the start of this one.
+    pub progress: u32,
+    /// Points this level needs. At least 1.
+    pub goal: u32,
+    /// Seconds before the train ends, unless the next level is reached first (each level up
+    /// restarts the clock).
+    pub seconds_left: u32,
+    /// The channel's highest level ever.
+    pub all_time_high: u32,
+}
+
 /// A Twitch user (`GET /users`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UserInfo {

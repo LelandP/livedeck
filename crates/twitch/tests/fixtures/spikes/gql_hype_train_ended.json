@@ -1,0 +1,18 @@
+{
+    "data":  {
+                 "user":  {
+                              "id":  "552120296",
+                              "login":  "zackrawrr",
+                              "channel":  {
+                                              "hypeTrain":  {
+                                                                "execution":  null,
+                                                                "approaching":  null
+                                                            }
+                                          }
+                          }
+             },
+    "extensions":  {
+                       "durationMilliseconds":  34,
+                       "requestID":  "01M6S9RJ63RHNSZ1JGTJJ488YM"
+                   }
+}

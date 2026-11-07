@@ -128,7 +128,14 @@ fn answers_for_another_channel_are_dropped() {
 fn late_answers_after_leaving_are_dropped() {
     let (s, _) = watching();
     let (s, cmds) = reduce(&s, Intent::Back);
-    assert_eq!(cmds, vec![Command::StopPlayback, Command::LeaveChat]);
+    assert_eq!(
+        cmds,
+        vec![
+            Command::StopPlayback,
+            Command::LeaveChat,
+            Command::StopHypeTrain
+        ]
+    );
     assert_eq!(s.playback, Playback::Idle);
     for e in [
         Event::PlaybackStarted,

@@ -127,6 +127,12 @@ export component MainWindow inherits Window {
     in property <string> raid-title: "";
     in property <string> raid-viewers: "";
     in property <int> raid-seconds: 0;
+    // The hype train bar at the top of the video, while a train runs in the channel on screen.
+    in property <bool> hype-open: false;
+    in property <int> hype-level: 0;
+    in property <int> hype-permille: 0;
+    in property <string> hype-points: "";
+    in property <int> hype-seconds: 0;
     // Writing in chat over the stream (see player.slint's PlayerScreen).
     in property <bool> compose-open: false;
     in property <bool> compose-needs-sign-in: false;
@@ -340,6 +346,11 @@ export component MainWindow inherits Window {
         raid-title: root.raid-title;
         raid-viewers: root.raid-viewers;
         raid-seconds: root.raid-seconds;
+        hype-open: root.hype-open;
+        hype-level: root.hype-level;
+        hype-permille: root.hype-permille;
+        hype-points: root.hype-points;
+        hype-seconds: root.hype-seconds;
         compose-open: root.compose-open;
         compose-needs-sign-in: root.compose-needs-sign-in;
         compose-text: root.compose-text;

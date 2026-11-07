@@ -39,8 +39,8 @@ pub use gql::{GqlClient, GQL_MAX_PAGE_SIZE, GQL_URL, WEB_CLIENT_ID};
 pub use helix::{Credentials, HelixClient, DEFAULT_BASE_URL};
 pub use hybrid::HybridApi;
 pub use model::{
-    ChannelResult, DropReason, FollowedChannel, Game, Page, PageRequest, SendOutcome, StreamInfo,
-    UserInfo, MAX_PAGE_SIZE,
+    ChannelResult, DropReason, FollowedChannel, Game, HypeTrain, Page, PageRequest, SendOutcome,
+    StreamInfo, UserInfo, MAX_PAGE_SIZE,
 };
 pub use ratelimit::{Bucket, RateLimiter, RetryPolicy};
 pub use refreshing::{Refresher, RefreshingApi};
@@ -119,6 +119,15 @@ pub trait TwitchApi: Send + Sync + 'static {
     ) -> impl Future<Output = Result<SendOutcome>> + Send {
         let _ = (broadcaster_id, sender_id, text);
         async { Err(Error::NotSignedIn) }
+    }
+
+    /// The hype train running in the channel `login`, or `Ok(None)` when none runs (or there is
+    /// no such channel). Only the website's unofficial GQL API lets a viewer read it: Helix needs
+    /// the broadcaster's own token, so the default answers `Ok(None)` without a request, and
+    /// [`HybridApi`] always asks GQL, signed in or not.
+    fn hype_train(&self, login: &str) -> impl Future<Output = Result<Option<HypeTrain>>> + Send {
+        let _ = login;
+        async { Ok(None) }
     }
 }
 

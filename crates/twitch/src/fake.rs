@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    ChannelResult, DropReason, Error, FollowedChannel, Game, Page, PageRequest, Result,
+    ChannelResult, DropReason, Error, FollowedChannel, Game, HypeTrain, Page, PageRequest, Result,
     SendOutcome, StreamInfo, TwitchApi, UserInfo,
 };
 
@@ -25,6 +25,8 @@ pub struct FakeApi {
     pub chat_sent: Arc<Mutex<Vec<(String, String)>>>,
     /// Drop every chat message with this reason instead of posting it.
     pub chat_drop: Option<DropReason>,
+    /// The hype trains running, by channel login.
+    pub hype_trains: Vec<(String, HypeTrain)>,
 }
 
 impl FakeApi {
@@ -208,6 +210,14 @@ impl TwitchApi for FakeApi {
             sent: true,
             drop_reason: None,
         })
+    }
+
+    async fn hype_train(&self, login: &str) -> Result<Option<HypeTrain>> {
+        Ok(self
+            .hype_trains
+            .iter()
+            .find(|(l, _)| l.eq_ignore_ascii_case(login))
+            .map(|(_, t)| t.clone()))
     }
 }
 

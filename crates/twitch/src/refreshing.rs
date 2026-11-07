@@ -9,7 +9,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::{
-    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, Result, SendOutcome,
+    ChannelResult, Error, FollowedChannel, Game, HypeTrain, Page, PageRequest, Result, SendOutcome,
     StreamInfo, TwitchApi, UserInfo,
 };
 
@@ -124,5 +124,9 @@ impl<A: TwitchApi, R: Refresher> TwitchApi for RefreshingApi<A, R> {
     ) -> Result<SendOutcome> {
         self.with_refresh(|| self.inner.send_chat(broadcaster_id, sender_id, text))
             .await
+    }
+
+    async fn hype_train(&self, login: &str) -> Result<Option<HypeTrain>> {
+        self.with_refresh(|| self.inner.hype_train(login)).await
     }
 }

@@ -19,6 +19,7 @@ use htpc_resolver::StreamResolver;
 
 use crate::awake::KeepAwake;
 use crate::chat::Chat;
+use crate::hype_train::HypeWatch;
 use crate::live_watch::LiveWatch;
 use crate::playback::Playback;
 use crate::provider::Provider;
@@ -116,6 +117,8 @@ pub struct Store<P, R, S> {
     searcher: Searcher,
     /// Watches for followed channels going live, and times the toasts.
     live_watch: LiveWatch,
+    /// Watches the channel on screen for hype trains.
+    hype_watch: HypeWatch,
     sink: S,
     tx: UnboundedSender<Msg>,
     downloads: Arc<Semaphore>,
@@ -148,6 +151,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             session,
             searcher: Searcher::default(),
             live_watch: LiveWatch::default(),
+            hype_watch: HypeWatch::default(),
             sink,
             tx,
             downloads: Arc::new(Semaphore::new(THUMBNAIL_CONCURRENCY)),
@@ -301,6 +305,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             }
             if LiveWatch::handles(&cmd) {
                 self.live_watch
+                    .execute(Arc::clone(&self.provider), self.tx.clone(), cmd);
+                continue;
+            }
+            if HypeWatch::handles(&cmd) {
+                self.hype_watch
                     .execute(Arc::clone(&self.provider), self.tx.clone(), cmd);
                 continue;
             }

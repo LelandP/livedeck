@@ -492,6 +492,9 @@ fn category_streams_load_as_a_grid_and_play_on_select() {
             Command::JoinChat {
                 channel: "s1".into()
             },
+            Command::WatchHypeTrain {
+                channel: "s1".into()
+            },
             Command::Play {
                 channel: "s1".into(),
                 stream: StreamKind::Video(Quality::Best),

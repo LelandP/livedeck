@@ -309,6 +309,89 @@ component AudioWatermark inherits Rectangle {
     }
 }
 
+// The hype train bar: level, points toward the next level, and the time left. The app checks every
+// 10 s; in between, the time left counts down here with a 1 s Timer (not `animation-tick()`, which
+// would redraw at full frame rate). Each check sets it again. A level up glows once.
+component HypeBar inherits Rectangle {
+    in property <int> level;
+    in property <int> permille;
+    in property <string> points;
+    in property <int> seconds;
+    property <int> left: root.seconds;
+    property <bool> glow: false;
+
+    changed seconds => { root.left = root.seconds; }
+    changed level => { root.glow = true; }
+
+    Timer {
+        interval: 1s;
+        running: root.left > 0;
+        triggered => { root.left -= 1; }
+    }
+    Timer {
+        interval: 900ms;
+        running: root.glow;
+        triggered => { root.glow = false; }
+    }
+
+    height: bar-layout.preferred-height;
+    border-radius: 10px;
+    border-width: 2px;
+    border-color: root.glow ? Theme.accent-light : Theme.surface-high;
+    background: root.glow ? #2a1f3df0 : #18181be0;
+    animate border-color, background { duration: Theme.t-med; }
+
+    bar-layout := VerticalLayout {
+        padding: 12px;
+        padding-top: 10px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "HYPE TRAIN";
+                color: Theme.accent-light;
+                font-size: Theme.fs-small;
+                font-weight: 800;
+                letter-spacing: 3px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "Level " + root.level;
+                color: Theme.text;
+                font-size: Theme.fs-body;
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: floor(root.left / 60) + ":" + (mod(root.left, 60) < 10 ? "0" : "") + mod(root.left, 60);
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            height: 6px;
+            border-radius: 3px;
+            background: #ffffff1f;
+            Rectangle {
+                x: 0px;
+                height: parent.height;
+                width: parent.width * root.permille / 1000;
+                border-radius: 3px;
+                background: Theme.accent;
+                animate width { duration: Theme.t-med; easing: ease-out; }
+            }
+        }
+        Text {
+            text: root.points;
+            color: Theme.muted;
+            font-size: Theme.fs-small;
+            horizontal-alignment: right;
+        }
+    }
+}
+
 // Chat is a side panel (the video shrinks to make room) or an overlay (lines over the video).
 export component PlayerScreen inherits Rectangle {
     in property <StreamItem> stream;
@@ -350,6 +433,12 @@ export component PlayerScreen inherits Rectangle {
     in property <string> raid-title: "";
     in property <string> raid-viewers: "";
     in property <int> raid-seconds: 0;
+    // The hype train bar (view_model.rs `hype_*`), while a train runs in this channel.
+    in property <bool> hype-open: false;
+    in property <int> hype-level: 0;
+    in property <int> hype-permille: 0;
+    in property <string> hype-points: "";
+    in property <int> hype-seconds: 0;
     // Writing in chat (view_model.rs `compose_*`): the panel, its keys and quick messages, the
     // message so far, its state, the room's rules, and the line shown under the chat otherwise.
     in property <bool> compose-open: false;
@@ -527,6 +616,20 @@ export component PlayerScreen inherits Rectangle {
                     wrap: word-wrap;
                 }
             }
+        }
+
+        // Hype train: top centre, but right of the stats box when it is on and left of an open
+        // chat overlay. It stays up while the train runs, whatever the HUD does.
+        if root.hype-open && root.playback == 1 : HypeBar {
+            property <length> left-edge: root.stats-text != "" ? Theme.safe-x / 2 + (root.menu-open ? Theme.menu-w + 16px : 0px) + Theme.stats-w + 16px : 16px;
+            property <length> right-edge: parent.width - (root.chat-open && root.chat-overlay ? Theme.chat-overlay-w : 0px) - 16px;
+            width: max(0px, min(420px, self.right-edge - self.left-edge));
+            x: max(self.left-edge, (16px + self.right-edge - self.width) / 2);
+            y: 24px;
+            level: root.hype-level;
+            permille: root.hype-permille;
+            points: root.hype-points;
+            seconds: root.hype-seconds;
         }
 
         // Player menu: bottom left, just above the HUD text. Up/Down pick a row, Left/Right change

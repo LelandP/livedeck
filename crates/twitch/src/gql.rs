@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
-    ChannelResult, Error, FollowedChannel, Game, Page, PageRequest, RateLimiter, Result,
+    ChannelResult, Error, FollowedChannel, Game, HypeTrain, Page, PageRequest, RateLimiter, Result,
     RetryPolicy, StreamInfo, TwitchApi, UserInfo,
 };
 
@@ -48,6 +48,78 @@ const GAMES_QUERY: &str = "query($first: Int!) { games(first: $first) { edges { 
 
 const USER_QUERY: &str = "query($login: String!) { user(login: $login) { \
     id login displayName profileImageURL(width: 300) } }";
+
+/// The website's hype train banner data. Verified 2026-11-06 on a live train: it answers
+/// anonymously, `execution` is `null` when no train runs (also straight after one ends), and
+/// level and progress change from one 10 s poll to the next. (`hypeTrain.config` needs a sign-in,
+/// so it is not asked for.)
+const HYPE_TRAIN_QUERY: &str = "query($login: String!) { user(login: $login) { channel { \
+    hypeTrain { execution { id isActive endedAt \
+    progress { level { value } goal progression remainingSeconds } \
+    allTimeHigh { level { value } } } } } } }";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HypeTrainExecution {
+    id: String,
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    ended_at: Option<String>,
+    progress: HypeTrainProgress,
+    #[serde(default)]
+    all_time_high: Option<HypeTrainRecord>,
+}
+
+/// `progression` and `goal` count within the current level; the website also sends `total`
+/// (every point since the start), which the bar does not need.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HypeTrainProgress {
+    level: HypeTrainLevel,
+    #[serde(default)]
+    goal: u32,
+    #[serde(default)]
+    progression: u32,
+    #[serde(default)]
+    remaining_seconds: u32,
+}
+
+#[derive(Deserialize)]
+struct HypeTrainLevel {
+    #[serde(default)]
+    value: u32,
+}
+
+#[derive(Deserialize)]
+struct HypeTrainRecord {
+    level: HypeTrainLevel,
+}
+
+impl HypeTrainExecution {
+    /// `None` for a train that has ended but is still listed.
+    fn into_train(self) -> Option<HypeTrain> {
+        if !self.is_active || self.ended_at.is_some() {
+            return None;
+        }
+        let p = self.progress;
+        Some(HypeTrain {
+            id: self.id,
+            level: p.level.value.max(1),
+            progress: p.progression,
+            goal: p.goal.max(1),
+            seconds_left: p.remaining_seconds,
+            all_time_high: self.all_time_high.map_or(0, |r| r.level.value),
+        })
+    }
+}
+
+/// The hype train in a GQL answer to [`HYPE_TRAIN_QUERY`].
+fn hype_train_of(data: &Value) -> Result<Option<HypeTrain>> {
+    let exec: Option<HypeTrainExecution> =
+        at(data, &["user", "channel", "hypeTrain", "execution"])?;
+    Ok(exec.and_then(HypeTrainExecution::into_train))
+}
 
 /// `{ "data": ..., "errors": [...] }`.
 #[derive(Deserialize)]
@@ -380,6 +452,13 @@ impl TwitchApi for GqlClient {
     /// See [`GqlClient::search_channels`].
     async fn search_categories(&self, _query: &str, _page: PageRequest) -> Result<Page<Game>> {
         Err(Error::NotSignedIn)
+    }
+
+    async fn hype_train(&self, login: &str) -> Result<Option<HypeTrain>> {
+        let data = self
+            .query(HYPE_TRAIN_QUERY, json!({ "login": login }))
+            .await?;
+        hype_train_of(&data)
     }
 
     /// Only search uses it, and search needs a sign-in.

@@ -12,6 +12,7 @@ mod awake;
 mod browser;
 mod chat;
 mod chat_limit;
+mod hype_train;
 mod live_watch;
 mod mock;
 mod playback;
@@ -92,6 +93,10 @@ CHAT:
 RAIDS:
   Signed in, the channel on screen is watched for raids over Twitch EventSub
   (eventsub.wss.twitch.tv). A raid opens a 10-second countdown to follow it.
+
+HYPE TRAINS:
+  The channel on screen is checked for a hype train over the website's GQL API
+  (gql.twitch.tv), signed in or not: once a minute, every 10 s while one runs.
 
 CONFIG:
   config.toml (chat_layout, quality, live_notifications, background_play, image_cache_max_mb,

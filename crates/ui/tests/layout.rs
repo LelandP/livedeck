@@ -454,6 +454,37 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the bar is not empty after 10 s"
     );
 
+    // Hype train: a slim bar at the top of the video, filled (`Theme.accent`) as far as the level
+    // has come, and gone once the train ends.
+    let mut hyped = raided.clone();
+    hyped.raid = None;
+    hyped.hype_train = Some(htpc_core::HypeTrain {
+        level: 3,
+        progress: 1_500,
+        goal: 2_000,
+        seconds_left: 125,
+    });
+    Update::full(view_model(&hyped)).apply(&ui);
+    render(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    let top = (0..WIDTH, 0..160);
+    let filled = count(&image, top.0.clone(), top.1.clone(), bar);
+    assert!(filled > 500, "the hype train bar is not drawn: {filled}");
+    assert_eq!(
+        count(&image, 0..WIDTH, 300..HINTS_TOP, bar),
+        0,
+        "the hype train bar is not at the top"
+    );
+    hyped.hype_train = None;
+    Update::full(view_model(&hyped)).apply(&ui);
+    let image = render(&ui);
+    assert_eq!(
+        count(&image, top.0, top.1, bar),
+        0,
+        "the hype train bar stays after the train"
+    );
+
     // Search: the keyboard lays out under the text field with its focused key (`Theme.accent`, a
     // strong violet) top left, and the first result row is fully in view under it. With the
     // results focused, the keyboard slides away and the rows move up.

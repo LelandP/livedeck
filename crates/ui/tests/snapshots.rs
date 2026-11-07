@@ -450,6 +450,60 @@ fn raid_card_counts_down_then_follows() {
     insta::assert_snapshot!(out);
 }
 
+fn hype_lines(vm: &ViewModel) -> String {
+    format!(
+        "screen={:?} channel={:?} hype_open={} level={} permille={} points={:?} seconds={}\n",
+        vm.screen,
+        vm.now_playing.channel,
+        vm.hype_open,
+        vm.hype_level,
+        vm.hype_permille,
+        vm.hype_points,
+        vm.hype_seconds,
+    )
+}
+
+#[test]
+fn hype_train_bar_follows_the_polls() {
+    let (s, _) = reduce(&home_loaded(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted).0;
+    let channel = s.now_playing.as_ref().unwrap().channel.clone();
+    let hype = |level, progress, goal, seconds_left| Event::HypeTrain {
+        channel: channel.clone(),
+        train: Some(htpc_core::HypeTrain {
+            level,
+            progress,
+            goal,
+            seconds_left,
+        }),
+    };
+    let mut out = String::from("-- playing\n");
+    out += &hype_lines(&view_model(&s));
+    let s = reduce(&s, hype(1, 1_501, 1_600, 211)).0;
+    out += "-- level 1\n";
+    out += &hype_lines(&view_model(&s));
+    let s = reduce(&s, hype(2, 401, 1_800, 297)).0;
+    out += "-- level up\n";
+    out += &hype_lines(&view_model(&s));
+    let s = reduce(&s, hype(2, 2_000, 1_800, 12)).0;
+    out += "-- overshoot is drawn full\n";
+    out += &hype_lines(&view_model(&s));
+    let ended = reduce(
+        &s,
+        Event::HypeTrain {
+            channel: channel.clone(),
+            train: None,
+        },
+    )
+    .0;
+    out += "-- ended\n";
+    out += &hype_lines(&view_model(&ended));
+    let (left, _) = reduce(&s, Intent::Back);
+    out += "-- left the player\n";
+    out += &hype_lines(&view_model(&left));
+    insta::assert_snapshot!(out);
+}
+
 fn search_lines(vm: &ViewModel) -> String {
     let mut out = format!(
         "query={:?} key={} on_keys={} in_results={} select={:?} retry={} status={:?}\n",

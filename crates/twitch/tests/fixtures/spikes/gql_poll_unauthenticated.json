@@ -1,0 +1,1 @@
+{"errors":[{"message":"unauthenticated","path":["user","latestPoll"],"extensions":{"code":"Unauthenticated"}}],"data":{"user":{"latestPoll":null}},"extensions":{"durationMilliseconds":8,"requestID":"01M6S4YJM5M1WFK6MNW15K1TVE"}}

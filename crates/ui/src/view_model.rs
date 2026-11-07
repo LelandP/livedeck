@@ -11,9 +11,9 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
-    Feed, FeedId, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, RoomMode, Row, RowKind,
-    Screen, SearchState, SendProblem, SettingsRow, Shift, Stream, Tile, Toast, CHAT_MAX,
-    TOASTS_SHOWN,
+    Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, RoomMode,
+    Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift, Stream, Tile, Toast,
+    CHAT_MAX, TOASTS_SHOWN,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
@@ -248,6 +248,16 @@ pub struct ViewModel {
     pub raid_viewers: String,
     /// Whole seconds left before following.
     pub raid_seconds: i32,
+    /// A hype train runs in the channel on screen: the bar at the top of the video.
+    pub hype_open: bool,
+    /// The level being worked on. 0 without a train.
+    pub hype_level: i32,
+    /// How full the bar is toward the next level, in thousandths (0..=1000).
+    pub hype_permille: i32,
+    /// "1,250 / 2,000". Empty without a train.
+    pub hype_points: String,
+    /// Seconds left at the last check. The window counts down from it on its own.
+    pub hype_seconds: i32,
     /// The Search screen's text as typed.
     pub search_query: String,
     /// The focused key, as an index into `htpc_core::keyboard::layout()`.
@@ -588,6 +598,13 @@ fn raid_viewers(viewers: u64) -> String {
         1 => "with 1 viewer".to_owned(),
         n => format!("with {} viewers", format_count(n)),
     }
+}
+
+/// How full the hype train bar is, in thousandths. Never past full: a level can be overshot
+/// for a moment before Twitch moves on to the next.
+fn hype_permille(t: &HypeTrain) -> i32 {
+    let p = u64::from(t.progress) * 1000 / u64::from(t.goal.max(1));
+    to_i32(p.min(1000) as usize)
 }
 
 fn row_title(kind: RowKind, grid: bool) -> &'static str {
@@ -986,6 +1003,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
     };
     let subscribe_open = subscribe_page.is_some();
     let raid = state.raid.as_ref().filter(|_| on_player);
+    let hype = state.hype_train.as_ref().filter(|_| on_player);
     let composing = state.composing();
     let (compose_status, compose_problem) = compose_status(state);
     // The keys are only built while they are on screen, so the diff stays quiet otherwise.
@@ -1145,6 +1163,19 @@ pub fn view_model(state: &AppState) -> ViewModel {
             .unwrap_or_default(),
         raid_viewers: raid.map(|r| raid_viewers(r.viewers)).unwrap_or_default(),
         raid_seconds: raid.map_or(0, |r| i32::from(r.seconds_left)),
+        hype_open: hype.is_some(),
+        hype_level: hype.map_or(0, |t| to_i32(t.level as usize)),
+        hype_permille: hype.map_or(0, hype_permille),
+        hype_points: hype
+            .map(|t| {
+                format!(
+                    "{} / {}",
+                    format_count(u64::from(t.progress)),
+                    format_count(u64::from(t.goal))
+                )
+            })
+            .unwrap_or_default(),
+        hype_seconds: hype.map_or(0, |t| to_i32(t.seconds_left as usize)),
         search_query: state.search.query.clone(),
         search_key_focus: to_i32(state.search.keys.index()),
         search_on_keys,
@@ -1374,6 +1405,11 @@ impl Update {
         ui.set_raid_title(vm.raid_title.into());
         ui.set_raid_viewers(vm.raid_viewers.into());
         ui.set_raid_seconds(vm.raid_seconds);
+        ui.set_hype_open(vm.hype_open);
+        ui.set_hype_level(vm.hype_level);
+        ui.set_hype_permille(vm.hype_permille);
+        ui.set_hype_points(vm.hype_points.into());
+        ui.set_hype_seconds(vm.hype_seconds);
         // The keys never change, so they are handed over once (recreating them would restart
         // their focus animations on every update).
         if ui.get_search_keys().row_count() == 0 {

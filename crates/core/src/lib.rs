@@ -15,7 +15,7 @@ pub mod state;
 pub use chat::{ChatBuffer, CHAT_CAPACITY};
 pub use domain::{
     grid_cols, grid_rows, Category, Channel, ChatKind, ChatMessage, ChatSpan, ChatStatus,
-    DeviceCode, FeedId, LoginProblem, Moderation, Paging, PlayerStats, Rgb, RoomMode,
+    DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation, Paging, PlayerStats, Rgb, RoomMode,
     RoomModeChange, Row, RowKind, SendProblem, Stream, Tile, User,
 };
 pub use keyboard::{Board, Key, KeySlot, KeyboardState, Shift, CHAT_MAX};

@@ -449,6 +449,9 @@ fn select_stream_opens_player_and_joins_chat() {
             Command::JoinChat {
                 channel: "t1".into()
             },
+            Command::WatchHypeTrain {
+                channel: "t1".into()
+            },
             Command::Play {
                 channel: "t1".into(),
                 stream: StreamKind::Video(Quality::Best),
@@ -484,7 +487,7 @@ fn pick_moves_focus_and_plays() {
     assert_eq!(s.home.focus, Focus { row: 0, col: 3 });
     assert_eq!(s.screen, Screen::Player);
     assert!(!s.rail.focused);
-    assert_eq!(cmds.len(), 2, "join chat and play");
+    assert_eq!(cmds.len(), 3, "join chat, watch for hype trains and play");
 }
 
 #[test]
@@ -507,7 +510,14 @@ fn back_from_player_closes_chat_and_returns_home() {
     assert!(s.now_playing.is_none());
     assert!(s.chat.is_empty());
     assert!(s.back_stack.is_empty());
-    assert_eq!(cmds, vec![Command::StopPlayback, Command::LeaveChat]);
+    assert_eq!(
+        cmds,
+        vec![
+            Command::StopPlayback,
+            Command::LeaveChat,
+            Command::StopHypeTrain
+        ]
+    );
     // Focus is kept, so the user lands on the card they watched.
     assert_eq!(s.home.focus, Focus { row: 0, col: 1 });
 }

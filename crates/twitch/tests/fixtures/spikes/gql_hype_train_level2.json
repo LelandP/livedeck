@@ -1,0 +1,41 @@
+{
+    "data":  {
+                 "user":  {
+                              "id":  "552120296",
+                              "login":  "zackrawrr",
+                              "channel":  {
+                                              "hypeTrain":  {
+                                                                "execution":  {
+                                                                                  "id":  "22c36cd4-61b4-47c2-874b-554973033f8a",
+                                                                                  "isActive":  true,
+                                                                                  "startedAt":  "2026-11-06T20:39:12.063659169Z",
+                                                                                  "expiresAt":  "2026-11-06T20:45:48.435633785Z",
+                                                                                  "endedAt":  null,
+                                                                                  "updatedAt":  "2026-11-06T20:40:48.43563644Z",
+                                                                                  "isFastMode":  false,
+                                                                                  "progress":  {
+                                                                                                   "level":  {
+                                                                                                                 "value":  2,
+                                                                                                                 "goal":  3400
+                                                                                                             },
+                                                                                                   "goal":  1800,
+                                                                                                   "total":  2001,
+                                                                                                   "remainingSeconds":  297,
+                                                                                                   "progression":  401
+                                                                                               },
+                                                                                  "allTimeHigh":  {
+                                                                                                      "level":  {
+                                                                                                                    "value":  62
+                                                                                                                }
+                                                                                                  }
+                                                                              },
+                                                                "approaching":  null
+                                                            }
+                                          }
+                          }
+             },
+    "extensions":  {
+                       "durationMilliseconds":  33,
+                       "requestID":  "01M6S9FEWY80H9RSGM930YFCXX"
+                   }
+}

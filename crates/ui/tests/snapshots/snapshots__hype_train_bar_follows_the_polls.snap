@@ -1,0 +1,16 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- playing
+screen=Player channel="grandmaster_k" hype_open=false level=0 permille=0 points="" seconds=0
+-- level 1
+screen=Player channel="grandmaster_k" hype_open=true level=1 permille=938 points="1,501 / 1,600" seconds=211
+-- level up
+screen=Player channel="grandmaster_k" hype_open=true level=2 permille=222 points="401 / 1,800" seconds=297
+-- overshoot is drawn full
+screen=Player channel="grandmaster_k" hype_open=true level=2 permille=1000 points="2,000 / 1,800" seconds=12
+-- ended
+screen=Player channel="grandmaster_k" hype_open=false level=0 permille=0 points="" seconds=0
+-- left the player
+screen=Home channel="" hype_open=false level=0 permille=0 points="" seconds=0

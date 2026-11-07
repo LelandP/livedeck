@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use htpc_chat::{ChatEvent, FakeChat};
 use htpc_core::{ChatKind, ChatMessage, ChatSpan, ChatStatus, Rgb};
-use htpc_twitch_api::{FakeApi, FollowedChannel, Game, StreamInfo, UserInfo};
+use htpc_twitch_api::{FakeApi, FollowedChannel, Game, HypeTrain, StreamInfo, UserInfo};
 
 /// The device code the store tests' fake Twitch hands out (`--mock` shows `FakeAuth`'s own,
 /// which is the same one as the scaffold's).
@@ -109,6 +109,18 @@ pub fn fake_api() -> FakeApi {
             display_name: MOCK_USER.into(),
             profile_image_url: String::new(),
         }),
+        // The top stream has a hype train going, so the bar can be seen.
+        hype_trains: vec![(
+            "grandmaster_k".into(),
+            HypeTrain {
+                id: "mock-train".into(),
+                level: 3,
+                progress: 1_250,
+                goal: 2_000,
+                seconds_left: 240,
+                all_time_high: 7,
+            },
+        )],
         // Messages are "posted" and kept, but nothing echoes them back into the mock chat.
         ..FakeApi::new()
     }

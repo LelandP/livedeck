@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{
-    grid_rows, Category, Channel, Command, Event, FeedId, PageOutcome, Paging, Rgb, Row, RowKind,
-    SendProblem, Stream, Tile,
+    grid_rows, Category, Channel, Command, Event, FeedId, HypeTrain, PageOutcome, Paging, Rgb, Row,
+    RowKind, SendProblem, Stream, Tile,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
@@ -51,6 +51,13 @@ pub trait Provider: Send + Sync + 'static {
     /// Every live followed channel, for live notifications (`live_watch.rs`). `None` when it
     /// cannot be had (signed out, a failed request), which skips that poll.
     fn followed_live(&self) -> impl Future<Output = Option<Vec<Stream>>> + Send {
+        async { None }
+    }
+
+    /// The hype train in `channel` (`hype_train.rs`): `Some(None)` when none runs, `None` when
+    /// the request failed, which skips that poll.
+    fn hype_train(&self, channel: &str) -> impl Future<Output = Option<Option<HypeTrain>>> + Send {
+        let _ = channel;
         async { None }
     }
 }
@@ -598,10 +605,12 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                 },
             ],
             // Playback commands run in `playback.rs`, chat in `chat.rs`, the login ones in
-            // `session.rs`, the sleep timer in `sleep.rs`, raids in `raids.rs`, and thumbnails
-            // and chat images are delivered through `Provider::thumbnail`, so none of them
-            // produces events here. The store runs `Quit`.
-            Command::WatchRaids { .. }
+            // `session.rs`, the sleep timer in `sleep.rs`, raids in `raids.rs`, hype trains in
+            // `hype_train.rs`, and thumbnails and chat images are delivered through
+            // `Provider::thumbnail`, so none of them produces events here. The store runs `Quit`.
+            Command::WatchHypeTrain { .. }
+            | Command::StopHypeTrain
+            | Command::WatchRaids { .. }
             | Command::StopRaids
             | Command::DisconnectRaids
             | Command::StartRaidCountdown { .. }
@@ -639,6 +648,21 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             }
             Err(err) => {
                 tracing::debug!(%err, "could not check who went live");
+                None
+            }
+        }
+    }
+
+    async fn hype_train(&self, channel: &str) -> Option<Option<HypeTrain>> {
+        match self.api.hype_train(channel).await {
+            Ok(train) => Some(train.map(|t| HypeTrain {
+                level: t.level,
+                progress: t.progress,
+                goal: t.goal,
+                seconds_left: t.seconds_left,
+            })),
+            Err(err) => {
+                tracing::debug!(channel, %err, "could not check for a hype train");
                 None
             }
         }

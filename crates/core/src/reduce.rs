@@ -628,6 +628,11 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     cmds.push(Command::JoinChat {
         channel: stream.channel.clone(),
     });
+    // The old channel's train is not this one's.
+    s.hype_train = None;
+    cmds.push(Command::WatchHypeTrain {
+        channel: stream.channel.clone(),
+    });
     s.now_playing = Some(stream);
     start_playback(s, cmds);
     cmds.push(Command::FetchStreamInfo {
@@ -1242,6 +1247,15 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::StreamInfo(info) => stream_info(s, info, cmds),
+        Event::HypeTrain { channel, train } => {
+            let on_screen = s.screen == Screen::Player
+                && s.now_playing
+                    .as_ref()
+                    .is_some_and(|p| p.channel.eq_ignore_ascii_case(&channel));
+            if on_screen {
+                s.hype_train = train;
+            }
+        }
         Event::ChatSent { id } => {
             if let Some(sent) = s.compose.sending.take_if(|m| m.id == id) {
                 // Words typed (or a quick message sent) meanwhile are not thrown away.
@@ -1523,6 +1537,10 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     cmds.push(Command::JoinChat {
         channel: stream.channel.clone(),
     });
+    s.hype_train = None;
+    cmds.push(Command::WatchHypeTrain {
+        channel: stream.channel.clone(),
+    });
     s.now_playing = Some(stream);
     // Every stream opens as video.
     s.audio_only = false;
@@ -1605,11 +1623,13 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
             s.subscribe_card = false;
             s.raid = None;
             s.stats = None;
+            s.hype_train = None;
             cmds.push(Command::StopPlayback);
             if s.session.stats {
                 cmds.push(Command::SetStats(false));
             }
             cmds.push(Command::LeaveChat);
+            cmds.push(Command::StopHypeTrain);
             if s.is_signed_in() {
                 cmds.push(Command::StopRaids);
             }

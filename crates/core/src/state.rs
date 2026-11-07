@@ -2,8 +2,8 @@
 
 use crate::chat::ChatBuffer;
 use crate::domain::{
-    ChatStatus, DeviceCode, FeedId, LoginProblem, PlayerStats, RoomMode, Row, SendProblem, Stream,
-    Tile, User,
+    ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, PlayerStats, RoomMode, Row,
+    SendProblem, Stream, Tile, User,
 };
 use crate::keyboard::{Board, KeyboardState, Shift};
 use crate::msg::StreamKind;
@@ -545,6 +545,8 @@ pub struct AppState {
     pub room_mode: RoomMode,
     /// The ready-made messages offered while composing (`quick_messages` in `config.toml`).
     pub quick_messages: Vec<String>,
+    /// The hype train in the channel on screen, while one runs.
+    pub hype_train: Option<HypeTrain>,
 }
 
 /// The Twitch page to subscribe to `channel`. The channel is a Twitch login (letters, digits and

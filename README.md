@@ -22,6 +22,7 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Search for channels and categories by name with an on-screen keyboard (signed in)
 - Live notifications: a silent popup when a channel you follow goes live, on any screen (signed in, can be turned off)
 - Follow raids: when the channel you watch raids another one, a card counts down 10 seconds and takes you there (A goes now, B stays). Signed in
+- Hype trains: while one runs in the channel you watch, a bar at the top of the video shows its level, progress and time left. Signed in or not, through the same unofficial API the website uses
 - Settings for chat layout, video quality and live notifications, saved between runs
 - Everything controllable with a gamepad (D-pad, A/B/X/Y, Start, LB/RB)
 
@@ -36,7 +37,6 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
-- [ ] **Hype train:** show progress and level while watching, if Twitch lets a viewer read it. Like predictions, it may need the broadcaster's own permission, so this needs checking first
 - [ ] **Predictions and polls:** show them while watching, if Twitch lets a viewer read them. Their EventSub topics may need the broadcaster's own permission, so this needs checking first
 
 **Big project**
