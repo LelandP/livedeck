@@ -58,6 +58,7 @@ export component MainWindow inherits Window {
     in property <string> quality-label: "";
     in property <string> live-notifications-label: "";
     in property <string> background-play-label: "";
+    in property <string> show-kick-label: "";
     // "<channel> is live" popups, newest first (at most three), and how many more there are.
     in property <[ToastItem]> toasts;
     in property <int> toast-more: 0;
@@ -300,6 +301,7 @@ export component MainWindow inherits Window {
         quality: root.quality-label;
         live-notifications: root.live-notifications-label;
         background-play: root.background-play-label;
+        show-kick: root.show-kick-label;
         version: root.version;
         focus-row: root.rail-focused ? -1 : root.settings-focus;
     }

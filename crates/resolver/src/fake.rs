@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::runner::{ProcessOutput, ProcessRunner, RunError};
-use crate::{PlaylistUrl, ResolveError, StreamResolver};
+use crate::{PlaylistUrl, ResolveError, Site, StreamResolver};
 
 /// The `(program, args)` of one call.
 type Call = (String, Vec<String>);
@@ -65,7 +65,12 @@ impl FakeResolver {
 }
 
 impl StreamResolver for FakeResolver {
-    async fn resolve(&self, _channel: &str, _quality: &str) -> Result<PlaylistUrl, ResolveError> {
+    async fn resolve(
+        &self,
+        _site: Site,
+        _channel: &str,
+        _quality: &str,
+    ) -> Result<PlaylistUrl, ResolveError> {
         self.result.clone()
     }
 }

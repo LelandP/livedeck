@@ -3,7 +3,7 @@
 //! `STREAMLINK_PATH` overrides the program. `LIVE_CHANNEL` names a channel that is live now.
 //! Run: `cargo test -p htpc-resolver --test live -- --ignored --nocapture`
 
-use htpc_resolver::{ResolveError, StreamResolver, StreamlinkResolver, TokioRunner};
+use htpc_resolver::{ResolveError, Site, StreamResolver, StreamlinkResolver, TokioRunner};
 
 fn resolver() -> StreamlinkResolver<TokioRunner> {
     let r = StreamlinkResolver::new(TokioRunner);
@@ -16,7 +16,9 @@ fn resolver() -> StreamlinkResolver<TokioRunner> {
 #[tokio::test]
 #[ignore = "needs Streamlink and a network"]
 async fn live_a_channel_that_does_not_exist_is_offline() {
-    let got = resolver().resolve("zz_no_such_channel_9981", "best").await;
+    let got = resolver()
+        .resolve(Site::Twitch, "zz_no_such_channel_9981", "best")
+        .await;
     assert_eq!(got, Err(ResolveError::Offline));
 }
 
@@ -27,7 +29,7 @@ async fn live_a_live_channel_resolves() {
         panic!("set LIVE_CHANNEL to a channel that is live");
     };
     let url = resolver()
-        .resolve(&channel, "best")
+        .resolve(Site::Twitch, &channel, "best")
         .await
         .expect("resolves");
     println!("resolved: {} chars", url.0.len());
@@ -39,7 +41,7 @@ async fn live_a_live_channel_resolves() {
 async fn live_a_missing_program_is_not_installed() {
     let got = StreamlinkResolver::new(TokioRunner)
         .with_program("definitely-not-a-program-9981")
-        .resolve("x", "best")
+        .resolve(Site::Twitch, "x", "best")
         .await;
     assert_eq!(got, Err(ResolveError::NotInstalled));
 }

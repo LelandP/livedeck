@@ -128,6 +128,33 @@ export component StreamCard inherits Rectangle {
             animate opacity { duration: Theme.t-med; easing: ease-out; }
         }
 
+        // Which platform, for Kick cards: a dot and the name, never a logo.
+        Rectangle {
+            visible: root.item.kick && !root.item.loading;
+            x: 12px;
+            y: 12px;
+            width: kick-chip.preferred-width + 30px;
+            height: 26px;
+            border-radius: 4px;
+            background: #0e0e10d9;
+
+            Rectangle {
+                x: 9px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.kick;
+            }
+            kick-chip := Text {
+                x: 23px;
+                text: "Kick";
+                color: Theme.text;
+                font-size: Theme.fs-chip;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
         // Legibility scrim.
         Rectangle {
             visible: !root.item.loading && !root.item.retry;

@@ -23,7 +23,10 @@ fn failed(stderr: &str) -> ProcessOutput {
 async fn success_returns_the_url_and_passes_the_arguments() {
     let runner = FakeRunner::new(Ok(ok(&format!("{PLAYLIST}\n"))));
     let resolver = StreamlinkResolver::new(runner.clone());
-    let url = resolver.resolve("somechannel", "720p").await.unwrap();
+    let url = resolver
+        .resolve(Site::Twitch, "somechannel", "720p")
+        .await
+        .unwrap();
     assert_eq!(url, PlaylistUrl(PLAYLIST.into()));
     let calls = runner.calls();
     assert_eq!(calls.len(), 1);
@@ -38,7 +41,7 @@ async fn success_returns_the_url_and_passes_the_arguments() {
 async fn a_custom_program_is_used() {
     let runner = FakeRunner::new(Ok(ok(PLAYLIST)));
     let resolver = StreamlinkResolver::new(runner.clone()).with_program("C:/tools/sl.exe");
-    resolver.resolve("a_b", "best").await.unwrap();
+    resolver.resolve(Site::Twitch, "a_b", "best").await.unwrap();
     assert_eq!(runner.calls()[0].0, "C:/tools/sl.exe");
 }
 
@@ -101,7 +104,7 @@ fn the_url_is_found_among_other_output_lines() {
 async fn runner_errors_map_to_resolve_errors() {
     let case = |err| async move {
         StreamlinkResolver::new(FakeRunner::new(Err(err)))
-            .resolve("x", "best")
+            .resolve(Site::Twitch, "x", "best")
             .await
     };
     assert_eq!(
@@ -121,9 +124,42 @@ async fn bad_channel_names_never_reach_the_program() {
     let resolver = StreamlinkResolver::new(runner.clone());
     for bad in ["", "a b", "x/../y", "x?y=1", "--help", &"a".repeat(26)] {
         assert_eq!(
-            resolver.resolve(bad, "best").await,
+            resolver.resolve(Site::Twitch, bad, "best").await,
             Err(ResolveError::NotFound),
             "{bad:?}"
+        );
+    }
+    assert!(runner.calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_kick_channel_opens_its_kick_page() {
+    let runner = FakeRunner::new(Ok(ok(PLAYLIST)));
+    let resolver = StreamlinkResolver::new(runner.clone());
+    resolver
+        .resolve(Site::Kick, "awa-xo", "720p60")
+        .await
+        .unwrap();
+    assert_eq!(
+        runner.calls()[0].1,
+        ["--stream-url", "https://kick.com/awa-xo", "720p60,best"]
+    );
+}
+
+#[tokio::test]
+async fn hyphens_are_kick_only_and_never_lead() {
+    let runner = FakeRunner::new(Ok(ok(PLAYLIST)));
+    let resolver = StreamlinkResolver::new(runner.clone());
+    for (site, bad) in [
+        (Site::Twitch, "awa-xo"),
+        (Site::Kick, "-help"),
+        (Site::Kick, "a b"),
+        (Site::Kick, "x/../y"),
+    ] {
+        assert_eq!(
+            resolver.resolve(site, bad, "best").await,
+            Err(ResolveError::NotFound),
+            "{site:?} {bad:?}"
         );
     }
     assert!(runner.calls().is_empty());

@@ -1,4 +1,6 @@
-//! Reading Twitch chat. (Writing goes through Helix, in `htpc-twitch-api`.)
+//! Reading Twitch and Kick chat. (Writing to Twitch goes through Helix, in `htpc-twitch-api`.)
+//!
+//! Kick chat is in [`kick`]: Kick's Pusher app, read the same way and reported the same way.
 //!
 //! `IrcChat` joins a channel anonymously over IRC on a WebSocket, maps what the server sends to
 //! the core's chat types, and reports status, batched lines and moderation through [`ChatEvent`]s.
@@ -9,6 +11,7 @@ mod badges;
 mod client;
 mod emotes;
 mod fake;
+pub mod kick;
 mod link;
 mod map;
 mod session;
@@ -17,6 +20,7 @@ pub use badges::{parse_channel, parse_global, BadgeBook, BadgeSet, HttpBadges};
 pub use client::{ChatClient, ChatEvent, ChatSession, IrcChat};
 pub use emotes::{EmoteProvider, TwitchCdn};
 pub use fake::FakeChat;
+pub use kick::KickChat;
 pub use link::{ConnectFuture, Connector, Link, WsConnector};
 pub use map::{build_spans, Mapped, Mapper};
 pub use session::{Backoff, SessionConfig};

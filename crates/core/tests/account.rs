@@ -175,10 +175,33 @@ fn on_settings() -> htpc_core::AppState {
 fn down_and_up_move_between_the_settings_rows_and_stop_at_the_ends() {
     let (s, _) = run(on_settings(), &[Intent::Down]);
     assert_eq!(s.settings_focus, SettingsRow::ChatLayout);
-    let (s, _) = run(s, &[Intent::Down; 4]);
-    assert_eq!(s.settings_focus, SettingsRow::BackgroundPlay);
-    let (s, _) = run(s, &[Intent::Up; 5]);
+    let (s, _) = run(s, &[Intent::Down; 5]);
+    assert_eq!(s.settings_focus, SettingsRow::ShowKick);
+    let (s, _) = run(s, &[Intent::Up; 6]);
     assert_eq!(s.settings_focus, SettingsRow::Account);
+}
+
+#[test]
+fn show_kick_starts_off_and_toggling_it_reloads_home_with_kick() {
+    let s = on_settings();
+    assert!(!s.settings.show_kick);
+    let (s, cmds) = run(s, &[Intent::Down; 5]);
+    assert!(cmds.is_empty());
+    let (on, cmds) = reduce(&s, Intent::Right);
+    assert!(on.settings.show_kick);
+    // The provider hears first, so the Home load after it already has the Kick row.
+    assert_eq!(
+        cmds,
+        vec![
+            Command::SetKick(true),
+            Command::LoadFeed { feed: FeedId::Home },
+            Command::SaveSettings(on.settings),
+        ]
+    );
+    assert!(on.home.loading);
+    let (off, cmds) = reduce(&on, Intent::Left);
+    assert!(!off.settings.show_kick);
+    assert_eq!(cmds[0], Command::SetKick(false));
 }
 
 #[test]

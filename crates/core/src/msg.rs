@@ -153,6 +153,10 @@ pub enum Command {
         broadcaster_id: String,
         text: String,
     },
+    /// Kick on or off ("Show Kick"). Off, the app asks Kick nothing: no Kick row, no Kick search
+    /// results. The store applies it before the commands after it, so a `LoadFeed` that follows
+    /// already sees it. Sent at startup with the saved setting. There is no `Event`.
+    SetKick(bool),
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }

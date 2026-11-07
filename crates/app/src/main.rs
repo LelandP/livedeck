@@ -13,6 +13,7 @@ mod browser;
 mod chat;
 mod chat_limit;
 mod hype_train;
+mod kick;
 mod live_watch;
 mod mock;
 mod playback;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use htpc_chat::{ChatClient, IrcChat};
+use htpc_chat::{ChatClient, IrcChat, KickChat};
 use htpc_core::{Event, Intent, Msg, RailEntry};
 use htpc_player::{Player, PlayerEvent, UnavailablePlayer};
 use htpc_resolver::{ResolveError, StreamResolver, StreamlinkResolver, TokioRunner};
@@ -40,6 +41,7 @@ use slint::ComponentHandle;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::chat::Chat;
+use crate::kick::KickSource;
 use crate::playback::Playback;
 use crate::power::Suspend;
 use crate::provider::{ApiProvider, Provider};
@@ -466,6 +468,7 @@ fn run_app<P: Provider, R: StreamResolver>(
     provider: P,
     resolver: R,
     chat: Arc<dyn ChatClient>,
+    kick_chat: Arc<dyn ChatClient>,
     settings: htpc_core::Settings,
     wiring: Wiring,
 ) -> Result<()> {
@@ -509,6 +512,8 @@ fn run_app<P: Provider, R: StreamResolver>(
 
     let (mut state, mut startup) = htpc_core::init();
     state.settings = settings;
+    // Before the first Home load, so it already has (or has not) its Kick row.
+    startup.insert(0, htpc_core::Command::SetKick(settings.show_kick));
     state.quick_messages = quick_messages;
     state.can_open_browser = browser::can_open_browser();
     // The account is in place before the first load, so Home already has its Followed row. A
@@ -533,7 +538,7 @@ fn run_app<P: Provider, R: StreamResolver>(
     });
     let sleep = Sleep::new(Arc::clone(&player), power, tx.clone());
     let playback = Playback::new(resolver, player);
-    let chat = Chat::new(chat, tx.clone());
+    let chat = Chat::new(chat, kick_chat, tx.clone());
     let raids = Raids::new(raid_connect, tx.clone());
     let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx)
         .with_sleep(sleep)
@@ -688,7 +693,10 @@ fn main() -> Result<()> {
         );
         // There is no stream to play offline, so every channel shows the end screen.
         let resolver = htpc_resolver::FakeResolver::failing(ResolveError::Offline);
-        let provider = ApiProvider::new(api).with_account(viewer);
+        // Kick is offline fixtures too, while "Show Kick" is on.
+        let provider = ApiProvider::new(api)
+            .with_account(viewer)
+            .with_kick(Arc::new(KickSource::new(mock::fake_kick())));
         let wiring = Wiring {
             session,
             tx,
@@ -708,7 +716,8 @@ fn main() -> Result<()> {
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
-        return run_app(provider, resolver, chat, settings, wiring);
+        let kick_chat = Arc::new(mock::fake_chat(true));
+        return run_app(provider, resolver, chat, kick_chat, settings, wiring);
     }
 
     let client_id = client_id(config.client_id);
@@ -736,9 +745,12 @@ fn main() -> Result<()> {
     );
     tracing::info!("browsing anonymously until there is a sign-in");
     let api = RefreshingApi::new(api, Arc::clone(&session));
+    // Kick, signed out, through the website's API. Nothing is asked while "Show Kick" is off.
+    let kick = htpc_kick_api::KickWebClient::new().context("failed to create the Kick client")?;
     let provider = ApiProvider::new(api)
         .with_images(images)
-        .with_account(viewer);
+        .with_account(viewer)
+        .with_kick(Arc::new(KickSource::new(kick.clone())));
     let raid_connect = eventsub_connect(&session);
     let wiring = Wiring {
         session,
@@ -756,6 +768,7 @@ fn main() -> Result<()> {
         provider,
         streamlink(),
         Arc::new(IrcChat::new()),
+        Arc::new(KickChat::new(Arc::new(kick))),
         settings,
         wiring,
     )

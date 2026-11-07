@@ -169,6 +169,14 @@ fn change_setting(s: &mut AppState, row: SettingsRow, forward: bool, cmds: &mut 
         SettingsRow::BackgroundPlay => {
             s.settings.background_play = !s.settings.background_play;
         }
+        // On or off. Home is loaded again, with or without its Kick row.
+        SettingsRow::ShowKick => {
+            s.settings.show_kick = !s.settings.show_kick;
+            cmds.push(Command::SetKick(s.settings.show_kick));
+            s.home.loading = true;
+            s.home.error = None;
+            cmds.push(Command::LoadFeed { feed: FeedId::Home });
+        }
     }
     cmds.push(Command::SaveSettings(s.settings));
 }
@@ -280,7 +288,7 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
 /// there is nothing to open: the chat panel says to sign in. A token without the chat scope
 /// opens it too, on the "sign in again" message.
 fn open_compose(s: &mut AppState) {
-    if !s.is_signed_in() || s.now_playing.is_none() {
+    if !s.is_signed_in() || s.now_playing.is_none() || !s.on_screen_features().chat_send {
         return;
     }
     s.player_menu = None;
@@ -445,7 +453,9 @@ fn player_menu_intent(
     match intent {
         Intent::Up => s.player_menu = Some(row.prev()),
         Intent::Down => s.player_menu = Some(row.next()),
-        Intent::Select if row == PlayerMenuRow::Subscribe => s.subscribe_card = true,
+        Intent::Select if row == PlayerMenuRow::Subscribe => {
+            s.subscribe_card = s.on_screen_features().subscribe;
+        }
         // Signed out the row only says to sign in.
         Intent::Select if row == PlayerMenuRow::WriteChat => open_compose(s),
         // Action rows have no value to step through.
@@ -631,9 +641,7 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     });
     // The old channel's train is not this one's.
     s.hype_train = None;
-    cmds.push(Command::WatchHypeTrain {
-        channel: stream.channel.login.clone(),
-    });
+    watch_hype_train(&stream, cmds);
     s.now_playing = Some(stream);
     start_playback(s, cmds);
     cmds.push(Command::FetchStreamInfo {
@@ -643,8 +651,19 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
 
 /// Signed in, asks for raids of the stream on screen: by its user id, or after looking it up when
 /// the card it came from did not have one.
+/// Hype trains are Twitch's: a Kick stream stops the watch of the stream before it.
+fn watch_hype_train(stream: &Stream, cmds: &mut Vec<Command>) {
+    cmds.push(if stream.channel.features().hype_train {
+        Command::WatchHypeTrain {
+            channel: stream.channel.login.clone(),
+        }
+    } else {
+        Command::StopHypeTrain
+    });
+}
+
 fn watch_raids(s: &AppState, cmds: &mut Vec<Command>) {
-    if !s.is_signed_in() || s.screen != Screen::Player {
+    if !s.is_signed_in() || s.screen != Screen::Player || !s.on_screen_features().raids {
         return;
     }
     let Some(stream) = &s.now_playing else {
@@ -1547,9 +1566,7 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
         channel: stream.channel.clone(),
     });
     s.hype_train = None;
-    cmds.push(Command::WatchHypeTrain {
-        channel: stream.channel.login.clone(),
-    });
+    watch_hype_train(&stream, cmds);
     s.now_playing = Some(stream);
     // Every stream opens as video.
     s.audio_only = false;

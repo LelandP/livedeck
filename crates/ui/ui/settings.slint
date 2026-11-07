@@ -9,7 +9,8 @@ component SettingRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> choice: false;
 
-    height: 84px;
+    // Six rows and the about lines fit above the hints bar at 800 px.
+    height: 74px;
     max-width: 720px;
     background: Theme.surface;
     border-radius: 8px;
@@ -60,9 +61,10 @@ export component SettingsScreen inherits Rectangle {
     in property <string> quality;
     in property <string> live-notifications;
     in property <string> background-play;
+    in property <string> show-kick;
     in property <string> version;
-    // 0 account, 1 chat layout, 2 quality, 3 live notifications, 4 background play (SettingsRow
-    // order). -1 while the rail has focus.
+    // 0 account, 1 chat layout, 2 quality, 3 live notifications, 4 background play, 5 show Kick
+    // (SettingsRow order). -1 while the rail has focus.
     in property <int> focus-row;
 
     VerticalLayout {
@@ -70,7 +72,7 @@ export component SettingsScreen inherits Rectangle {
         padding-right: Theme.safe-x;
         padding-top: 36px;
         padding-bottom: Theme.hints-h;
-        spacing: 16px;
+        spacing: 12px;
         alignment: start;
 
         Text {
@@ -113,6 +115,13 @@ export component SettingsScreen inherits Rectangle {
             value: root.background-play;
             choice: true;
             focused: root.focus-row == 4;
+        }
+        SettingRow {
+            title: "Show Kick";
+            help: "Kick streams next to Twitch, on Home and in Search";
+            value: root.show-kick;
+            choice: true;
+            focused: root.focus-row == 5;
         }
 
         Text {

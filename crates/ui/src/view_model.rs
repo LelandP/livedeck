@@ -11,9 +11,9 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
-    Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Playback, PlayerMenuRow, Rgb, RoomMode,
-    Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift, Stream, Tile, Toast,
-    CHAT_MAX, TOASTS_SHOWN,
+    Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Platform, Playback, PlayerMenuRow, Rgb,
+    RoomMode, Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift, Stream, Tile,
+    Toast, CHAT_MAX, TOASTS_SHOWN,
 };
 use slint::{Color, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
@@ -93,6 +93,8 @@ pub struct CardVm {
     pub retry: bool,
     /// A followed channel that is not live: drawn dimmed, with an "Offline" label.
     pub offline: bool,
+    /// A Kick channel: drawn with a "Kick" chip. Twitch cards have none.
+    pub kick: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -199,6 +201,8 @@ pub struct ViewModel {
     pub live_notifications_label: String,
     /// "On" or "Off".
     pub background_play_label: String,
+    /// "On" or "Off".
+    pub show_kick_label: String,
     /// The newest "is live" popups, at most `TOASTS_SHOWN`, newest first.
     pub toasts: Vec<ToastVm>,
     /// How many more there are than `toasts` shows ("+2 more"). 0 for none.
@@ -429,6 +433,9 @@ fn text_tail(text: &str) -> String {
 fn compose_hint(state: &AppState) -> &'static str {
     if state.screen != Screen::Player || state.composing() {
         ""
+    } else if !state.on_screen_features().chat_send {
+        // Kick: chat is read-only in LiveDeck.
+        ""
     } else if !state.is_signed_in() {
         "Sign in to Twitch to chat"
     } else if !state.can_chat() {
@@ -460,6 +467,13 @@ fn player_menu_values(state: &AppState) -> Vec<String> {
                 },
                 // Action rows: no value, A opens the card or the keyboard. Signed out, the chat
                 // row says what it needs instead.
+                // Twitch's own features, on a stream of another platform.
+                PlayerMenuRow::Subscribe if !state.on_screen_features().subscribe => {
+                    "Twitch only".into()
+                }
+                PlayerMenuRow::WriteChat if !state.on_screen_features().chat_send => {
+                    "Twitch only".into()
+                }
                 PlayerMenuRow::Subscribe => String::new(),
                 PlayerMenuRow::WriteChat if !state.is_signed_in() => {
                     "Sign in to Twitch to chat".into()
@@ -607,13 +621,14 @@ fn hype_permille(t: &HypeTrain) -> i32 {
     to_i32(p.min(1000) as usize)
 }
 
-fn row_title(kind: RowKind, grid: bool) -> &'static str {
+fn row_title(kind: RowKind, platform: Platform, grid: bool) -> &'static str {
     match kind {
         // Grid screens have a heading instead of row titles, and the hero speaks for itself.
         _ if grid => "",
         RowKind::Featured | RowKind::CategoryStreams => "",
         RowKind::FollowedLive => "Followed · Live",
         RowKind::FollowedOffline => "Offline",
+        RowKind::TopLive if platform == Platform::Kick => "Top Live on Kick",
         RowKind::TopLive => "Top Live",
         RowKind::Categories | RowKind::SearchCategories => "Categories",
         RowKind::SearchLive => "Live channels",
@@ -642,6 +657,7 @@ fn stream_card(s: &Stream) -> CardVm {
         viewers: format_viewers(s.viewers),
         tint: s.tint,
         thumb_url: s.thumbnail.clone().unwrap_or_default(),
+        kick: s.channel.platform == Platform::Kick,
         ..CardVm::default()
     }
 }
@@ -659,6 +675,7 @@ fn tile_card(tile: &Tile) -> CardVm {
             channel: c.name.clone(),
             tint: c.tint,
             offline: true,
+            kick: c.channel.platform == Platform::Kick,
             ..CardVm::default()
         },
     }
@@ -736,7 +753,7 @@ fn feed_rows(id: &FeedId, feed: &Feed) -> Vec<RowVm> {
         .rows
         .iter()
         .map(|r: &Row| RowVm {
-            title: row_title(r.kind, grid).to_owned(),
+            title: row_title(r.kind, r.platform, grid).to_owned(),
             shape: shape_of(r.kind),
             cards: r.tiles.iter().map(tile_card).collect(),
         })
@@ -1058,7 +1075,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
             SettingsRow::ChatLayout
             | SettingsRow::Quality
             | SettingsRow::LiveNotifications
-            | SettingsRow::BackgroundPlay => "Change",
+            | SettingsRow::BackgroundPlay
+            | SettingsRow::ShowKick => "Change",
         };
         (label, false)
     } else if search_on_keys {
@@ -1137,6 +1155,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         quality_label: state.settings.quality.label().to_owned(),
         live_notifications_label: on_off(state.settings.live_notifications).to_owned(),
         background_play_label: on_off(state.settings.background_play).to_owned(),
+        show_kick_label: on_off(state.settings.show_kick).to_owned(),
         toasts: state.toasts.iter().take(TOASTS_SHOWN).map(toast).collect(),
         toast_more: to_i32(state.toasts.len().saturating_sub(TOASTS_SHOWN)),
         playback,
@@ -1377,6 +1396,7 @@ impl Update {
         ui.set_quality_label(vm.quality_label.into());
         ui.set_live_notifications_label(vm.live_notifications_label.into());
         ui.set_background_play_label(vm.background_play_label.into());
+        ui.set_show_kick_label(vm.show_kick_label.into());
         ui.set_playback(vm.playback as i32);
         ui.set_playback_error(vm.playback_error.into());
         ui.set_playback_details(vm.playback_details.into());
@@ -1581,6 +1601,7 @@ fn to_stream_item(c: &CardVm, images: &ImageMemory) -> StreamItem {
         loading: c.loading,
         retry: c.retry,
         offline: c.offline,
+        kick: c.kick,
     }
 }
 
@@ -1596,6 +1617,7 @@ fn same_card(old: &StreamItem, new: &CardVm) -> bool {
         && old.loading == new.loading
         && old.retry == new.retry
         && old.offline == new.offline
+        && old.kick == new.kick
 }
 
 /// Quiet zone around a QR code, in modules (the specification asks for four).
@@ -2426,6 +2448,35 @@ mod tests {
         })
     }
 
+    #[test]
+    fn the_kick_row_has_its_own_title_and_its_cards_a_chip() {
+        let (s, _) = htpc_core::init();
+        let kick_stream = Tile::Stream(Stream {
+            channel: ChannelRef::kick("awa-xo"),
+            user_id: String::new(),
+            title: "t".into(),
+            category: "c".into(),
+            viewers: 1,
+            tint: Rgb::default(),
+            thumbnail: None,
+        });
+        let twitch = Row::new(RowKind::TopLive, vec![stream("ender", 5, None)]);
+        let kick = Row::new(RowKind::TopLive, vec![kick_stream]).on(Platform::Kick);
+        let s = reduce(
+            &s,
+            Event::FeedLoaded {
+                feed: FeedId::Home,
+                rows: vec![twitch, kick],
+            },
+        )
+        .0;
+        let vm = view_model(&s);
+        assert_eq!(vm.rows[0].title, "Top Live");
+        assert!(!vm.rows[0].cards[0].kick);
+        assert_eq!(vm.rows[1].title, "Top Live on Kick");
+        assert!(vm.rows[1].cards[0].kick);
+        assert_eq!(vm.rows[1].cards[0].channel, "awa-xo");
+    }
     #[test]
     fn following_shows_live_cards_then_dimmed_offline_ones() {
         let s = signed_in(&loaded());

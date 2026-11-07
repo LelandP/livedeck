@@ -4,7 +4,8 @@
 
 use std::collections::HashSet;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{
@@ -19,6 +20,7 @@ use htpc_ui::Thumbnail;
 use tokio::sync::OnceCell;
 
 use crate::chat_limit::SendLimit;
+use crate::kick::KickFeed;
 use crate::session::Viewer;
 
 /// Cards fetched per page of a Home row.
@@ -60,6 +62,11 @@ pub trait Provider: Send + Sync + 'static {
         let _ = channel;
         async { None }
     }
+
+    /// Kick on or off (`Command::SetKick`). Called by the store before the commands after it.
+    fn set_kick(&self, on: bool) {
+        let _ = on;
+    }
 }
 
 pub struct ApiProvider<A> {
@@ -74,6 +81,10 @@ pub struct ApiProvider<A> {
     images: Option<ImageCache>,
     /// Keeps chat messages within Twitch's rate limit.
     send_limit: Mutex<SendLimit>,
+    /// Kick's rows, next to Twitch's. `None` when the app has no Kick source (tests).
+    kick: Option<Arc<dyn KickFeed>>,
+    /// "Show Kick": off, Kick is never asked.
+    kick_on: AtomicBool,
 }
 
 impl<A: TwitchApi> ApiProvider<A> {
@@ -84,7 +95,22 @@ impl<A: TwitchApi> ApiProvider<A> {
             account: None,
             images: None,
             send_limit: Mutex::new(SendLimit::default()),
+            kick: None,
+            kick_on: AtomicBool::new(false),
         }
+    }
+
+    /// Adds Kick's rows, while "Show Kick" is on.
+    pub fn with_kick(mut self, kick: Arc<dyn KickFeed>) -> Self {
+        self.kick = Some(kick);
+        self
+    }
+
+    /// The Kick source, while "Show Kick" is on.
+    fn kick(&self) -> Option<&dyn KickFeed> {
+        self.kick
+            .as_deref()
+            .filter(|_| self.kick_on.load(Ordering::SeqCst))
     }
 
     /// Follows the session's account instead of looking the token's owner up once.
@@ -153,10 +179,17 @@ impl<A: TwitchApi> ApiProvider<A> {
                 None => None,
             }
         };
-        let (followed, top, games) = tokio::join!(
+        let kick = async {
+            match self.kick() {
+                Some(kick) => Some(kick.top_live(1).await),
+                None => None,
+            }
+        };
+        let (followed, top, games, kick) = tokio::join!(
             followed,
             self.api.top_streams(page()),
             self.api.top_categories(page()),
+            kick,
         );
 
         let mut errors = Vec::new();
@@ -205,7 +238,24 @@ impl<A: TwitchApi> ApiProvider<A> {
             Err(err) => note("categories", &err),
         }
 
-        let rows: Vec<Row> = [hero, followed_row, top_row, categories_row]
+        let mut kick_row = None;
+        match kick {
+            Some(Ok((tiles, next))) if !tiles.is_empty() => {
+                let paging = next.map_or(Paging::End, |p| Paging::More(p.to_string()));
+                kick_row = Some(
+                    Row::new(RowKind::TopLive, tiles)
+                        .on(Platform::Kick)
+                        .with_paging(paging),
+                );
+            }
+            Some(Ok(_)) | None => {}
+            Some(Err(err)) => {
+                tracing::warn!(%err, "failed to load the Kick row");
+                errors.push(err);
+            }
+        }
+
+        let rows: Vec<Row> = [hero, followed_row, top_row, kick_row, categories_row]
             .into_iter()
             .flatten()
             .collect();
@@ -329,7 +379,13 @@ impl<A: TwitchApi> ApiProvider<A> {
     async fn load_search(&self, text: &str) -> Result<Vec<Row>, String> {
         let page = || PageRequest::first(HOME_PAGE_SIZE);
         let bucket = refresh_bucket();
-        let (live, all, games) = tokio::join!(
+        let kick = async {
+            match self.kick() {
+                Some(kick) => Some(kick.search(text).await),
+                None => None,
+            }
+        };
+        let (live, all, games, kick) = tokio::join!(
             async {
                 let found = self.api.search_channels(text, true, page()).await?;
                 let tiles = self.live_tiles(&found.items, bucket).await;
@@ -337,6 +393,7 @@ impl<A: TwitchApi> ApiProvider<A> {
             },
             self.api.search_channels(text, false, page()),
             self.api.search_categories(text, page()),
+            kick,
         );
 
         let mut errors = Vec::new();
@@ -344,16 +401,32 @@ impl<A: TwitchApi> ApiProvider<A> {
             tracing::warn!(what, %err, "search failed");
             errors.push(err.to_string());
         };
+        // Kick's channels come after Twitch's in the live and offline rows. Those rows page on
+        // Twitch's cursor; Kick's search has one page.
+        let (kick_live, kick_offline) = match kick {
+            Some(Ok(found)) => found,
+            Some(Err(err)) => {
+                tracing::warn!(%err, "Kick search failed");
+                (Vec::new(), Vec::new())
+            }
+            None => (Vec::new(), Vec::new()),
+        };
         let mut rows = Vec::new();
         let mut live_logins = HashSet::new();
-        match live {
-            Ok((tiles, paging)) => {
-                live_logins.extend(tiles.iter().map(|t| t.key().1.to_ascii_lowercase()));
-                if !tiles.is_empty() {
-                    rows.push(Row::new(RowKind::SearchLive, tiles).with_paging(paging));
-                }
+        let (mut live_tiles, live_paging) = match live {
+            Ok((tiles, paging)) => (tiles, paging),
+            Err(err) => {
+                note("live channels", &err);
+                (Vec::new(), Paging::End)
             }
-            Err(err) => note("live channels", &err),
+        };
+        live_tiles.extend(kick_live);
+        live_logins.extend(live_tiles.iter().map(|t| {
+            let (platform, key) = t.key();
+            (platform, key.to_ascii_lowercase())
+        }));
+        if !live_tiles.is_empty() {
+            rows.push(Row::new(RowKind::SearchLive, live_tiles).with_paging(live_paging));
         }
         match games {
             Ok(found) => {
@@ -366,19 +439,23 @@ impl<A: TwitchApi> ApiProvider<A> {
             }
             Err(err) => note("categories", &err),
         }
-        match all {
-            Ok(found) => {
-                let tiles: Vec<Tile> = offline_tiles(&found.items)
-                    .into_iter()
-                    .filter(|t| !live_logins.contains(&t.key().1.to_ascii_lowercase()))
-                    .collect();
-                if !tiles.is_empty() {
-                    rows.push(
-                        Row::new(RowKind::SearchOffline, tiles).with_paging(paging_of(&found)),
-                    );
-                }
+        let (offline, offline_paging) = match all {
+            Ok(found) => (offline_tiles(&found.items), paging_of(&found)),
+            Err(err) => {
+                note("channels", &err);
+                (Vec::new(), Paging::End)
             }
-            Err(err) => note("channels", &err),
+        };
+        let tiles: Vec<Tile> = offline
+            .into_iter()
+            .chain(kick_offline)
+            .filter(|t| {
+                let (platform, key) = t.key();
+                !live_logins.contains(&(platform, key.to_ascii_lowercase()))
+            })
+            .collect();
+        if !tiles.is_empty() {
+            rows.push(Row::new(RowKind::SearchOffline, tiles).with_paging(offline_paging));
         }
         if rows.is_empty() && errors.len() == 3 {
             Err(errors.join("; "))
@@ -499,6 +576,30 @@ impl<A: TwitchApi> ApiProvider<A> {
         }
     }
 
+    /// One more page of a Kick row. Only Top Live pages; its cursor is a page number.
+    async fn load_more_kick(&self, feed: FeedId, row: RowId, cursor: String) -> Event {
+        let outcome = match (self.kick(), row.kind, cursor.parse::<u32>()) {
+            (Some(kick), RowKind::TopLive, Ok(page)) => match kick.top_live(page).await {
+                Ok((tiles, next)) => PageOutcome::Page {
+                    tiles,
+                    next: next.map(|p| p.to_string()),
+                },
+                Err(err) => {
+                    tracing::warn!(%err, "failed to load the next Kick page");
+                    PageOutcome::Failed
+                }
+            },
+            // Kick turned off meanwhile, or a row that does not page.
+            _ => PageOutcome::End,
+        };
+        Event::MoreLoaded {
+            feed,
+            row,
+            cursor,
+            outcome,
+        }
+    }
+
     /// One more page of a row. `IntegrityRequired` is the anonymous GQL API's answer to every
     /// page after the first, so it ends the row instead of failing it.
     async fn load_more(&self, feed: FeedId, row: RowId, cursor: String) -> Event {
@@ -578,8 +679,9 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
     async fn execute(&self, cmd: Command) -> Vec<Event> {
         match cmd {
             Command::LoadFeed { feed } => vec![self.load_feed(feed).await],
-            // Every source is Twitch's until the platforms get sources of their own.
-            Command::LoadMore { row, .. } if row.platform != Platform::Twitch => Vec::new(),
+            Command::LoadMore { feed, row, cursor } if row.platform == Platform::Kick => {
+                vec![self.load_more_kick(feed, row, cursor).await]
+            }
             Command::LoadMore { feed, row, cursor } => {
                 vec![self.load_more(feed, row, cursor).await]
             }
@@ -639,6 +741,7 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::StopLiveWatch
             | Command::ExpireToast { .. }
             | Command::ScheduleOfflineRecheck { .. }
+            | Command::SetKick(_)
             | Command::Quit => Vec::new(),
         }
     }
@@ -655,6 +758,10 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                 None
             }
         }
+    }
+
+    fn set_kick(&self, on: bool) {
+        self.kick_on.store(on, Ordering::SeqCst);
     }
 
     async fn hype_train(&self, channel: &str) -> Option<Option<HypeTrain>> {
@@ -838,6 +945,126 @@ mod tests {
             })
             .collect();
         api
+    }
+
+    /// `fake_api()` next to a Kick with 5 streams, 3 to a page, and Kick turned `on` or off.
+    fn with_kick(kick: htpc_kick_api::FakeKick, on: bool) -> ApiProvider<FakeApi> {
+        let provider =
+            ApiProvider::new(fake_api()).with_kick(Arc::new(crate::kick::KickSource::new(kick)));
+        provider.set_kick(on);
+        provider
+    }
+
+    fn kick_top() -> htpc_kick_api::FakeKick {
+        htpc_kick_api::FakeKick::new().with_top(5, 3)
+    }
+
+    #[tokio::test]
+    async fn home_has_a_kick_row_after_twitchs_top_live_while_kick_is_on() {
+        let provider = with_kick(kick_top(), true);
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        let ids: Vec<RowId> = rows.iter().map(Row::id).collect();
+        let at = ids
+            .iter()
+            .position(|id| *id == RowId::twitch(RowKind::TopLive))
+            .unwrap();
+        assert_eq!(
+            ids[at + 1],
+            RowId {
+                kind: RowKind::TopLive,
+                platform: Platform::Kick
+            }
+        );
+        let kick = &rows[at + 1];
+        assert_eq!(kick.tiles.len(), 3);
+        assert_eq!(kick.paging, Paging::More("2".into()));
+        assert_eq!(kick.tiles[0].key(), (Platform::Kick, "kick_0"));
+        assert_eq!(rows.last().unwrap().kind, RowKind::Categories);
+    }
+
+    #[tokio::test]
+    async fn kick_off_asks_kick_nothing() {
+        let kick = kick_top();
+        let provider = with_kick(kick.clone(), false);
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        assert!(rows.iter().all(|r| r.platform == Platform::Twitch));
+        let _ = provider.execute(search_cmd("kick")).await;
+        assert_eq!(kick.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_failing_kick_leaves_twitchs_rows() {
+        let kick = htpc_kick_api::FakeKick::new().failing(htpc_kick_api::Error::Blocked);
+        let provider = with_kick(kick, true);
+        let rows = rows_of(provider.load_feed(FeedId::Home).await);
+        assert_eq!(
+            kinds(&rows),
+            [
+                RowKind::Featured,
+                RowKind::FollowedLive,
+                RowKind::TopLive,
+                RowKind::Categories
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_kick_row_pages_by_page_number() {
+        let provider = with_kick(kick_top(), true);
+        let row = RowId {
+            kind: RowKind::TopLive,
+            platform: Platform::Kick,
+        };
+        let events = provider
+            .execute(Command::LoadMore {
+                feed: FeedId::Home,
+                row,
+                cursor: "2".into(),
+            })
+            .await;
+        let [Event::MoreLoaded {
+            row: got,
+            outcome: PageOutcome::Page { tiles, next },
+            ..
+        }] = events.as_slice()
+        else {
+            panic!("{events:?}")
+        };
+        assert_eq!(*got, row);
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(*next, None);
+    }
+
+    fn search_cmd(query: &str) -> Command {
+        Command::Search {
+            id: 1,
+            query: query.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_adds_kick_channels_after_twitchs() {
+        let kick = htpc_kick_api::FakeKick::new()
+            .with_pages(vec![vec![htpc_kick_api::fake_live("ziggy_k", 70)]])
+            .with_offline("ziggy-sleeps", "ZiggySleeps");
+        let provider = with_kick(kick, true).with_account(signed_in_viewer());
+        let events = provider.execute(search_cmd("ziggy")).await;
+        let [Event::SearchResults { rows, .. }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        let live = rows.iter().find(|r| r.kind == RowKind::SearchLive).unwrap();
+        assert_eq!(
+            live.tiles.last().unwrap().key(),
+            (Platform::Kick, "ziggy_k")
+        );
+        let offline = rows
+            .iter()
+            .find(|r| r.kind == RowKind::SearchOffline)
+            .unwrap();
+        assert_eq!(
+            offline.tiles.last().unwrap().key(),
+            (Platform::Kick, "ziggy-sleeps")
+        );
     }
 
     #[tokio::test]

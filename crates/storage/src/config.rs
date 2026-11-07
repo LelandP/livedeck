@@ -5,6 +5,7 @@
 //! quality = "best"            # best | 1080p | 720p | 480p | worst
 //! live_notifications = true   # a popup when a followed channel goes live
 //! background_play = false     # keep playing while another app has focus
+//! show_kick = false           # Kick streams next to Twitch (Home and Search)
 //! image_cache_max_mb = 256
 //! quick_messages = ["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"]   # chips while writing in chat
 //! # client_id = "..."         # public Twitch client ID (TWITCH_CLIENT_ID overrides it)
@@ -75,6 +76,7 @@ struct ConfigFile {
     quality: Option<String>,
     live_notifications: Option<bool>,
     background_play: Option<bool>,
+    show_kick: Option<bool>,
     image_cache_max_mb: Option<u64>,
     quick_messages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,6 +107,7 @@ impl From<ConfigFile> for Config {
                 background_play: f
                     .background_play
                     .unwrap_or(Settings::default().background_play),
+                show_kick: f.show_kick.unwrap_or(Settings::default().show_kick),
             },
             client_id: f
                 .client_id
@@ -136,6 +139,7 @@ impl From<&Config> for ConfigFile {
             quality: Some(c.settings.quality.as_str().to_owned()),
             live_notifications: Some(c.settings.live_notifications),
             background_play: Some(c.settings.background_play),
+            show_kick: Some(c.settings.show_kick),
             image_cache_max_mb: Some(c.image_cache_max_mb),
             quick_messages: Some(c.quick_messages.clone()),
             client_id: c.client_id.clone(),

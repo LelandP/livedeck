@@ -2,8 +2,8 @@
 
 use crate::chat::ChatBuffer;
 use crate::domain::{
-    ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, PlayerStats, RoomMode, Row,
-    SendProblem, Stream, Tile, User,
+    ChatStatus, DeviceCode, Features, FeedId, HypeTrain, LoginProblem, Platform, PlayerStats,
+    RoomMode, Row, SendProblem, Stream, Tile, User,
 };
 use crate::keyboard::{Board, KeyboardState, Shift};
 use crate::msg::StreamKind;
@@ -96,15 +96,18 @@ pub enum SettingsRow {
     LiveNotifications,
     /// On or off: keep playing while another app has focus.
     BackgroundPlay,
+    /// On or off: Kick streams next to Twitch.
+    ShowKick,
 }
 
 impl SettingsRow {
-    pub const ALL: [SettingsRow; 5] = [
+    pub const ALL: [SettingsRow; 6] = [
         SettingsRow::Account,
         SettingsRow::ChatLayout,
         SettingsRow::Quality,
         SettingsRow::LiveNotifications,
         SettingsRow::BackgroundPlay,
+        SettingsRow::ShowKick,
     ];
 
     pub fn index(self) -> usize {
@@ -563,6 +566,13 @@ impl AppState {
     /// Signed in with a token that may write in chat.
     pub fn can_chat(&self) -> bool {
         self.user.as_ref().is_some_and(|u| u.can_chat)
+    }
+
+    /// What the platform of the stream on screen offers (Twitch's everything when none is).
+    pub fn on_screen_features(&self) -> Features {
+        self.now_playing
+            .as_ref()
+            .map_or(Platform::Twitch.features(), |p| p.channel.features())
     }
 
     /// The compose panel is open over the stream on screen.

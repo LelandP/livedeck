@@ -277,6 +277,9 @@ pub struct Settings {
     /// The stream keeps playing while another app has focus. Off pauses it until the app is
     /// back in front.
     pub background_play: bool,
+    /// Kick next to Twitch: a Top Live on Kick row on Home and Kick channels in Search. Off, the
+    /// app makes no Kick requests at all.
+    pub show_kick: bool,
 }
 
 impl Default for Settings {
@@ -286,6 +289,8 @@ impl Default for Settings {
             quality: Quality::default(),
             live_notifications: true,
             background_play: false,
+            // Kick is read through an unofficial API that can break, so it is opt-in.
+            show_kick: false,
         }
     }
 }

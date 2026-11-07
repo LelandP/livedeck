@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use htpc_chat::{ChatEvent, FakeChat};
 use htpc_core::{ChatKind, ChatMessage, ChatSpan, ChatStatus, Rgb};
+use htpc_kick_api::{fake_live, FakeKick};
 use htpc_twitch_api::{FakeApi, FollowedChannel, Game, HypeTrain, StreamInfo, UserInfo};
 
 /// The device code the store tests' fake Twitch hands out (`--mock` shows `FakeAuth`'s own,
@@ -201,4 +202,31 @@ pub fn fake_chat(lively: bool) -> FakeChat {
     } else {
         chat
     }
+}
+
+/// Kick's side of `--mock`: two pages of Top Live and a channel that is not live, so the Kick row
+/// pages and Search finds both kinds.
+pub fn fake_kick() -> FakeKick {
+    let names = [
+        "neon_drift",
+        "gravel-king",
+        "moth_radio",
+        "quiet-harbor",
+        "copperfox",
+        "lumen_bay",
+        "tidewalker",
+        "saltmarsh",
+        "night-owl-fm",
+        "brickworks",
+        "pale_ember",
+        "slow-river",
+    ];
+    let streams: Vec<_> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| fake_live(name, 9_000 - i as u64 * 650))
+        .collect();
+    FakeKick::new()
+        .with_pages(streams.chunks(8).map(<[_]>::to_vec).collect())
+        .with_offline("sleepy-fox", "SleepyFox")
 }

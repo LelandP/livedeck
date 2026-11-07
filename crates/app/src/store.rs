@@ -263,6 +263,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 self.sink.quit();
                 continue;
             }
+            if let Command::SetKick(on) = cmd {
+                // At once, not in a task: the `LoadFeed` after it must already see it.
+                self.provider.set_kick(on);
+                continue;
+            }
             if let Command::SaveSettings(settings) = cmd {
                 if let Some(save) = self.save_settings.clone() {
                     // File IO: keep it off the async workers.
@@ -440,7 +445,11 @@ mod tests {
             Arc::new(FakePlayer::new()),
         );
         let session = fast_session(&tx, Viewer::default());
-        let chat = Chat::new(Arc::new(fake_chat(false)), tx.clone());
+        let chat = Chat::new(
+            Arc::new(fake_chat(false)),
+            Arc::new(fake_chat(false)),
+            tx.clone(),
+        );
         let awake = Arc::clone(&rec.3);
         let store = Store::new(
             state,
@@ -487,7 +496,11 @@ mod tests {
             Arc::new(FakePlayer::new()),
         );
         let session = fast_session(&tx, viewer);
-        let chat = Chat::new(Arc::new(fake_chat(false)), tx.clone());
+        let chat = Chat::new(
+            Arc::new(fake_chat(false)),
+            Arc::new(fake_chat(false)),
+            tx.clone(),
+        );
         let store = Store::new(
             state,
             provider,
@@ -841,7 +854,11 @@ mod tests {
             FakeResolver::playing("https://example.test/live.m3u8"),
             Arc::new(FakePlayer::new()),
         );
-        let chat = Chat::new(Arc::new(FakeChat::new(script)), tx.clone());
+        let chat = Chat::new(
+            Arc::new(FakeChat::new(script)),
+            Arc::new(FakeChat::new(Vec::new())),
+            tx.clone(),
+        );
         let session = fast_session(&tx, Viewer::default());
         let (state, startup) = init();
         let store = Store::new(

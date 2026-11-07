@@ -6,10 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use htpc_core::{
-    ChannelRef, Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, StreamKind, Zoom,
+    ChannelRef, Command, Event, Hwdec, Latency, Platform, PlayerOption, PlayerStats, StreamKind,
+    Zoom,
 };
 use htpc_player::{LoadOptions, Player, PlayerEvent};
-use htpc_resolver::{ResolveError, StreamResolver};
+use htpc_resolver::{ResolveError, Site, StreamResolver};
 
 /// How long the offline screen waits before looking for the stream again
 /// (`Command::ScheduleOfflineRecheck`). The player's end screen says this number too.
@@ -78,7 +79,10 @@ impl<R: StreamResolver> Playback<R> {
     async fn play(&self, channel: ChannelRef, stream: StreamKind, latency: Latency) -> Vec<Event> {
         let rendition = rendition_name(stream);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let resolved = self.resolver.resolve(&channel.login, rendition).await;
+        let resolved = self
+            .resolver
+            .resolve(site(channel.platform), &channel.login, rendition)
+            .await;
         if self.generation.load(Ordering::SeqCst) != generation {
             tracing::debug!(channel = %channel.login, "a newer play or stop replaced this one");
             return Vec::new();
@@ -107,6 +111,14 @@ impl<R: StreamResolver> Playback<R> {
                 }]
             }
         }
+    }
+}
+
+/// The resolver's name for a platform.
+fn site(platform: Platform) -> Site {
+    match platform {
+        Platform::Twitch => Site::Twitch,
+        Platform::Kick => Site::Kick,
     }
 }
 
@@ -294,6 +306,7 @@ mod tests {
     impl StreamResolver for Slow {
         async fn resolve(
             &self,
+            _: Site,
             _: &str,
             _: &str,
         ) -> Result<htpc_resolver::PlaylistUrl, ResolveError> {

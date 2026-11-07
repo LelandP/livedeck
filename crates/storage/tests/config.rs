@@ -28,6 +28,7 @@ fn round_trip_survives_a_restart() {
             quality: Quality::P720,
             live_notifications: false,
             background_play: true,
+            show_kick: true,
         },
         client_id: Some("abc123".to_owned()),
         image_cache_max_mb: 64,
@@ -43,6 +44,15 @@ fn round_trip_survives_a_restart() {
     assert!(text.contains("quality = \"720p\""), "{text}");
     assert!(text.contains("live_notifications = false"), "{text}");
     assert!(text.contains("background_play = true"), "{text}");
+    assert!(text.contains("show_kick = true"), "{text}");
+}
+
+#[test]
+fn an_older_file_without_show_kick_keeps_kick_off() {
+    let config = Config::from_toml("chat_layout = \"side\"\n").unwrap();
+    assert!(!config.settings.show_kick);
+    let on = Config::from_toml("show_kick = true\n").unwrap();
+    assert!(on.settings.show_kick);
 }
 
 #[test]

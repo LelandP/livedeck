@@ -14,6 +14,8 @@ export struct StreamItem {
     retry: bool,
     // A followed channel that is not live: dimmed, labelled "Offline".
     offline: bool,
+    // A Kick channel: a "Kick" chip at the top left. Twitch cards have none.
+    kick: bool,
 }
 
 // A "<channel> is live" popup (live notifications).

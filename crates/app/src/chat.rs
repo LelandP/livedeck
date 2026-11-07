@@ -1,15 +1,16 @@
-//! Chat commands: join the channel on screen, leave it again. What the chat client reports comes
-//! back to the store as core `Event`s.
+//! Chat commands: join the channel on screen, leave it again. Twitch and Kick each have their own
+//! client; what either reports comes back to the store as core `Event`s.
 
 use std::sync::{Arc, Mutex};
 
 use htpc_chat::{ChatClient, ChatEvent, ChatSession};
-use htpc_core::{ChannelRef, Command, Event, Msg};
+use htpc_core::{ChannelRef, Command, Event, Msg, Platform};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 /// Holds the one chat connection of the channel being watched.
 pub struct Chat {
-    client: Arc<dyn ChatClient>,
+    twitch: Arc<dyn ChatClient>,
+    kick: Arc<dyn ChatClient>,
     tx: UnboundedSender<Msg>,
     /// Dropping the session leaves the channel.
     session: Mutex<Option<ChatSession>>,
@@ -17,9 +18,14 @@ pub struct Chat {
 
 impl Chat {
     /// `tx` is the sender of the store's channel, which the events go into.
-    pub fn new(client: Arc<dyn ChatClient>, tx: UnboundedSender<Msg>) -> Self {
+    pub fn new(
+        twitch: Arc<dyn ChatClient>,
+        kick: Arc<dyn ChatClient>,
+        tx: UnboundedSender<Msg>,
+    ) -> Self {
         Self {
-            client,
+            twitch,
+            kick,
             tx,
             session: Mutex::new(None),
         }
@@ -37,7 +43,11 @@ impl Chat {
         match cmd {
             Command::JoinChat { channel } => {
                 let (events_tx, mut events) = unbounded_channel();
-                let session = self.client.join(&channel.login, events_tx);
+                let client = match channel.platform {
+                    Platform::Twitch => &self.twitch,
+                    Platform::Kick => &self.kick,
+                };
+                let session = client.join(&channel.login, events_tx);
                 // Replacing the old session drops it, which leaves its channel.
                 *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
                 let tx = self.tx.clone();
@@ -102,7 +112,11 @@ mod tests {
     #[tokio::test]
     async fn what_the_client_reports_becomes_events_for_the_channel() {
         let (tx, mut rx) = unbounded_channel();
-        let chat = Chat::new(Arc::new(FakeChat::new(script())), tx);
+        let chat = Chat::new(
+            Arc::new(FakeChat::new(script())),
+            Arc::new(FakeChat::new(Vec::new())),
+            tx,
+        );
         chat.execute(join("chan"));
 
         let mut got = Vec::new();
@@ -134,7 +148,11 @@ mod tests {
     async fn leaving_and_switching_close_the_connection() {
         let (tx, _rx) = unbounded_channel();
         let fake = FakeChat::new(Vec::new());
-        let chat = Chat::new(Arc::new(fake.clone()), tx);
+        let chat = Chat::new(
+            Arc::new(fake.clone()),
+            Arc::new(FakeChat::new(Vec::new())),
+            tx,
+        );
 
         chat.execute(join("one"));
         settle().await;
@@ -161,5 +179,19 @@ mod tests {
         assert!(!Chat::handles(&Command::FetchChatImages {
             urls: Vec::new()
         }));
+    }
+
+    #[tokio::test]
+    async fn a_kick_channel_joins_kick_chat() {
+        let (tx, _rx) = unbounded_channel();
+        let twitch = FakeChat::new(Vec::new());
+        let kick = FakeChat::new(Vec::new());
+        let chat = Chat::new(Arc::new(twitch.clone()), Arc::new(kick.clone()), tx);
+        chat.execute(Command::JoinChat {
+            channel: ChannelRef::kick("awa-xo"),
+        });
+        settle().await;
+        assert_eq!(kick.joined(), ["awa-xo"]);
+        assert!(twitch.joined().is_empty());
     }
 }

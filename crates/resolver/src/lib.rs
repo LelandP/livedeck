@@ -41,11 +41,21 @@ pub enum ResolveError {
     Failed(String),
 }
 
+/// Where a channel lives, which decides its page address and what a valid name is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Site {
+    #[default]
+    Twitch,
+    Kick,
+}
+
 /// Looks up the playlist of a live channel.
 pub trait StreamResolver: Send + Sync + 'static {
-    /// `quality` is a Streamlink stream name (`best`, `720p`, `worst`, ...).
+    /// `channel` is the login (Twitch) or slug (Kick) on `site`. `quality` is a Streamlink stream
+    /// name (`best`, `720p`, `worst`, ...).
     fn resolve(
         &self,
+        site: Site,
         channel: &str,
         quality: &str,
     ) -> impl Future<Output = Result<PlaylistUrl, ResolveError>> + Send;
