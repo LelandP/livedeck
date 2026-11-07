@@ -209,9 +209,10 @@ export component StreamCard inherits Rectangle {
             }
         }
 
-        // Skeleton: a pulsing placeholder while the data has not arrived.
-        Rectangle {
-            visible: root.item.loading;
+        // Skeleton: a pulsing placeholder while the data has not arrived. Created only while
+        // loading (not hidden with `visible`): a hidden one still read the pulse, and its
+        // animation clock kept the window redrawing every frame, a whole CPU core at idle.
+        if root.item.loading : Rectangle {
             background: Theme.surface-high;
             opacity: 0.55 + 0.45 * root.pulse;
         }
