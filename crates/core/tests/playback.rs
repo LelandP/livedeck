@@ -4,7 +4,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -30,7 +30,7 @@ fn watching() -> (AppState, Vec<Command>) {
 
 fn play(channel: &str) -> Command {
     Command::Play {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         stream: StreamKind::Video(Quality::Best),
         latency: Latency::Low,
     }
@@ -63,7 +63,7 @@ fn the_configured_quality_is_requested() {
     );
     let (_, cmds) = reduce(&s, Intent::Select);
     assert!(cmds.contains(&Command::Play {
-        channel: "chan".into(),
+        channel: ChannelRef::twitch("chan"),
         stream: StreamKind::Video(Quality::P720),
         latency: Latency::Low
     }));
@@ -82,7 +82,7 @@ fn an_offline_channel_shows_the_offline_state() {
     let s = ev(
         &s,
         Event::StreamOffline {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
         },
     );
     assert_eq!(s.playback, Playback::Offline);
@@ -94,7 +94,7 @@ fn a_resolver_failure_carries_its_message() {
     let s = ev(
         &s,
         Event::PlaybackFailed {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             message: "Streamlink is not installed".into(),
         },
     );
@@ -110,14 +110,14 @@ fn answers_for_another_channel_are_dropped() {
     let other = ev(
         &s,
         Event::StreamOffline {
-            channel: "other".into(),
+            channel: ChannelRef::twitch("other"),
         },
     );
     assert_eq!(other.playback, Playback::Loading);
     let other = ev(
         &s,
         Event::PlaybackFailed {
-            channel: "other".into(),
+            channel: ChannelRef::twitch("other"),
             message: "x".into(),
         },
     );
@@ -142,7 +142,7 @@ fn late_answers_after_leaving_are_dropped() {
         Event::PlaybackEnded,
         Event::PlaybackError("x".into()),
         Event::StreamOffline {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
         },
     ] {
         assert_eq!(ev(&s, e).playback, Playback::Idle);
@@ -176,7 +176,7 @@ fn a_player_error_fails_loading_and_playing() {
 fn x_and_a_retry_a_failed_or_offline_stream() {
     let (s, _) = watching();
     let offline = Event::StreamOffline {
-        channel: "chan".into(),
+        channel: ChannelRef::twitch("chan"),
     };
     for (bad, intent) in [
         (Event::PlaybackError("bad".into()), Intent::Retry),
@@ -241,7 +241,7 @@ fn offline(s: &AppState) -> (AppState, Vec<Command>) {
     reduce(
         s,
         Event::StreamOffline {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
         },
     )
 }
@@ -282,10 +282,10 @@ fn a_failed_recheck_stays_offline_and_looks_again() {
     let (looking, _) = reduce(&s, Event::OfflineRecheckDue(1));
     for answer in [
         Event::StreamOffline {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
         },
         Event::PlaybackFailed {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             message: "timeout".into(),
         },
         Event::PlaybackError("bad".into()),

@@ -6,7 +6,8 @@
 use std::collections::HashSet;
 
 use crate::domain::{
-    grid_rows, ChatMessage, ChatStatus, FeedId, Paging, RoomMode, RowKind, Stream, Tile,
+    grid_rows_on, ChannelRef, ChatMessage, ChatStatus, FeedId, Paging, Platform, RoomMode, RowId,
+    Stream, Tile,
 };
 use crate::keyboard::{self, Key};
 use crate::msg::{Command, Event, Intent, Msg, PageOutcome, PlayerOption};
@@ -528,7 +529,7 @@ fn subscribe_card_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Comman
     match intent {
         Intent::Select if s.can_open_browser => {
             if let Some(stream) = &s.now_playing {
-                cmds.push(Command::OpenUrl(subscribe_url(&stream.channel)));
+                cmds.push(Command::OpenUrl(subscribe_url(&stream.channel.login)));
             }
         }
         Intent::Back | Intent::Menu => s.subscribe_card = false,
@@ -563,7 +564,7 @@ fn raided(
         && s.screen == Screen::Player
         && s.now_playing
             .as_ref()
-            .is_some_and(|p| p.channel.eq_ignore_ascii_case(&from));
+            .is_some_and(|p| p.channel.is_same(&ChannelRef::twitch(&from)));
     if !on_screen || to_login.is_empty() || to_login.eq_ignore_ascii_case(&from) {
         return;
     }
@@ -608,7 +609,7 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
     let tint = s.now_playing.as_ref().map(|p| p.tint).unwrap_or_default();
     let stream = Stream {
-        channel: offer.to_login.clone(),
+        channel: ChannelRef::twitch(&offer.to_login),
         user_id: String::new(),
         title: String::new(),
         category: String::new(),
@@ -631,12 +632,12 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
     // The old channel's train is not this one's.
     s.hype_train = None;
     cmds.push(Command::WatchHypeTrain {
-        channel: stream.channel.clone(),
+        channel: stream.channel.login.clone(),
     });
     s.now_playing = Some(stream);
     start_playback(s, cmds);
     cmds.push(Command::FetchStreamInfo {
-        channel: offer.to_login,
+        channel: ChannelRef::twitch(offer.to_login),
     });
 }
 
@@ -669,7 +670,7 @@ fn stream_info(s: &mut AppState, info: Stream, cmds: &mut Vec<Command>) {
     let Some(p) = s
         .now_playing
         .as_mut()
-        .filter(|p| p.channel.eq_ignore_ascii_case(&info.channel))
+        .filter(|p| p.channel.is_same(&info.channel))
     else {
         return;
     };
@@ -1054,10 +1055,10 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         }
         Event::MoreLoaded {
             feed,
-            kind,
+            row,
             cursor,
             outcome,
-        } => more_loaded(s, feed, kind, cursor, outcome, cmds),
+        } => more_loaded(s, feed, row, cursor, outcome, cmds),
         Event::ChatMessages { channel, messages } => {
             // Drop late messages from a channel we already left.
             if watching(s, &channel) && !messages.is_empty() {
@@ -1251,7 +1252,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             let on_screen = s.screen == Screen::Player
                 && s.now_playing
                     .as_ref()
-                    .is_some_and(|p| p.channel.eq_ignore_ascii_case(&channel));
+                    .is_some_and(|p| p.channel.is_same(&ChannelRef::twitch(&channel)));
             if on_screen {
                 s.hype_train = train;
             }
@@ -1316,11 +1317,11 @@ fn went_live(s: &mut AppState, streams: Vec<Stream>, cmds: &mut Vec<Command>) {
         let on_screen = s.screen == Screen::Player
             && s.now_playing
                 .as_ref()
-                .is_some_and(|p| p.channel.eq_ignore_ascii_case(&stream.channel));
+                .is_some_and(|p| p.channel.is_same(&stream.channel));
         let shown = s
             .toasts
             .iter()
-            .any(|t| t.stream.channel.eq_ignore_ascii_case(&stream.channel));
+            .any(|t| t.stream.channel.is_same(&stream.channel));
         if on_screen || shown {
             continue;
         }
@@ -1335,15 +1336,18 @@ fn went_live(s: &mut AppState, streams: Vec<Stream>, cmds: &mut Vec<Command>) {
 }
 
 /// True while the Player screen shows `channel`. Late answers for a channel already left fail it.
-fn watching(s: &AppState, channel: &str) -> bool {
-    s.screen == Screen::Player && s.now_playing.as_ref().is_some_and(|p| p.channel == channel)
+fn watching(s: &AppState, channel: &ChannelRef) -> bool {
+    s.screen == Screen::Player
+        && s.now_playing
+            .as_ref()
+            .is_some_and(|p| p.channel == *channel)
 }
 
 /// Applies the answer to a `LoadMore`.
 fn more_loaded(
     s: &mut AppState,
     feed: FeedId,
-    kind: RowKind,
+    row: RowId,
     cursor: String,
     outcome: PageOutcome,
     cmds: &mut Vec<Command>,
@@ -1352,19 +1356,20 @@ fn more_loaded(
     let Some(f) = s.feed_mut(&feed) else {
         return;
     };
-    // On a grid the paging state lives on the last row, on Home on the row of this kind.
+    // On a grid the paging state lives on the last row, on Home on the row with this id.
     let target = if grid {
         f.rows.len().checked_sub(1)
     } else {
-        f.rows.iter().position(|r| r.kind == kind)
+        f.rows.iter().position(|r| r.id() == row)
     };
     let Some(idx) = target else {
         return;
     };
     // Ignore answers for a page the row no longer waits for (a reload replaced it).
-    if f.rows[idx].kind != kind || f.rows[idx].paging != Paging::Loading(cursor.clone()) {
+    if f.rows[idx].id() != row || f.rows[idx].paging != Paging::Loading(cursor.clone()) {
         return;
     }
+    let kind = row.kind;
     match outcome {
         PageOutcome::End => f.rows[idx].paging = Paging::End,
         PageOutcome::Failed => f.rows[idx].paging = Paging::Failed(cursor),
@@ -1379,7 +1384,7 @@ fn more_loaded(
                 let fresh = without_known(&all, tiles);
                 fetch_thumbnails(fresh.iter(), cmds);
                 all.extend(fresh);
-                f.rows = grid_rows(kind, all, paging);
+                f.rows = grid_rows_on(row.platform, kind, all, paging);
             } else {
                 let row = &mut f.rows[idx];
                 let fresh = without_known(&row.tiles, tiles);
@@ -1394,10 +1399,14 @@ fn more_loaded(
 /// `tiles` minus the ones whose key is already in `known` (or repeated within `tiles`). Pages are
 /// requested at different moments, so an item can show up twice as the ranking shifts.
 fn without_known(known: &[Tile], tiles: Vec<Tile>) -> Vec<Tile> {
-    let mut seen: HashSet<String> = known.iter().map(|t| t.key().to_owned()).collect();
+    let owned = |t: &Tile| {
+        let (platform, key) = t.key();
+        (platform, key.to_owned())
+    };
+    let mut seen: HashSet<(Platform, String)> = known.iter().map(owned).collect();
     tiles
         .into_iter()
-        .filter(|t| seen.insert(t.key().to_owned()))
+        .filter(|t| seen.insert(owned(t)))
         .collect()
 }
 
@@ -1459,7 +1468,7 @@ fn load_more_if_near_end(s: &mut AppState, cmds: &mut Vec<Command>) {
         row.paging = Paging::Loading(cursor.clone());
         cmds.push(Command::LoadMore {
             feed: id,
-            kind: row.kind,
+            row: row.id(),
             cursor,
         });
     }
@@ -1486,7 +1495,7 @@ fn retry(s: &mut AppState, cmds: &mut Vec<Command>) {
             row.paging = Paging::Loading(cursor.clone());
             cmds.push(Command::LoadMore {
                 feed: id.clone(),
-                kind: row.kind,
+                row: row.id(),
                 cursor,
             });
         }
@@ -1539,7 +1548,7 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     });
     s.hype_train = None;
     cmds.push(Command::WatchHypeTrain {
-        channel: stream.channel.clone(),
+        channel: stream.channel.login.clone(),
     });
     s.now_playing = Some(stream);
     // Every stream opens as video.

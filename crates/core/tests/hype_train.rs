@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -111,7 +111,7 @@ fn following_a_raid_watches_the_new_channel_and_drops_the_old_train() {
         },
     );
     let (s, cmds) = reduce(&s, Intent::Select);
-    assert_eq!(s.now_playing.as_ref().unwrap().channel, "next_up");
+    assert_eq!(s.now_playing.as_ref().unwrap().channel.login, "next_up");
     assert_eq!(s.hype_train, None);
     assert!(cmds.contains(&Command::WatchHypeTrain {
         channel: "next_up".into()

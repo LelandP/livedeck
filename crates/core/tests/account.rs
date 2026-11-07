@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -17,7 +17,7 @@ fn stream(channel: &str) -> Tile {
 
 fn offline_channel(login: &str) -> Tile {
     Tile::Channel(Channel {
-        channel: login.into(),
+        channel: ChannelRef::twitch(login),
         name: login.into(),
         tint: Rgb::default(),
     })
@@ -265,7 +265,7 @@ fn a_live_followed_channel_plays_and_back_returns_to_following() {
     assert_eq!(s.screen, Screen::Player);
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if channel == "live0")));
+        .any(|c| matches!(c, Command::Play { channel, .. } if channel.login == "live0")));
 
     let (s, _) = reduce(&s, Intent::Back);
     assert_eq!(s.screen, Screen::Following);
@@ -278,20 +278,20 @@ fn an_offline_followed_channel_still_tries_to_play() {
     assert_eq!(s.screen, Screen::Player);
     assert_eq!(s.playback, Playback::Loading);
     assert_eq!(
-        s.now_playing.as_ref().map(|p| p.channel.as_str()),
+        s.now_playing.as_ref().map(|p| p.channel.login.as_str()),
         Some("off0")
     );
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if channel == "off0")));
+        .any(|c| matches!(c, Command::Play { channel, .. } if channel.login == "off0")));
     let join = Command::JoinChat {
-        channel: "off0".into(),
+        channel: ChannelRef::twitch("off0"),
     };
     assert!(cmds.contains(&join));
 
     // The resolver says it is still offline: the end screen, like any other offline channel.
     let offline = Event::StreamOffline {
-        channel: "off0".into(),
+        channel: ChannelRef::twitch("off0"),
     };
     let (s, _) = reduce(&s, offline);
     assert_eq!(s.playback, Playback::Offline);

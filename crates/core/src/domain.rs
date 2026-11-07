@@ -19,13 +19,93 @@ impl Rgb {
     }
 }
 
+/// Where a channel lives. Every channel, stream and row belongs to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum Platform {
+    #[default]
+    Twitch,
+    Kick,
+}
+
+/// What a platform offers beyond watching and reading chat. One table, so the reducer and the
+/// view-model ask here instead of checking the platform in many places.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Features {
+    /// Follow a raid from the channel on screen (Twitch EventSub).
+    pub raids: bool,
+    /// The hype train bar (Twitch's GQL API).
+    pub hype_train: bool,
+    /// The subscribe card (a Twitch page).
+    pub subscribe: bool,
+    /// Write in chat. Kick needs a Kick sign-in, which LiveDeck does not have.
+    pub chat_send: bool,
+}
+
+impl Platform {
+    pub fn features(self) -> Features {
+        match self {
+            Platform::Twitch => Features {
+                raids: true,
+                hype_train: true,
+                subscribe: true,
+                chat_send: true,
+            },
+            Platform::Kick => Features {
+                raids: false,
+                hype_train: false,
+                subscribe: false,
+                chat_send: false,
+            },
+        }
+    }
+}
+
+/// One channel: the platform and its login there (a Kick channel's slug). The same login on two
+/// platforms is two channels.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct ChannelRef {
+    pub platform: Platform,
+    pub login: String,
+}
+
+impl ChannelRef {
+    pub fn new(platform: Platform, login: impl Into<String>) -> Self {
+        Self {
+            platform,
+            login: login.into(),
+        }
+    }
+
+    pub fn twitch(login: impl Into<String>) -> Self {
+        Self::new(Platform::Twitch, login)
+    }
+
+    pub fn kick(slug: impl Into<String>) -> Self {
+        Self::new(Platform::Kick, slug)
+    }
+
+    /// The same channel, ignoring the case of the login (sources disagree on it).
+    pub fn is_same(&self, other: &ChannelRef) -> bool {
+        self.platform == other.platform && self.login.eq_ignore_ascii_case(&other.login)
+    }
+
+    pub fn is_twitch(&self) -> bool {
+        self.platform == Platform::Twitch
+    }
+
+    pub fn features(&self) -> Features {
+        self.platform.features()
+    }
+}
+
 /// A live stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stream {
-    /// Channel login, used to join chat and to resolve the playlist.
-    pub channel: String,
-    /// The broadcaster's Twitch user id, which EventSub conditions (raids) use. Empty when the
-    /// source did not say (a card made from a login only); `Command::FetchStreamInfo` fills it.
+    /// The channel, used to join chat and to resolve the playlist.
+    pub channel: ChannelRef,
+    /// The broadcaster's id on its platform (Twitch: the user id, which EventSub conditions use).
+    /// Empty when the source did not say (a card made from a login only);
+    /// `Command::FetchStreamInfo` fills it.
     pub user_id: String,
     pub title: String,
     pub category: String,
@@ -50,8 +130,8 @@ pub struct Category {
 /// A followed channel that is not live (the dimmed cards of the Following tab).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Channel {
-    /// Channel login, same as `Stream::channel`. Selecting the card tries to play it.
-    pub channel: String,
+    /// Same as `Stream::channel`. Selecting the card tries to play it.
+    pub channel: ChannelRef,
     /// The name as the streamer writes it.
     pub name: String,
     pub tint: Rgb,
@@ -76,20 +156,21 @@ impl Tile {
         }
     }
 
-    /// Identity within a row: the channel login or the game id. Used to drop duplicates when a
-    /// later page repeats an item (viewer counts shift between requests). Streams and channels
-    /// share the login space, so a channel that went live is not shown twice on Following.
-    pub fn key(&self) -> &str {
+    /// Identity within a row: the platform and the channel login or game id. Used to drop
+    /// duplicates when a later page repeats an item (viewer counts shift between requests).
+    /// Streams and channels share the login space, so a channel that went live is not shown twice
+    /// on Following. Categories are Twitch's.
+    pub fn key(&self) -> (Platform, &str) {
         match self {
-            Tile::Stream(s) => &s.channel,
-            Tile::Category(c) => &c.id,
-            Tile::Channel(c) => &c.channel,
+            Tile::Stream(s) => (s.channel.platform, &s.channel.login),
+            Tile::Category(c) => (Platform::Twitch, &c.id),
+            Tile::Channel(c) => (c.channel.platform, &c.channel.login),
         }
     }
 }
 
 /// What a row shows. The view-model maps this to a (later translatable) title.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowKind {
     /// The hero: the single most-watched live stream, drawn as a wide card.
     Featured,
@@ -123,18 +204,39 @@ pub enum Paging {
     Failed(String),
 }
 
+/// Which row of a feed a page belongs to: its kind, and the platform its cursor is for. Home can
+/// have a Top Live row per platform, each paging on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RowId {
+    pub kind: RowKind,
+    pub platform: Platform,
+}
+
+impl RowId {
+    pub fn twitch(kind: RowKind) -> Self {
+        Self {
+            kind,
+            platform: Platform::Twitch,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub kind: RowKind,
+    /// The platform the row's tiles come from and its cursor is for. A row that mixes platforms
+    /// (search results) names the one that pages it.
+    pub platform: Platform,
     pub tiles: Vec<Tile>,
     pub paging: Paging,
 }
 
 impl Row {
-    /// A row with no further pages.
+    /// A Twitch row with no further pages.
     pub fn new(kind: RowKind, tiles: Vec<Tile>) -> Self {
         Self {
             kind,
+            platform: Platform::Twitch,
             tiles,
             paging: Paging::End,
         }
@@ -143,6 +245,18 @@ impl Row {
     pub fn with_paging(mut self, paging: Paging) -> Self {
         self.paging = paging;
         self
+    }
+
+    pub fn on(mut self, platform: Platform) -> Self {
+        self.platform = platform;
+        self
+    }
+
+    pub fn id(&self) -> RowId {
+        RowId {
+            kind: self.kind,
+            platform: self.platform,
+        }
     }
 }
 
@@ -159,9 +273,19 @@ pub fn grid_cols(kind: RowKind) -> usize {
 /// Splits `tiles` into grid rows (see [`grid_cols`]). The last row carries `paging`, because on a
 /// grid "the end of the list" is the end of the last row.
 pub fn grid_rows(kind: RowKind, tiles: Vec<Tile>, paging: Paging) -> Vec<Row> {
+    grid_rows_on(Platform::Twitch, kind, tiles, paging)
+}
+
+/// [`grid_rows`] for a grid of one platform.
+pub fn grid_rows_on(
+    platform: Platform,
+    kind: RowKind,
+    tiles: Vec<Tile>,
+    paging: Paging,
+) -> Vec<Row> {
     let mut rows: Vec<Row> = tiles
         .chunks(grid_cols(kind))
-        .map(|chunk| Row::new(kind, chunk.to_vec()))
+        .map(|chunk| Row::new(kind, chunk.to_vec()).on(platform))
         .collect();
     if let Some(last) = rows.last_mut() {
         last.paging = paging;

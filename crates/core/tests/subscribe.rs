@@ -6,7 +6,7 @@ use htpc_core::*;
 fn home() -> AppState {
     let (s, _) = init();
     let tile = Tile::Stream(Stream {
-        channel: "chan_1".into(),
+        channel: ChannelRef::twitch("chan_1"),
         user_id: String::new(),
         title: "title".into(),
         category: "Cat".into(),

@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{
-    grid_rows, Category, Channel, Command, Event, FeedId, HypeTrain, PageOutcome, Paging, Rgb, Row,
-    RowKind, SendProblem, Stream, Tile,
+    grid_rows, Category, Channel, ChannelRef, Command, Event, FeedId, HypeTrain, PageOutcome,
+    Paging, Platform, Rgb, Row, RowId, RowKind, SendProblem, Stream, Tile,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
@@ -348,7 +348,7 @@ impl<A: TwitchApi> ApiProvider<A> {
         let mut live_logins = HashSet::new();
         match live {
             Ok((tiles, paging)) => {
-                live_logins.extend(tiles.iter().map(|t| t.key().to_ascii_lowercase()));
+                live_logins.extend(tiles.iter().map(|t| t.key().1.to_ascii_lowercase()));
                 if !tiles.is_empty() {
                     rows.push(Row::new(RowKind::SearchLive, tiles).with_paging(paging));
                 }
@@ -370,7 +370,7 @@ impl<A: TwitchApi> ApiProvider<A> {
             Ok(found) => {
                 let tiles: Vec<Tile> = offline_tiles(&found.items)
                     .into_iter()
-                    .filter(|t| !live_logins.contains(&t.key().to_ascii_lowercase()))
+                    .filter(|t| !live_logins.contains(&t.key().1.to_ascii_lowercase()))
                     .collect();
                 if !tiles.is_empty() {
                     rows.push(
@@ -433,7 +433,7 @@ impl<A: TwitchApi> ApiProvider<A> {
         }
         match self.api.user(Some(channel)).await {
             Ok(Some(user)) => Some(Event::StreamInfo(Stream {
-                channel: user.login.clone(),
+                channel: ChannelRef::twitch(user.login.clone()),
                 user_id: user.id,
                 title: String::new(),
                 category: String::new(),
@@ -501,7 +501,8 @@ impl<A: TwitchApi> ApiProvider<A> {
 
     /// One more page of a row. `IntegrityRequired` is the anonymous GQL API's answer to every
     /// page after the first, so it ends the row instead of failing it.
-    async fn load_more(&self, feed: FeedId, kind: RowKind, cursor: String) -> Event {
+    async fn load_more(&self, feed: FeedId, row: RowId, cursor: String) -> Event {
+        let kind = row.kind;
         let size = if feed.is_grid() {
             GRID_PAGE_SIZE
         } else {
@@ -566,7 +567,7 @@ impl<A: TwitchApi> ApiProvider<A> {
         };
         Event::MoreLoaded {
             feed,
-            kind,
+            row,
             cursor,
             outcome,
         }
@@ -577,8 +578,10 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
     async fn execute(&self, cmd: Command) -> Vec<Event> {
         match cmd {
             Command::LoadFeed { feed } => vec![self.load_feed(feed).await],
-            Command::LoadMore { feed, kind, cursor } => {
-                vec![self.load_more(feed, kind, cursor).await]
+            // Every source is Twitch's until the platforms get sources of their own.
+            Command::LoadMore { row, .. } if row.platform != Platform::Twitch => Vec::new(),
+            Command::LoadMore { feed, row, cursor } => {
+                vec![self.load_more(feed, row, cursor).await]
             }
             // Waiting for typing to pause is `search.rs`'s job. This runs the search itself.
             Command::Search { id, query } => {
@@ -590,8 +593,9 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                     Err(message) => vec![Event::SearchFailed { id, message }],
                 }
             }
+            Command::FetchStreamInfo { channel } if !channel.is_twitch() => Vec::new(),
             Command::FetchStreamInfo { channel } => {
-                self.stream_info(&channel).await.into_iter().collect()
+                self.stream_info(&channel.login).await.into_iter().collect()
             }
             Command::SendChat {
                 id,
@@ -599,7 +603,7 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                 broadcaster_id,
                 text,
             } => vec![
-                match self.send_chat(&channel, &broadcaster_id, &text).await {
+                match self.send_chat(&channel.login, &broadcaster_id, &text).await {
                     Ok(()) => Event::ChatSent { id },
                     Err(problem) => Event::ChatDropped { id, problem },
                 },
@@ -722,7 +726,7 @@ fn stream(s: &StreamInfo, bucket: u64) -> Tile {
 
 fn stream_of(s: &StreamInfo, bucket: u64) -> Stream {
     Stream {
-        channel: s.user_login.clone(),
+        channel: ChannelRef::twitch(s.user_login.clone()),
         user_id: s.user_id.clone(),
         title: s.title.clone(),
         category: s.game_name.clone(),
@@ -737,7 +741,7 @@ fn stream_of(s: &StreamInfo, bucket: u64) -> Stream {
 /// viewers or a preview.
 fn channel_stream(c: &ChannelResult) -> Tile {
     Tile::Stream(Stream {
-        channel: c.broadcaster_login.clone(),
+        channel: ChannelRef::twitch(c.broadcaster_login.clone()),
         user_id: c.id.clone(),
         title: c.title.clone(),
         category: c.game_name.clone(),
@@ -754,7 +758,7 @@ fn offline_tiles(found: &[ChannelResult]) -> Vec<Tile> {
         .filter(|c| !c.is_live)
         .map(|c| {
             Tile::Channel(Channel {
-                channel: c.broadcaster_login.clone(),
+                channel: ChannelRef::twitch(c.broadcaster_login.clone()),
                 name: c.display_name.clone(),
                 tint: tint_for(&c.broadcaster_login),
             })
@@ -765,7 +769,7 @@ fn offline_tiles(found: &[ChannelResult]) -> Vec<Tile> {
 /// A followed channel that is not live.
 fn channel(c: &FollowedChannel) -> Tile {
     Tile::Channel(Channel {
-        channel: c.broadcaster_login.clone(),
+        channel: ChannelRef::twitch(c.broadcaster_login.clone()),
         name: c.broadcaster_name.clone(),
         tint: tint_for(&c.broadcaster_login),
     })
@@ -817,9 +821,9 @@ mod tests {
 
     fn channel(tile: &Tile) -> &str {
         match tile {
-            Tile::Stream(s) => &s.channel,
+            Tile::Stream(s) => &s.channel.login,
             Tile::Category(c) => &c.name,
-            Tile::Channel(c) => &c.channel,
+            Tile::Channel(c) => &c.channel.login,
         }
     }
 
@@ -859,7 +863,7 @@ mod tests {
             panic!("stream expected")
         };
         assert_eq!(
-            (first.channel.as_str(), first.viewers),
+            (first.channel.login.as_str(), first.viewers),
             ("nightowl_dev", 4_200)
         );
         let Tile::Category(cat) = &rows[3].tiles[0] else {
@@ -898,7 +902,7 @@ mod tests {
     async fn load_more_returns_the_next_page_and_its_cursor() {
         let provider = ApiProvider::new(api_with_top(50));
         let event = provider
-            .load_more(FeedId::Home, RowKind::TopLive, "20".into())
+            .load_more(FeedId::Home, RowId::twitch(RowKind::TopLive), "20".into())
             .await;
         let Event::MoreLoaded {
             outcome: PageOutcome::Page { tiles, next },
@@ -919,7 +923,11 @@ mod tests {
         // FakeApi rejects an unknown cursor like Helix's 400.
         let provider = ApiProvider::new(fake_api());
         let event = provider
-            .load_more(FeedId::Browse, RowKind::Categories, "bogus".into())
+            .load_more(
+                FeedId::Browse,
+                RowId::twitch(RowKind::Categories),
+                "bogus".into(),
+            )
             .await;
         assert!(matches!(
             event,
@@ -957,7 +965,7 @@ mod tests {
     async fn chat_and_image_commands_are_not_the_providers_business() {
         let provider = ApiProvider::new(fake_api());
         let join = Command::JoinChat {
-            channel: "x".into(),
+            channel: ChannelRef::twitch("x"),
         };
         assert!(provider.execute(join).await.is_empty());
         let images = Command::FetchChatImages {
@@ -1086,7 +1094,10 @@ mod tests {
         let Tile::Stream(hero) = &rows[0].tiles[0] else {
             panic!("stream expected")
         };
-        assert_eq!((hero.channel.as_str(), hero.viewers), ("octave", 14_000));
+        assert_eq!(
+            (hero.channel.login.as_str(), hero.viewers),
+            ("octave", 14_000)
+        );
         assert_eq!(hero.category, "Rocket League");
         assert!(hero
             .thumbnail
@@ -1156,7 +1167,7 @@ mod tests {
 
         let provider = ApiProvider::new(gql(&server));
         let event = provider
-            .load_more(FeedId::Home, RowKind::TopLive, "c".into())
+            .load_more(FeedId::Home, RowId::twitch(RowKind::TopLive), "c".into())
             .await;
         assert!(matches!(
             event,
@@ -1234,8 +1245,8 @@ mod tests {
 
     fn channel_of(tile: &Tile) -> &str {
         match tile {
-            Tile::Stream(s) => &s.channel,
-            Tile::Channel(c) => &c.channel,
+            Tile::Stream(s) => &s.channel.login,
+            Tile::Channel(c) => &c.channel.login,
             Tile::Category(c) => &c.id,
         }
     }
@@ -1327,7 +1338,10 @@ mod tests {
         let Tile::Stream(live) = &rows[0].tiles[0] else {
             panic!("a stream card expected")
         };
-        assert_eq!((live.channel.as_str(), live.viewers), ("marrow", 1_900));
+        assert_eq!(
+            (live.channel.login.as_str(), live.viewers),
+            ("marrow", 1_900)
+        );
         let off: Vec<_> = rows[1].tiles.iter().map(channel_of).collect();
         assert_eq!(off, ["marrowfan_tv"]);
         assert!(matches!(rows[1].tiles[0], Tile::Channel(_)));
@@ -1403,7 +1417,7 @@ mod tests {
             .tiles
             .iter()
             .map(|t| match t {
-                Tile::Stream(s) => (s.channel.as_str(), s.viewers, s.thumbnail.is_some()),
+                Tile::Stream(s) => (s.channel.login.as_str(), s.viewers, s.thumbnail.is_some()),
                 other => panic!("stream expected, got {other:?}"),
             })
             .collect();
@@ -1414,7 +1428,7 @@ mod tests {
         let event = provider
             .load_more(
                 FeedId::Search("fo".into()),
-                RowKind::SearchLive,
+                RowId::twitch(RowKind::SearchLive),
                 "next".into(),
             )
             .await;
@@ -1432,7 +1446,7 @@ mod tests {
     async fn followed_live_lists_every_live_followed_channel_while_signed_in() {
         let provider = ApiProvider::new(fake_api()).with_account(signed_in_viewer());
         let live = provider.followed_live().await.expect("signed in");
-        let names: Vec<_> = live.iter().map(|s| s.channel.as_str()).collect();
+        let names: Vec<_> = live.iter().map(|s| s.channel.login.as_str()).collect();
         assert_eq!(names[0], "nightowl_dev");
         assert_eq!(live.len(), 5);
 
@@ -1460,7 +1474,7 @@ mod tests {
 
     fn fetch_info(channel: &str) -> Command {
         Command::FetchStreamInfo {
-            channel: channel.into(),
+            channel: ChannelRef::twitch(channel),
         }
     }
 
@@ -1477,7 +1491,10 @@ mod tests {
         let [Event::StreamInfo(s)] = events.as_slice() else {
             panic!("one StreamInfo expected, got {events:?}");
         };
-        assert_eq!((s.channel.as_str(), s.user_id.as_str()), ("next_up", "200"));
+        assert_eq!(
+            (s.channel.login.as_str(), s.user_id.as_str()),
+            ("next_up", "200")
+        );
         assert_eq!(
             (s.title.as_str(), s.category.as_str()),
             ("Just got raided", "Art")
@@ -1507,7 +1524,7 @@ mod tests {
     fn send(id: u32, broadcaster_id: &str, text: &str) -> Command {
         Command::SendChat {
             id,
-            channel: "sable".into(),
+            channel: ChannelRef::twitch("sable"),
             broadcaster_id: broadcaster_id.into(),
             text: text.into(),
         }

@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -17,7 +17,7 @@ fn stream(channel: &str) -> Tile {
 
 fn stream_with_image(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: String::new(),
         category: String::new(),
@@ -70,7 +70,7 @@ fn home_with_more() -> AppState {
 fn more_loaded(cursor: &str, outcome: PageOutcome) -> Event {
     Event::MoreLoaded {
         feed: FeedId::Home,
-        kind: RowKind::TopLive,
+        row: RowId::twitch(RowKind::TopLive),
         cursor: cursor.into(),
         outcome,
     }
@@ -167,7 +167,7 @@ fn next_page_loads_when_focus_is_within_three_of_the_row_end() {
         cmds,
         vec![Command::LoadMore {
             feed: FeedId::Home,
-            kind: RowKind::TopLive,
+            row: RowId::twitch(RowKind::TopLive),
             cursor: "c1".into()
         }]
     );
@@ -219,7 +219,7 @@ fn loading_page() -> AppState {
 fn a_loaded_page_is_appended_and_a_new_cursor_kept() {
     let (s, cmds) = reduce(&loading_page(), more_loaded("c1", page("n", 5, Some("c2"))));
     assert_eq!(s.home.rows[0].tiles.len(), 15);
-    assert_eq!(s.home.rows[0].tiles[10].key(), "n0");
+    assert_eq!(s.home.rows[0].tiles[10].key().1, "n0");
     assert_eq!(s.home.rows[0].paging, Paging::More("c2".into()));
     assert_eq!(s.home.focus.col, 6, "focus does not jump");
     assert!(cmds.is_empty());
@@ -247,8 +247,102 @@ fn repeated_items_are_dropped_from_a_new_page() {
     let (s, _) = reduce(&loading_page(), more_loaded("c1", outcome));
     let keys: Vec<_> = s.home.rows[0].tiles.iter().map(Tile::key).collect();
     assert_eq!(keys.len(), 12);
-    assert_eq!(keys.iter().filter(|k| **k == "t9").count(), 1);
-    assert_eq!(keys.iter().filter(|k| **k == "n0").count(), 1);
+    assert_eq!(keys.iter().filter(|k| k.1 == "t9").count(), 1);
+    assert_eq!(keys.iter().filter(|k| k.1 == "n0").count(), 1);
+}
+
+fn kick_stream(channel: &str) -> Tile {
+    let Tile::Stream(mut s) = stream(channel) else {
+        unreachable!()
+    };
+    s.channel = ChannelRef::kick(channel);
+    Tile::Stream(s)
+}
+
+#[test]
+fn the_same_login_on_another_platform_is_another_channel() {
+    // "t9" is already on the row as a Twitch channel; a Kick channel of that name is not a repeat.
+    let outcome = PageOutcome::Page {
+        tiles: vec![kick_stream("t9"), stream("t9")],
+        next: None,
+    };
+    let (s, _) = reduce(&loading_page(), more_loaded("c1", outcome));
+    let keys: Vec<_> = s.home.rows[0].tiles.iter().map(Tile::key).collect();
+    assert_eq!(keys.len(), 11);
+    assert_eq!(keys[10], (Platform::Kick, "t9"));
+}
+
+#[test]
+fn a_page_for_the_same_kind_of_row_on_another_platform_is_ignored() {
+    let s = loading_page();
+    let kick_page = Event::MoreLoaded {
+        feed: FeedId::Home,
+        row: RowId {
+            kind: RowKind::TopLive,
+            platform: Platform::Kick,
+        },
+        cursor: "c1".into(),
+        outcome: page("k", 5, None),
+    };
+    let (after, _) = reduce(&s, kick_page);
+    assert_eq!(after.home.rows[0].tiles.len(), 10);
+    assert_eq!(after.home.rows[0].paging, Paging::Loading("c1".into()));
+}
+
+#[test]
+fn rows_of_two_platforms_page_on_their_own_cursors() {
+    let (s, _) = init();
+    let rows = vec![
+        Row::new(RowKind::TopLive, tiles("t", 2)).with_paging(Paging::More("tw".into())),
+        Row::new(RowKind::TopLive, tiles("k", 2))
+            .on(Platform::Kick)
+            .with_paging(Paging::More("ki".into())),
+    ];
+    let s = loaded(&s, FeedId::Home, rows);
+    let (s, cmds) = reduce(&s, Intent::Down);
+    assert_eq!(
+        load_more_cmds(&cmds),
+        vec![&Command::LoadMore {
+            feed: FeedId::Home,
+            row: RowId {
+                kind: RowKind::TopLive,
+                platform: Platform::Kick,
+            },
+            cursor: "ki".into(),
+        }]
+    );
+    let answer = Event::MoreLoaded {
+        feed: FeedId::Home,
+        row: RowId {
+            kind: RowKind::TopLive,
+            platform: Platform::Kick,
+        },
+        cursor: "ki".into(),
+        outcome: page("k2_", 3, None),
+    };
+    let (s, _) = reduce(&s, answer);
+    assert_eq!(s.home.rows[0].tiles.len(), 2, "the Twitch row is untouched");
+    assert_eq!(s.home.rows[1].tiles.len(), 5);
+}
+
+#[test]
+fn twitch_has_every_feature_and_kick_only_watching() {
+    let all = Features {
+        raids: true,
+        hype_train: true,
+        subscribe: true,
+        chat_send: true,
+    };
+    assert_eq!(Platform::Twitch.features(), all);
+    assert_eq!(
+        Platform::Kick.features(),
+        Features {
+            raids: false,
+            hype_train: false,
+            subscribe: false,
+            chat_send: false,
+        }
+    );
 }
 
 #[test]
@@ -311,7 +405,7 @@ fn x_retries_a_failed_page_with_the_same_cursor() {
         cmds,
         vec![Command::LoadMore {
             feed: FeedId::Home,
-            kind: RowKind::TopLive,
+            row: RowId::twitch(RowKind::TopLive),
             cursor: "c1".into()
         }]
     );
@@ -397,7 +491,7 @@ fn a_grid_pages_when_focus_nears_the_last_row() {
         cmds,
         vec![Command::LoadMore {
             feed: FeedId::Browse,
-            kind: RowKind::Categories,
+            row: RowId::twitch(RowKind::Categories),
             cursor: "next".into()
         }]
     );
@@ -408,7 +502,7 @@ fn a_grid_page_continues_the_grid_and_keeps_focus() {
     let (s, _) = run(browse(), &[Intent::Down; 4]);
     let ev = Event::MoreLoaded {
         feed: FeedId::Browse,
-        kind: RowKind::Categories,
+        row: RowId::twitch(RowKind::Categories),
         cursor: "next".into(),
         outcome: PageOutcome::Page {
             tiles: categories(40)[30..].to_vec(),
@@ -418,7 +512,7 @@ fn a_grid_page_continues_the_grid_and_keeps_focus() {
     let (s, _) = reduce(&s, ev);
     // 40 tiles in rows of 5, the paging state moved to the new last row.
     assert_eq!(s.browse.rows.len(), 8);
-    assert_eq!(s.browse.rows[7].tiles[4].key(), "g39");
+    assert_eq!(s.browse.rows[7].tiles[4].key().1, "g39");
     assert_eq!(s.browse.rows[7].paging, Paging::End);
     assert_eq!(s.browse.focus.row, 4);
 }
@@ -428,7 +522,7 @@ fn a_failed_grid_page_waits_for_x() {
     let (s, _) = run(browse(), &[Intent::Down; 4]);
     let failed = Event::MoreLoaded {
         feed: FeedId::Browse,
-        kind: RowKind::Categories,
+        row: RowId::twitch(RowKind::Categories),
         cursor: "next".into(),
         outcome: PageOutcome::Failed,
     };
@@ -484,19 +578,19 @@ fn category_streams_load_as_a_grid_and_play_on_select() {
 
     let (s, cmds) = run(s, &[Intent::Right, Intent::Select]);
     assert_eq!(s.screen, Screen::Player);
-    assert_eq!(s.now_playing.as_ref().unwrap().channel, "s1");
+    assert_eq!(s.now_playing.as_ref().unwrap().channel.login, "s1");
     assert_eq!(s.back_stack, vec![Screen::Browse, Screen::Category]);
     assert_eq!(
         cmds,
         vec![
             Command::JoinChat {
-                channel: "s1".into()
+                channel: ChannelRef::twitch("s1")
             },
             Command::WatchHypeTrain {
                 channel: "s1".into()
             },
             Command::Play {
-                channel: "s1".into(),
+                channel: ChannelRef::twitch("s1"),
                 stream: StreamKind::Video(Quality::Best),
                 latency: Latency::Low
             }
@@ -527,7 +621,7 @@ fn category_pages_through_its_own_cursor() {
         cmds,
         vec![Command::LoadMore {
             feed: game_feed("g2"),
-            kind: RowKind::CategoryStreams,
+            row: RowId::twitch(RowKind::CategoryStreams),
             cursor: "p2".into()
         }]
     );

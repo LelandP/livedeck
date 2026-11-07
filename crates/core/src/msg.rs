@@ -1,8 +1,8 @@
 //! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
 
 use crate::domain::{
-    ChatMessage, ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation, PlayerStats,
-    RoomModeChange, Row, RowKind, SendProblem, Stream, Tile, User,
+    ChannelRef, ChatMessage, ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation,
+    PlayerStats, RoomModeChange, Row, RowId, SendProblem, Stream, Tile, User,
 };
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
@@ -52,7 +52,7 @@ pub enum Command {
     /// Fetch the page after `cursor` for one row. Answered with `Event::MoreLoaded`.
     LoadMore {
         feed: FeedId,
-        kind: RowKind,
+        row: RowId,
         cursor: String,
     },
     /// Download and decode these thumbnails and hand them to the window. There is no `Event`:
@@ -63,7 +63,7 @@ pub enum Command {
     /// (`PlaybackStarted`, `PlaybackEnded`, `PlaybackError`). `stream` says which rendition to
     /// play, `latency` sets the player's buffers for this stream.
     Play {
-        channel: String,
+        channel: ChannelRef,
         stream: StreamKind,
         latency: Latency,
     },
@@ -79,7 +79,7 @@ pub enum Command {
     /// Start receiving chat for a channel, leaving any other one. The client stays connected
     /// (and reconnects on its own) until `LeaveChat`. Answered over time with
     /// `Event::ChatStatus`, `Event::ChatMessages` and `Event::ChatModerated`.
-    JoinChat { channel: String },
+    JoinChat { channel: ChannelRef },
     /// Stop receiving chat.
     LeaveChat,
     /// Download the badge and emote images of new chat lines and hand them to the window. Like
@@ -133,7 +133,8 @@ pub enum Command {
     /// Count the raid offer `id` down from `seconds`: `Event::RaidTick` every second, then
     /// `Event::RaidCountdownDone`. Replaces any running countdown.
     StartRaidCountdown { id: u32, seconds: u8 },
-    /// Watch `channel` for hype trains, replacing the channel watched so far. Signed in or not
+    /// Watch the Twitch login `channel` for hype trains (a Twitch-only feature), replacing the
+    /// channel watched so far. Signed in or not
     /// (the website's GQL API shows them to anyone). The app checks about once a minute, and every
     /// 10 s while a train runs. Answered over time with `Event::HypeTrain` whenever it changes.
     WatchHypeTrain { channel: String },
@@ -141,14 +142,14 @@ pub enum Command {
     StopHypeTrain,
     /// Look up the live stream of `channel` (title, category, viewers) and its user id. Answered
     /// with `Event::StreamInfo`, or nothing if the lookup fails.
-    FetchStreamInfo { channel: String },
+    FetchStreamInfo { channel: ChannelRef },
     /// Write `text` in the chat of `channel` as the signed-in user. `broadcaster_id` is the
     /// channel's user id, or empty when it is not known yet (the app looks it up). The app keeps
     /// to Twitch's rate limit itself. Answered with `Event::ChatSent` or `Event::ChatDropped`
     /// carrying `id`; the message itself comes back over the chat connection like any other line.
     SendChat {
         id: u32,
-        channel: String,
+        channel: ChannelRef,
         broadcaster_id: String,
         text: String,
     },
@@ -204,32 +205,32 @@ pub enum Event {
     /// the answer unless that page is still the one the row waits for.
     MoreLoaded {
         feed: FeedId,
-        kind: RowKind,
+        row: RowId,
         cursor: String,
         outcome: PageOutcome,
     },
     /// New chat lines, oldest first. Ignored unless `channel` is the one being watched.
     ChatMessages {
-        channel: String,
+        channel: ChannelRef,
         messages: Vec<ChatMessage>,
     },
     /// A moderator removed lines (cleared chat, timeout or ban, deleted message).
     ChatModerated {
-        channel: String,
+        channel: ChannelRef,
         action: Moderation,
     },
     /// The chat connection changed state (connecting, live, reconnecting after a drop).
     ChatStatus {
-        channel: String,
+        channel: ChannelRef,
         status: ChatStatus,
     },
     /// The resolver found no live stream for `channel`.
     StreamOffline {
-        channel: String,
+        channel: ChannelRef,
     },
     /// The resolver failed for another reason (Streamlink missing, timeout, ...).
     PlaybackFailed {
-        channel: String,
+        channel: ChannelRef,
         message: String,
     },
     /// The player shows the first frame.
@@ -300,7 +301,7 @@ pub enum Event {
     RaidCountdownDone {
         id: u32,
     },
-    /// The hype train in `channel` now: `None` when none runs (any more). Ignored unless
+    /// The hype train in the Twitch login `channel` now: `None` when none runs (any more). Ignored unless
     /// `channel` is the one on screen.
     HypeTrain {
         channel: String,
@@ -321,7 +322,7 @@ pub enum Event {
     /// The chat room's rules changed (or were sent on joining). Ignored unless `channel` is the
     /// one being watched.
     ChatRoomMode {
-        channel: String,
+        channel: ChannelRef,
         change: RoomModeChange,
     },
 }

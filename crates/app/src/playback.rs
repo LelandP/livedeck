@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use htpc_core::{Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, StreamKind, Zoom};
+use htpc_core::{
+    ChannelRef, Command, Event, Hwdec, Latency, PlayerOption, PlayerStats, StreamKind, Zoom,
+};
 use htpc_player::{LoadOptions, Player, PlayerEvent};
 use htpc_resolver::{ResolveError, StreamResolver};
 
@@ -73,17 +75,17 @@ impl<R: StreamResolver> Playback<R> {
         }
     }
 
-    async fn play(&self, channel: String, stream: StreamKind, latency: Latency) -> Vec<Event> {
+    async fn play(&self, channel: ChannelRef, stream: StreamKind, latency: Latency) -> Vec<Event> {
         let rendition = rendition_name(stream);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let resolved = self.resolver.resolve(&channel, rendition).await;
+        let resolved = self.resolver.resolve(&channel.login, rendition).await;
         if self.generation.load(Ordering::SeqCst) != generation {
-            tracing::debug!(%channel, "a newer play or stop replaced this one");
+            tracing::debug!(channel = %channel.login, "a newer play or stop replaced this one");
             return Vec::new();
         }
         match resolved {
             Ok(url) => {
-                tracing::info!(%channel, rendition, "playlist resolved, starting the player");
+                tracing::info!(channel = %channel.login, rendition, "playlist resolved, starting the player");
                 let latency = match latency {
                     Latency::Low => htpc_player::Latency::Low,
                     Latency::Normal => htpc_player::Latency::Normal,
@@ -98,7 +100,7 @@ impl<R: StreamResolver> Playback<R> {
             }
             Err(ResolveError::Offline) => vec![Event::StreamOffline { channel }],
             Err(err) => {
-                tracing::warn!(%channel, %err, "could not resolve the stream");
+                tracing::warn!(channel = %channel.login, %err, "could not resolve the stream");
                 vec![Event::PlaybackFailed {
                     channel,
                     message: user_message(&err),
@@ -176,7 +178,7 @@ mod tests {
 
     fn play(channel: &str) -> Command {
         Command::Play {
-            channel: channel.into(),
+            channel: ChannelRef::twitch(channel),
             stream: StreamKind::Video(Quality::P720),
             latency: Latency::Low,
         }
@@ -206,7 +208,7 @@ mod tests {
     async fn audio_only_turns_video_off_before_the_load() {
         let (pb, player) = playback(FakeResolver::playing("u"));
         let cmd = Command::Play {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             stream: StreamKind::AudioOnly,
             latency: Latency::Low,
         };
@@ -231,7 +233,7 @@ mod tests {
     async fn the_latency_goes_with_the_load() {
         let (pb, player) = playback(FakeResolver::playing("u"));
         let cmd = Command::Play {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::Best),
             latency: Latency::Normal,
         };
@@ -280,7 +282,7 @@ mod tests {
         assert_eq!(
             events,
             [Event::StreamOffline {
-                channel: "chan".into()
+                channel: ChannelRef::twitch("chan")
             }]
         );
         assert!(player.calls().is_empty());
@@ -337,7 +339,7 @@ mod tests {
         let [Event::PlaybackFailed { channel, message }] = &events[..] else {
             panic!("expected one PlaybackFailed, got {events:?}");
         };
-        assert_eq!(channel, "chan");
+        assert_eq!(channel.login, "chan");
         assert!(message.contains("Streamlink was not found"));
     }
 

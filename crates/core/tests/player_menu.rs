@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -121,7 +121,7 @@ fn changing_quality_reloads_the_stream_and_is_not_saved() {
     assert_eq!(
         cmds,
         vec![Command::Play {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::P1080),
             latency: Latency::Low,
         }]
@@ -141,7 +141,7 @@ fn the_menu_quality_is_kept_for_the_next_stream() {
     assert_eq!(s.player_menu, None);
     let (_, cmds) = run(&s, &[Intent::Right, Intent::Select]);
     assert!(cmds.contains(&Command::Play {
-        channel: "other".into(),
+        channel: ChannelRef::twitch("other"),
         stream: StreamKind::Video(Quality::Worst),
         latency: Latency::Low,
     }));
@@ -169,7 +169,7 @@ fn changing_latency_reloads_the_stream_with_it() {
     assert_eq!(
         cmds,
         vec![Command::Play {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::Best),
             latency: Latency::Normal,
         }]
@@ -319,7 +319,7 @@ fn audio_only_reloads_the_stream_as_sound_only() {
     assert_eq!(
         cmds,
         vec![Command::Play {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             stream: StreamKind::AudioOnly,
             latency: Latency::Low,
         }]
@@ -343,7 +343,7 @@ fn turning_audio_only_off_goes_back_to_the_session_quality() {
     assert_eq!(
         cmds,
         vec![Command::Play {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             stream: StreamKind::Video(Quality::P720),
             latency: Latency::Low,
         }]
@@ -368,7 +368,7 @@ fn a_retry_stays_audio_only() {
     let s = reduce(
         &s,
         Event::PlaybackFailed {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             message: "x".into(),
         },
     )
@@ -376,7 +376,7 @@ fn a_retry_stays_audio_only() {
     let (s, _) = reduce(&s, Intent::Back); // close the menu
     let (_, cmds) = reduce(&s, Intent::Retry);
     assert!(cmds.contains(&Command::Play {
-        channel: "chan".into(),
+        channel: ChannelRef::twitch("chan"),
         stream: StreamKind::AudioOnly,
         latency: Latency::Low,
     }));
@@ -391,7 +391,7 @@ fn the_next_stream_starts_as_video_again() {
     let (s, cmds) = run(&s, &[Intent::Right, Intent::Select]);
     assert!(!s.audio_only);
     assert!(cmds.contains(&Command::Play {
-        channel: "other".into(),
+        channel: ChannelRef::twitch("other"),
         stream: StreamKind::Video(Quality::Best),
         latency: Latency::Low,
     }));

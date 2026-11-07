@@ -4,7 +4,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -439,7 +439,7 @@ fn select_stream_opens_player_and_joins_chat() {
     assert_eq!(s.screen, Screen::Player);
     assert_eq!(s.back_stack, vec![Screen::Home]);
     assert_eq!(
-        s.now_playing.as_ref().map(|p| p.channel.as_str()),
+        s.now_playing.as_ref().map(|p| p.channel.login.as_str()),
         Some("t1")
     );
     assert!(!s.chat_open);
@@ -447,13 +447,13 @@ fn select_stream_opens_player_and_joins_chat() {
         cmds,
         vec![
             Command::JoinChat {
-                channel: "t1".into()
+                channel: ChannelRef::twitch("t1")
             },
             Command::WatchHypeTrain {
                 channel: "t1".into()
             },
             Command::Play {
-                channel: "t1".into(),
+                channel: ChannelRef::twitch("t1"),
                 stream: StreamKind::Video(Quality::Best),
                 latency: Latency::Low
             }
@@ -540,7 +540,7 @@ fn msg(user: &str) -> ChatMessage {
 
 fn chat(channel: &str, messages: Vec<ChatMessage>) -> Event {
     Event::ChatMessages {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         messages,
     }
 }

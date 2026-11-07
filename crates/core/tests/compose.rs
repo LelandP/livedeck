@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str, user_id: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: user_id.into(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -350,7 +350,7 @@ fn changing_channel_clears_compose_and_the_room() {
     let (s, _) = reduce(
         &s,
         Event::ChatRoomMode {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             change,
         },
     );
@@ -359,7 +359,7 @@ fn changing_channel_clears_compose_and_the_room() {
     let (other, _) = reduce(
         &s,
         Event::ChatRoomMode {
-            channel: "other".into(),
+            channel: ChannelRef::twitch("other"),
             change: RoomModeChange {
                 subs_only: Some(true),
                 ..RoomModeChange::default()
@@ -386,7 +386,7 @@ fn changing_channel_clears_compose_and_the_room() {
     );
     assert!(s.compose.open, "the raid card is on top, compose waits");
     let (s, _) = reduce(&s, Intent::Select);
-    assert_eq!(s.now_playing.as_ref().unwrap().channel, "next");
+    assert_eq!(s.now_playing.as_ref().unwrap().channel.login, "next");
     assert_eq!(s.compose, Compose::default());
 }
 
@@ -431,7 +431,7 @@ fn a_token_without_chat_rights_asks_to_sign_in_again_and_comes_back() {
     assert_eq!(s.screen, Screen::Player, "back on the stream");
     assert!(s.composing(), "ready to write");
     assert!(s.can_chat());
-    assert_eq!(s.now_playing.as_ref().unwrap().channel, "chan");
+    assert_eq!(s.now_playing.as_ref().unwrap().channel.login, "chan");
 }
 
 #[test]

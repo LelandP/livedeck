@@ -134,6 +134,7 @@ async fn countdown(id: u32, seconds: u8, tx: UnboundedSender<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use htpc_core::ChannelRef;
     use htpc_twitch_api::{FakeEventSub, FakeEventSubCall, Raid};
     use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -302,7 +303,7 @@ mod tests {
             seconds: 10
         }));
         assert!(!Raids::handles(&Command::FetchStreamInfo {
-            channel: "x".into()
+            channel: ChannelRef::twitch("x")
         }));
         assert!(!Raids::handles(&Command::StopPlayback));
     }

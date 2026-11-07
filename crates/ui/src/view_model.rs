@@ -636,7 +636,7 @@ fn shape_of(kind: RowKind) -> Shape {
 
 fn stream_card(s: &Stream) -> CardVm {
     CardVm {
-        channel: s.channel.clone(),
+        channel: s.channel.login.clone(),
         title: s.title.clone(),
         category: s.category.clone(),
         viewers: format_viewers(s.viewers),
@@ -887,7 +887,7 @@ fn toast(t: &Toast) -> ToastVm {
     };
     ToastVm {
         id: t.id as i32,
-        name: s.channel.clone(),
+        name: s.channel.login.clone(),
         line,
         tint: s.tint,
         thumb_url: s.thumbnail.clone().unwrap_or_default(),
@@ -993,7 +993,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         .now_playing
         .as_ref()
         .filter(|_| on_player && state.subscribe_card)
-        .map(|p| subscribe_url(&p.channel));
+        .map(|p| subscribe_url(&p.channel.login));
     let (subscribe_url_text, subscribe_qr, subscribe_qr_width) = match &subscribe_page {
         Some(url) => {
             let (qr, width) = qr_modules(url);
@@ -1801,13 +1801,13 @@ fn sync_rows(ui: &MainWindow, want: &[RowVm], images: &ImageMemory) {
 mod tests {
     use super::*;
     use htpc_core::{
-        grid_rows, reduce, Category, Channel, DeviceCode, Event, Intent, PageOutcome, RailEntry,
-        User,
+        grid_rows, reduce, Category, Channel, ChannelRef, DeviceCode, Event, Intent, PageOutcome,
+        RailEntry, RowId, User,
     };
 
     fn stream(channel: &str, viewers: u64, thumb: Option<&str>) -> Tile {
         Tile::Stream(Stream {
-            channel: channel.into(),
+            channel: ChannelRef::twitch(channel),
             user_id: String::new(),
             title: format!("{channel} title"),
             category: "VALORANT".into(),
@@ -1973,7 +1973,7 @@ mod tests {
         let s = press(with_rows(vec![paged_row(4)]), Intent::Right, 1);
         let failed = Event::MoreLoaded {
             feed: FeedId::Home,
-            kind: RowKind::TopLive,
+            row: RowId::twitch(RowKind::TopLive),
             cursor: "c".into(),
             outcome: PageOutcome::Failed,
         };
@@ -2208,7 +2208,7 @@ mod tests {
         assert_eq!(status(&s), "Connecting…");
 
         let event = |status| Event::ChatStatus {
-            channel: "grandmaster_k".into(),
+            channel: ChannelRef::twitch("grandmaster_k"),
             status,
         };
         let (live, _) = reduce(&s, event(ChatStatus::Live));
@@ -2217,7 +2217,7 @@ mod tests {
         assert_eq!(status(&back), "Reconnecting…");
 
         let line = Event::ChatMessages {
-            channel: "grandmaster_k".into(),
+            channel: ChannelRef::twitch("grandmaster_k"),
             messages: vec![ChatMessage::plain("a", "hi")],
         };
         let (talking, _) = reduce(&live, line);
@@ -2239,7 +2239,7 @@ mod tests {
         let s = watching(vec![a, ChatMessage::plain("friend", "hi")]);
         let before = view_model(&s);
         let ban = Event::ChatModerated {
-            channel: "grandmaster_k".into(),
+            channel: ChannelRef::twitch("grandmaster_k"),
             action: Moderation::ClearUser("troll".into()),
         };
         let (s, _) = reduce(&s, ban);
@@ -2420,7 +2420,7 @@ mod tests {
 
     fn offline(name: &str) -> Tile {
         Tile::Channel(Channel {
-            channel: name.into(),
+            channel: ChannelRef::twitch(name),
             name: name.into(),
             tint: Rgb::new(9, 9, 9),
         })
@@ -2493,7 +2493,7 @@ mod tests {
     #[test]
     fn the_subscribe_qr_carries_the_channels_page() {
         let s = reduce(&on_subscribe_row(true), Intent::Select).0;
-        let channel = s.now_playing.as_ref().unwrap().channel.clone();
+        let channel = s.now_playing.as_ref().unwrap().channel.login.clone();
         let vm = view_model(&s);
         assert!(vm.subscribe_open && vm.subscribe_can_open);
         assert_eq!(vm.subscribe_url, format!("www.twitch.tv/subs/{channel}"));

@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Stream {
     Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -46,7 +46,10 @@ fn went_live(s: &AppState, channels: &[&str]) -> (AppState, Vec<Command>) {
 }
 
 fn toast_channels(s: &AppState) -> Vec<&str> {
-    s.toasts.iter().map(|t| t.stream.channel.as_str()).collect()
+    s.toasts
+        .iter()
+        .map(|t| t.stream.channel.login.as_str())
+        .collect()
 }
 
 fn run(mut s: AppState, intents: &[Intent]) -> (AppState, Vec<Command>) {
@@ -175,7 +178,10 @@ fn a_burst_keeps_only_the_newest() {
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let (s, _) = went_live(&signed_in(), &names);
     assert_eq!(s.toasts.len(), TOASTS_KEPT);
-    assert_eq!(s.toasts[0].stream.channel, format!("c{}", TOASTS_KEPT + 4));
+    assert_eq!(
+        s.toasts[0].stream.channel.login,
+        format!("c{}", TOASTS_KEPT + 4)
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@ use htpc_core::*;
 
 fn live_stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: "t".into(),
         category: "c".into(),
@@ -30,7 +30,7 @@ fn watching() -> AppState {
 
 fn lines(channel: &str, messages: Vec<ChatMessage>) -> Event {
     Event::ChatMessages {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         messages,
     }
 }
@@ -72,7 +72,7 @@ fn leaving_resets_chat_and_status() {
 #[test]
 fn status_events_apply_only_to_the_watched_channel() {
     let status = |channel: &str, status| Event::ChatStatus {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         status,
     };
     let (s, _) = reduce(&watching(), status("chan", ChatStatus::Reconnecting));
@@ -128,7 +128,7 @@ fn moderation_removes_lines_of_the_watched_channel_only() {
     let (s, _) = reduce(&watching(), lines("chan", vec![a, b]));
 
     let moderate = |channel: &str, action| Event::ChatModerated {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         action,
     };
     let (kept, _) = reduce(&s, moderate("other", Moderation::ClearAll));

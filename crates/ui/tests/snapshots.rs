@@ -4,15 +4,15 @@
 //! Review changes with `cargo insta review`, or accept them with `INSTA_UPDATE=always cargo test`.
 
 use htpc_core::{
-    grid_rows, init, reduce, AppState, Category, ChatKind, ChatLayout, ChatMessage, ChatSpan,
-    ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, PlayerMenuRow, PlayerStats,
-    RailEntry, Rgb, Row, RowKind, Stream, Tile,
+    grid_rows, init, reduce, AppState, Category, ChannelRef, ChatKind, ChatLayout, ChatMessage,
+    ChatSpan, ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, PlayerMenuRow,
+    PlayerStats, RailEntry, Rgb, Row, RowId, RowKind, Stream, Tile,
 };
 use htpc_ui::{view_model, CardVm, ViewModel};
 
 fn stream(channel: &str, viewers: u64, image: bool) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "VALORANT".into(),
@@ -149,7 +149,7 @@ fn home_with_a_failed_page() {
     s.home.rows[2].paging = Paging::Loading("c".into());
     let failed = Event::MoreLoaded {
         feed: FeedId::Home,
-        kind: RowKind::TopLive,
+        row: RowId::twitch(RowKind::TopLive),
         cursor: "c".into(),
         outcome: PageOutcome::Failed,
     };
@@ -230,7 +230,7 @@ fn player_loading_playing_paused_offline_and_failed() {
     let failed = reduce(
         &loading,
         Event::PlaybackFailed {
-            channel: "grandmaster_k".into(),
+            channel: ChannelRef::twitch("grandmaster_k"),
             message: "Streamlink is not installed".into(),
         },
     )
@@ -467,7 +467,7 @@ fn hype_lines(vm: &ViewModel) -> String {
 fn hype_train_bar_follows_the_polls() {
     let (s, _) = reduce(&home_loaded(), Intent::Select);
     let s = reduce(&s, Event::PlaybackStarted).0;
-    let channel = s.now_playing.as_ref().unwrap().channel.clone();
+    let channel = s.now_playing.as_ref().unwrap().channel.login.clone();
     let hype = |level, progress, goal, seconds_left| Event::HypeTrain {
         channel: channel.clone(),
         train: Some(htpc_core::HypeTrain {
@@ -559,7 +559,7 @@ fn search_empty_typing_and_results() {
         Row::new(
             RowKind::SearchOffline,
             vec![Tile::Channel(htpc_core::Channel {
-                channel: "lonely_owl".into(),
+                channel: ChannelRef::twitch("lonely_owl"),
                 name: "Lonely_Owl".into(),
                 tint: Rgb::from_hex(0x2d4a6b),
             })],
@@ -678,7 +678,7 @@ fn chat_connecting_live_busy_moderated_and_reconnecting() {
     let mut out = chat_lines(&view_model(&s));
 
     let live = Event::ChatStatus {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         status: ChatStatus::Live,
     };
     let s = reduce(&s, live).0;
@@ -709,7 +709,7 @@ fn chat_connecting_live_busy_moderated_and_reconnecting() {
         ..ChatMessage::plain("Waver", "waves at chat")
     };
     let batch = Event::ChatMessages {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         messages: vec![
             mod_line,
             troll,
@@ -722,14 +722,14 @@ fn chat_connecting_live_busy_moderated_and_reconnecting() {
     out += &chat_lines(&view_model(&s));
 
     let ban = Event::ChatModerated {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         action: Moderation::ClearUser("troll".into()),
     };
     let s = reduce(&s, ban).0;
     out += &chat_lines(&view_model(&s));
 
     let dropped = Event::ChatStatus {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         status: ChatStatus::Reconnecting,
     };
     let mut s = reduce(&s, dropped).0;
@@ -815,7 +815,7 @@ fn chat_compose_side_overlay_and_a_drop() {
     let s = reduce(
         &s,
         Event::ChatRoomMode {
-            channel: "grandmaster_k".into(),
+            channel: ChannelRef::twitch("grandmaster_k"),
             change: htpc_core::RoomModeChange {
                 slow_secs: Some(30),
                 followers_min: Some(Some(10)),

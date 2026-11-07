@@ -7,8 +7,8 @@
 //! One test function, because the headless platform can only be installed once per process.
 
 use htpc_core::{
-    init, reduce, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus, Event, FeedId,
-    Intent, Rgb, Row, RowKind, Stream, Tile,
+    init, reduce, AppState, ChannelRef, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
+    Event, FeedId, Intent, Rgb, Row, RowKind, Stream, Tile,
 };
 use htpc_ui::{apply_chat_image, view_model, MainWindow, Thumbnail, Update};
 use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
@@ -36,7 +36,7 @@ fn install_headless_platform() {
 /// else uses, so its pixels can be found.
 fn watching_a_busy_chat(layout: ChatLayout) -> AppState {
     let stream = Tile::Stream(Stream {
-        channel: "chan".into(),
+        channel: ChannelRef::twitch("chan"),
         user_id: String::new(),
         title: "title".into(),
         category: "cat".into(),
@@ -78,11 +78,11 @@ fn watching_a_busy_chat(layout: ChatLayout) -> AppState {
     });
     for event in [
         Event::ChatStatus {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             status: ChatStatus::Live,
         },
         Event::ChatMessages {
-            channel: "chan".into(),
+            channel: ChannelRef::twitch("chan"),
             messages: lines,
         },
     ] {
@@ -501,7 +501,7 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         (0..4)
             .map(|i| {
                 Tile::Stream(Stream {
-                    channel: format!("c{i}"),
+                    channel: ChannelRef::twitch(format!("c{i}")),
                     user_id: String::new(),
                     title: "t".into(),
                     category: "cat".into(),
@@ -560,7 +560,7 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     toasted.hud_pulse += 1;
     let went_live: Vec<Stream> = (0..4)
         .map(|i| Stream {
-            channel: format!("live{i}"),
+            channel: ChannelRef::twitch(format!("live{i}")),
             user_id: String::new(),
             title: "a title".into(),
             category: "cat".into(),

@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: String::new(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -327,7 +327,7 @@ fn a_stream_from_the_results_keeps_the_search_for_when_b_comes_back() {
     assert_eq!(s.screen, Screen::Player);
     assert!(cmds
         .iter()
-        .any(|c| matches!(c, Command::Play { channel, .. } if channel == "live0")));
+        .any(|c| matches!(c, Command::Play { channel, .. } if channel.login == "live0")));
     let (s, _) = reduce(&s, Intent::Back);
     assert_eq!(s.screen, Screen::Search);
     assert_eq!(s.search.query, "ab");
@@ -368,14 +368,14 @@ fn result_rows_page_for_the_text_they_answer() {
         cmds,
         [Command::LoadMore {
             feed: FeedId::Search("ab".into()),
-            kind: RowKind::SearchLive,
+            row: RowId::twitch(RowKind::SearchLive),
             cursor: "c".into(),
         }]
     );
     // A page for another text is ignored.
     let page = |text: &str| Event::MoreLoaded {
         feed: FeedId::Search(text.into()),
-        kind: RowKind::SearchLive,
+        row: RowId::twitch(RowKind::SearchLive),
         cursor: "c".into(),
         outcome: PageOutcome::Page {
             tiles: vec![stream("more")],

@@ -5,7 +5,7 @@ use htpc_core::*;
 
 fn stream(channel: &str, user_id: &str) -> Tile {
     Tile::Stream(Stream {
-        channel: channel.into(),
+        channel: ChannelRef::twitch(channel),
         user_id: user_id.into(),
         title: format!("{channel} title"),
         category: "Cat".into(),
@@ -26,7 +26,7 @@ fn user() -> User {
 fn home(signed_in: bool) -> AppState {
     let (s, _) = init();
     let offline = Tile::Channel(Channel {
-        channel: "sleepy".into(),
+        channel: ChannelRef::twitch("sleepy"),
         name: "Sleepy".into(),
         tint: Rgb::default(),
     });
@@ -116,12 +116,12 @@ fn a_card_without_a_user_id_looks_it_up_first() {
         vec![Intent::Right.into(), Intent::Select.into()],
     );
     assert!(cmds.contains(&Command::FetchStreamInfo {
-        channel: "sleepy".into()
+        channel: ChannelRef::twitch("sleepy")
     }));
     assert!(!has(&cmds, |c| matches!(c, Command::WatchRaids { .. })));
 
     let info = Stream {
-        channel: "sleepy".into(),
+        channel: ChannelRef::twitch("sleepy"),
         user_id: "555".into(),
         title: String::new(),
         category: String::new(),
@@ -206,7 +206,7 @@ fn ticks_count_down_and_stale_ids_are_dropped() {
     );
     assert_eq!(s.raid.as_ref().unwrap().seconds_left, 7);
     assert!(cmds.is_empty());
-    assert_eq!(s.now_playing.unwrap().channel, "ender");
+    assert_eq!(s.now_playing.unwrap().channel.login, "ender");
 }
 
 /// What following the raid must have done, whatever triggered it.
@@ -215,21 +215,21 @@ fn assert_followed(before: &AppState, s: &AppState, cmds: &[Command]) {
     assert_eq!(s.screen, Screen::Player);
     assert_eq!(s.back_stack, before.back_stack, "replaced, not stacked");
     let p = s.now_playing.as_ref().unwrap();
-    assert_eq!(p.channel, "next_up");
+    assert_eq!(p.channel.login, "next_up");
     assert!(p.user_id.is_empty() && p.title.is_empty());
     assert_eq!(s.playback, Playback::Loading);
     assert!(s.chat.is_empty());
     assert_eq!(s.chat_status, ChatStatus::Connecting);
     assert!(cmds.contains(&Command::StopRaids));
     assert!(cmds.contains(&Command::JoinChat {
-        channel: "next_up".into()
+        channel: ChannelRef::twitch("next_up")
     }));
     assert!(has(
         cmds,
-        |c| matches!(c, Command::Play { channel, .. } if channel == "next_up")
+        |c| matches!(c, Command::Play { channel, .. } if channel.login == "next_up")
     ));
     assert!(cmds.contains(&Command::FetchStreamInfo {
-        channel: "next_up".into()
+        channel: ChannelRef::twitch("next_up")
     }));
 }
 
@@ -266,7 +266,7 @@ fn the_new_channel_fills_in_and_is_watched_in_turn() {
     let (s, _) = offered();
     let (s, _) = reduce(&s, Intent::Select);
     let info = Stream {
-        channel: "next_up".into(),
+        channel: ChannelRef::twitch("next_up"),
         user_id: "200".into(),
         title: "Just got raided".into(),
         category: "Art".into(),
@@ -309,7 +309,7 @@ fn audio_only_and_the_session_carry_over() {
     assert!(s.audio_only);
     assert_eq!(s.sleep.unwrap().id, 3);
     assert!(cmds.contains(&Command::Play {
-        channel: "next_up".into(),
+        channel: ChannelRef::twitch("next_up"),
         stream: StreamKind::AudioOnly,
         latency: Latency::Low,
     }));
@@ -322,10 +322,10 @@ fn b_stays_and_the_countdown_is_forgotten() {
     assert!(s.raid.is_none());
     assert!(cmds.is_empty());
     assert_eq!(s.screen, Screen::Player, "B only closes the card");
-    assert_eq!(s.now_playing.as_ref().unwrap().channel, "ender");
+    assert_eq!(s.now_playing.as_ref().unwrap().channel.login, "ender");
     let (after, cmds) = reduce(&s, Event::RaidCountdownDone { id });
     assert!(cmds.is_empty());
-    assert_eq!(after.now_playing.unwrap().channel, "ender");
+    assert_eq!(after.now_playing.unwrap().channel.login, "ender");
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn leaving_the_player_or_signing_out_clears_the_offer() {
 fn stream_info_for_another_channel_is_ignored() {
     let s = watching(true);
     let other = Stream {
-        channel: "elsewhere".into(),
+        channel: ChannelRef::twitch("elsewhere"),
         user_id: "9".into(),
         title: "x".into(),
         category: "y".into(),

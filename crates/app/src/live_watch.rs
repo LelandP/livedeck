@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use htpc_core::{Command, Event, Msg, Stream};
+use htpc_core::{ChannelRef, Command, Event, Msg, Stream};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -36,8 +36,8 @@ pub const WAKE_GAP_SECS: u64 = 3 * 30;
 /// Who was live at the last poll, and when each channel was last seen live.
 #[derive(Debug, Default)]
 pub struct LiveDiff {
-    live: HashSet<String>,
-    last_seen: HashMap<String, u64>,
+    live: HashSet<ChannelRef>,
+    last_seen: HashMap<ChannelRef, u64>,
     /// Wall-clock seconds of the last successful poll. `None` before the first.
     last_poll: Option<u64>,
 }
@@ -55,7 +55,10 @@ impl LiveDiff {
         let mut went_live = Vec::new();
         let mut live = HashSet::new();
         for stream in streams {
-            let key = stream.channel.to_ascii_lowercase();
+            let key = ChannelRef::new(
+                stream.channel.platform,
+                stream.channel.login.to_ascii_lowercase(),
+            );
             if !live.insert(key.clone()) {
                 continue;
             }
@@ -156,7 +159,7 @@ mod tests {
 
     fn stream(channel: &str) -> Stream {
         Stream {
-            channel: channel.into(),
+            channel: ChannelRef::twitch(channel),
             user_id: String::new(),
             title: String::new(),
             category: String::new(),
@@ -171,7 +174,7 @@ mod tests {
     }
 
     fn names(streams: &[Stream]) -> Vec<&str> {
-        streams.iter().map(|s| s.channel.as_str()).collect()
+        streams.iter().map(|s| s.channel.login.as_str()).collect()
     }
 
     // ---- the rules -------------------------------------------------------------------------
@@ -259,7 +262,7 @@ mod tests {
     fn went_live(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>) -> Vec<Vec<String>> {
         let mut out = Vec::new();
         while let Ok(Msg::Event(Event::WentLive(streams))) = rx.try_recv() {
-            out.push(streams.into_iter().map(|s| s.channel).collect());
+            out.push(streams.into_iter().map(|s| s.channel.login).collect());
         }
         out
     }

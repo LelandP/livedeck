@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use htpc_chat::{ChatClient, ChatEvent, ChatSession};
-use htpc_core::{Command, Event, Msg};
+use htpc_core::{ChannelRef, Command, Event, Msg};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 /// Holds the one chat connection of the channel being watched.
@@ -37,7 +37,7 @@ impl Chat {
         match cmd {
             Command::JoinChat { channel } => {
                 let (events_tx, mut events) = unbounded_channel();
-                let session = self.client.join(&channel, events_tx);
+                let session = self.client.join(&channel.login, events_tx);
                 // Replacing the old session drops it, which leaves its channel.
                 *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
                 let tx = self.tx.clone();
@@ -60,8 +60,8 @@ impl Chat {
     }
 }
 
-fn to_event(channel: &str, event: ChatEvent) -> Event {
-    let channel = channel.to_owned();
+fn to_event(channel: &ChannelRef, event: ChatEvent) -> Event {
+    let channel = channel.clone();
     match event {
         ChatEvent::Status(status) => Event::ChatStatus { channel, status },
         ChatEvent::Messages(messages) => Event::ChatMessages { channel, messages },
@@ -80,7 +80,7 @@ mod tests {
 
     fn join(channel: &str) -> Command {
         Command::JoinChat {
-            channel: channel.into(),
+            channel: ChannelRef::twitch(channel),
         }
     }
 
@@ -115,16 +115,16 @@ mod tests {
         assert_eq!(
             got[0],
             Event::ChatStatus {
-                channel: "chan".into(),
+                channel: ChannelRef::twitch("chan"),
                 status: ChatStatus::Live
             }
         );
         assert!(matches!(&got[1], Event::ChatMessages { channel, messages }
-            if channel == "chan" && messages.len() == 1));
+            if channel.login == "chan" && messages.len() == 1));
         assert_eq!(
             got[2],
             Event::ChatModerated {
-                channel: "chan".into(),
+                channel: ChannelRef::twitch("chan"),
                 action: Moderation::ClearAll
             }
         );

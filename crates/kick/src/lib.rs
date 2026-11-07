@@ -15,5 +15,7 @@ pub const PUSHER_CLUSTER: &str = "us2";
 
 /// The Pusher WebSocket address for `key` in `cluster`.
 pub fn pusher_url(key: &str, cluster: &str) -> String {
-    format!("wss://ws-{cluster}.pusher.com/app/{key}?protocol=7&client=js&version=8.4.0&flash=false")
+    format!(
+        "wss://ws-{cluster}.pusher.com/app/{key}?protocol=7&client=js&version=8.4.0&flash=false"
+    )
 }
