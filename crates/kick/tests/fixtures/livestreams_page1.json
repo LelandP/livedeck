@@ -1,0 +1,276 @@
+{
+    "current_page":  1,
+    "data":  [
+                 {
+                     "id":  136122337,
+                     "slug":  "65dd61b4-bth-30-yom-alyom-alsads-bda-alan-sxbthone",
+                     "channel_id":  17883767,
+                     "created_at":  "2026-11-05 11:12:01",
+                     "session_title":  "بث 30 يوم - اليوم السادس بدا الان | #SXBThone",
+                     "is_live":  true,
+                     "risk_level_id":  null,
+                     "start_time":  "2026-11-05 11:11:58",
+                     "source":  null,
+                     "twitch_channel":  null,
+                     "duration":  0,
+                     "language":  "Arabic",
+                     "is_mature":  false,
+                     "viewer_count":  46034,
+                     "order":  2,
+                     "tags":  [
+
+                              ],
+                     "thumbnail":  {
+                                       "srcset":  "https://images.kick.com/video_thumbnails/KLehsC25oIQg/YyQ78RPq17qM/1080.webp?versionId=frNilazkjHFqfPeFYUom_QIGEdTBNmEx 1920w, https://images.kick.com/video_thumbnails/KLehsC25oIQg/YyQ78RPq17qM/720.webp?versionId=hB8exH8V7fmyDFqz8bWW93sIl6aKwSQ2 1280w, https://images.kick.com/video_thumbnails/KLehsC25oIQg/YyQ78RPq17qM/360.webp?versionId=rH5lNXTeygmtwFnP_PPdwkWTEWG7mJxu 480w, https://images.kick.com/video_thumbnails/KLehsC25oIQg/YyQ78RPq17qM/160.webp?versionId=gKyh894UfFN4cPAHUqz3060ewlbWlgLg 284w, https://images.kick.com/video_thumbnails/KLehsC25oIQg/YyQ78RPq17qM/480.webp?versionId=XYoZY_Jst9kN.7LlMYx3uZZlD3J5atd1 640w",
+                                       "src":  "https://images.kick.com/video_thumbnails/KLehsC25oIQg/YyQ78RPq17qM/720.webp?versionId=hB8exH8V7fmyDFqz8bWW93sIl6aKwSQ2"
+                                   },
+                     "viewers":  46034,
+                     "show_view_count":  true,
+                     "channel":  {
+                                     "id":  17883767,
+                                     "user_id":  18838562,
+                                     "slug":  "sxb",
+                                     "is_banned":  false,
+                                     "playback_url":  "https://fa723fc1b171.us-west-2.playback.live-video.net/api/video/v1/us-west-2.196233775518.channel.KLehsC25oIQg.m3u8",
+                                     "name_updated_at":  null,
+                                     "vod_enabled":  true,
+                                     "subscription_enabled":  true,
+                                     "is_affiliate":  false,
+                                     "can_host":  true,
+                                     "user":  {
+                                                  "id":  18838562,
+                                                  "username":  "SXB",
+                                                  "profile_pic":  "https://files.kick.com/images/user/18838562/profile_image/conversion/8a124c9d-761a-4e7e-93ed-03cccaa11c02-thumb.webp"
+                                              }
+                                 },
+                     "categories":  [
+                                        {
+                                            "id":  15,
+                                            "category_id":  2,
+                                            "name":  "Just Chatting",
+                                            "slug":  "just-chatting",
+                                            "tags":  [
+                                                         "IRL",
+                                                         "Casual"
+                                                     ],
+                                            "description":  null,
+                                            "deleted_at":  null,
+                                            "is_mature":  false,
+                                            "viewers":  321552,
+                                            "is_fallback":  false,
+                                            "category":  {
+                                                             "id":  2,
+                                                             "name":  "IRL",
+                                                             "slug":  "irl",
+                                                             "icon":  "🎙️"
+                                                         }
+                                        }
+                                    ]
+                 },
+                 {
+                     "id":  136370219,
+                     "slug":  "5097d267-mlk-algym-omlk-alfot-bth-18",
+                     "channel_id":  26869410,
+                     "created_at":  "2026-11-06 19:33:19",
+                     "session_title":  "ملك الجيم وملك الفوت بث +18",
+                     "is_live":  true,
+                     "risk_level_id":  null,
+                     "start_time":  "2026-11-06 19:33:16",
+                     "source":  null,
+                     "twitch_channel":  null,
+                     "duration":  0,
+                     "language":  "Arabic",
+                     "is_mature":  false,
+                     "viewer_count":  39723,
+                     "order":  4,
+                     "tags":  [
+
+                              ],
+                     "thumbnail":  {
+                                       "srcset":  "https://images.kick.com/video_thumbnails/IUNVIedvenl6/5f5KjCIFikar/1080.webp?versionId=3vPbUHFxe0e1.VOWYtmZML5fDSXppP.a 1920w, https://images.kick.com/video_thumbnails/IUNVIedvenl6/5f5KjCIFikar/720.webp?versionId=KthVns85ri46jQG7VG9VgADe7WOddLMQ 1280w, https://images.kick.com/video_thumbnails/IUNVIedvenl6/5f5KjCIFikar/360.webp?versionId=IJufXPcLF6ce3OSxZTjXdoNoAF7sWFqU 480w, https://images.kick.com/video_thumbnails/IUNVIedvenl6/5f5KjCIFikar/160.webp?versionId=tbUZe.boKXSsUFD3uz72a03DJgrlTIrJ 284w, https://images.kick.com/video_thumbnails/IUNVIedvenl6/5f5KjCIFikar/480.webp?versionId=TY1al8q3otb.o4UoSshxBNJo8uTagisX 640w",
+                                       "src":  "https://images.kick.com/video_thumbnails/IUNVIedvenl6/5f5KjCIFikar/720.webp?versionId=KthVns85ri46jQG7VG9VgADe7WOddLMQ"
+                                   },
+                     "viewers":  39723,
+                     "show_view_count":  true,
+                     "channel":  {
+                                     "id":  26869410,
+                                     "user_id":  27894320,
+                                     "slug":  "absi",
+                                     "is_banned":  false,
+                                     "playback_url":  "https://fa723fc1b171.us-west-2.playback.live-video.net/api/video/v1/us-west-2.196233775518.channel.IUNVIedvenl6.m3u8",
+                                     "name_updated_at":  null,
+                                     "vod_enabled":  true,
+                                     "subscription_enabled":  true,
+                                     "is_affiliate":  false,
+                                     "can_host":  true,
+                                     "user":  {
+                                                  "id":  27894320,
+                                                  "username":  "Absi",
+                                                  "profile_pic":  "https://files.kick.com/images/user/27894320/profile_image/conversion/951102c4-68da-415c-a344-d6dbaec3fb05-thumb.webp"
+                                              }
+                                 },
+                     "categories":  [
+                                        {
+                                            "id":  15,
+                                            "category_id":  2,
+                                            "name":  "Just Chatting",
+                                            "slug":  "just-chatting",
+                                            "tags":  [
+                                                         "IRL",
+                                                         "Casual"
+                                                     ],
+                                            "description":  null,
+                                            "deleted_at":  null,
+                                            "is_mature":  false,
+                                            "viewers":  321552,
+                                            "is_fallback":  false,
+                                            "category":  {
+                                                             "id":  2,
+                                                             "name":  "IRL",
+                                                             "slug":  "irl",
+                                                             "icon":  "🎙️"
+                                                         }
+                                        }
+                                    ]
+                 },
+                 {
+                     "id":  136403430,
+                     "slug":  "6c2363ed9bdb5aaf-22-bday-gdydh-llmaadom-khrtom",
+                     "channel_id":  29513073,
+                     "created_at":  "2026-11-06 22:49:55",
+                     "session_title":  "22 بداية جديده للمعدوم خرطوم",
+                     "is_live":  true,
+                     "risk_level_id":  null,
+                     "start_time":  "2026-11-06 22:49:52",
+                     "source":  null,
+                     "twitch_channel":  null,
+                     "duration":  0,
+                     "language":  "Arabic",
+                     "is_mature":  false,
+                     "viewer_count":  34730,
+                     "order":  10,
+                     "tags":  [
+
+                              ],
+                     "thumbnail":  {
+                                       "srcset":  "https://images.kick.com/video_thumbnails/CGcY5kz4XZoH/9fCnIRTxh9Pf/1080.webp?versionId=oWAHA2uBqBUt.o9LPT5AhxuuFzucuPyN 1920w, https://images.kick.com/video_thumbnails/CGcY5kz4XZoH/9fCnIRTxh9Pf/720.webp?versionId=1.aUa5XP3ofuNjQh7e8Ec_nb.1Rc8PpV 1280w, https://images.kick.com/video_thumbnails/CGcY5kz4XZoH/9fCnIRTxh9Pf/360.webp?versionId=O7kxaHFDnguGSJZHjKG5BjLNnDsDG3_W 480w, https://images.kick.com/video_thumbnails/CGcY5kz4XZoH/9fCnIRTxh9Pf/160.webp?versionId=zzhJDn1NU5aTKf86S0Rh7O0kNjwz1LyV 284w, https://images.kick.com/video_thumbnails/CGcY5kz4XZoH/9fCnIRTxh9Pf/480.webp?versionId=Y0uPdZ4F89bKCptNU2asXFnBPr0y.DLw 640w",
+                                       "src":  "https://images.kick.com/video_thumbnails/CGcY5kz4XZoH/9fCnIRTxh9Pf/720.webp?versionId=1.aUa5XP3ofuNjQh7e8Ec_nb.1Rc8PpV"
+                                   },
+                     "viewers":  34730,
+                     "show_view_count":  true,
+                     "channel":  {
+                                     "id":  29513073,
+                                     "user_id":  30555929,
+                                     "slug":  "3mr",
+                                     "is_banned":  false,
+                                     "playback_url":  "https://fa723fc1b171.us-west-2.playback.live-video.net/api/video/v1/us-west-2.196233775518.channel.CGcY5kz4XZoH.m3u8",
+                                     "name_updated_at":  null,
+                                     "vod_enabled":  true,
+                                     "subscription_enabled":  true,
+                                     "is_affiliate":  true,
+                                     "can_host":  true,
+                                     "user":  {
+                                                  "id":  30555929,
+                                                  "username":  "3mr",
+                                                  "profile_pic":  "https://files.kick.com/images/user/30555929/profile_image/conversion/be0532d2-d280-44fa-b51f-156475152724-thumb.webp"
+                                              }
+                                 },
+                     "categories":  [
+                                        {
+                                            "id":  15,
+                                            "category_id":  2,
+                                            "name":  "Just Chatting",
+                                            "slug":  "just-chatting",
+                                            "tags":  [
+                                                         "IRL",
+                                                         "Casual"
+                                                     ],
+                                            "description":  null,
+                                            "deleted_at":  null,
+                                            "is_mature":  false,
+                                            "viewers":  321552,
+                                            "is_fallback":  false,
+                                            "category":  {
+                                                             "id":  2,
+                                                             "name":  "IRL",
+                                                             "slug":  "irl",
+                                                             "icon":  "🎙️"
+                                                         }
+                                        }
+                                    ]
+                 },
+                 {
+                     "id":  136158939,
+                     "slug":  "a0c24a92-albth-ln-yghlk-mn-hna-al-akhr-alsn",
+                     "channel_id":  11853347,
+                     "created_at":  "2026-11-05 16:35:37",
+                     "session_title":  "البث لن يغلق من هنا الى اخر السنة",
+                     "is_live":  true,
+                     "risk_level_id":  null,
+                     "start_time":  "2026-11-05 16:35:35",
+                     "source":  null,
+                     "twitch_channel":  null,
+                     "duration":  0,
+                     "language":  "Arabic",
+                     "is_mature":  false,
+                     "viewer_count":  33658,
+                     "order":  null,
+                     "tags":  [
+
+                              ],
+                     "thumbnail":  {
+                                       "srcset":  "https://images.kick.com/video_thumbnails/lcPZcgVDLsGw/N2gWHyYWC987/1080.webp?versionId=4Xp0sSXyp8l9bdWL5Nq.hyfapREZTV2w 1920w, https://images.kick.com/video_thumbnails/lcPZcgVDLsGw/N2gWHyYWC987/720.webp?versionId=KrvvdADVO.yNEYjfVEmrqDsShQqgPK.q 1280w, https://images.kick.com/video_thumbnails/lcPZcgVDLsGw/N2gWHyYWC987/360.webp?versionId=z2ajc1ikv34Vr5d_W8fzAmfQGmX0dHn_ 480w, https://images.kick.com/video_thumbnails/lcPZcgVDLsGw/N2gWHyYWC987/160.webp?versionId=qANatxewHBDE84e3Xnw_U4YvYC57qCp9 284w, https://images.kick.com/video_thumbnails/lcPZcgVDLsGw/N2gWHyYWC987/480.webp?versionId=OitlW22dJBbultweuU6WsQ7bfw8nze6A 640w",
+                                       "src":  "https://images.kick.com/video_thumbnails/lcPZcgVDLsGw/N2gWHyYWC987/720.webp?versionId=KrvvdADVO.yNEYjfVEmrqDsShQqgPK.q"
+                                   },
+                     "viewers":  33658,
+                     "show_view_count":  true,
+                     "channel":  {
+                                     "id":  11853347,
+                                     "user_id":  12616473,
+                                     "slug":  "maherco",
+                                     "is_banned":  false,
+                                     "playback_url":  "https://fa723fc1b171.us-west-2.playback.live-video.net/api/video/v1/us-west-2.196233775518.channel.lcPZcgVDLsGw.m3u8",
+                                     "name_updated_at":  null,
+                                     "vod_enabled":  true,
+                                     "subscription_enabled":  true,
+                                     "is_affiliate":  true,
+                                     "can_host":  true,
+                                     "user":  {
+                                                  "id":  12616473,
+                                                  "username":  "Maherco",
+                                                  "profile_pic":  "https://files.kick.com/images/user/12616473/profile_image/conversion/57bd5508-12ed-4108-a2b4-337833ed1c8c-thumb.webp"
+                                              }
+                                 },
+                     "categories":  [
+                                        {
+                                            "id":  14353,
+                                            "category_id":  1,
+                                            "name":  "EA Sports FC 27",
+                                            "slug":  "ea-sports-fc-27",
+                                            "tags":  [
+                                                         "Sport",
+                                                         "Simulator"
+                                                     ],
+                                            "description":  null,
+                                            "deleted_at":  null,
+                                            "is_mature":  false,
+                                            "viewers":  63344,
+                                            "is_fallback":  false,
+                                            "category":  {
+                                                             "id":  1,
+                                                             "name":  "Games",
+                                                             "slug":  "games",
+                                                             "icon":  "🕹️"
+                                                         }
+                                        }
+                                    ]
+                 }
+             ],
+    "first_page_url":  "https://kick.com/stream/livestreams/en?page=1",
+    "from":  1,
+    "next_page_url":  "https://kick.com/stream/livestreams/en?page=2",
+    "path":  "https://kick.com/stream/livestreams/en",
+    "per_page":  24,
+    "prev_page_url":  null,
+    "to":  24
+}

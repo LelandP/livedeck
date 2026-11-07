@@ -1,0 +1,226 @@
+{
+    "id":  668,
+    "user_id":  676,
+    "slug":  "xqc",
+    "is_banned":  false,
+    "playback_url":  "https://fa723fc1b171.us-west-2.playback.live-video.net/api/video/v1/us-west-2.196233775518.channel.DsuAwCgUc9Bh.m3u8?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzM4NCJ9.eyJhd3M6Y2hhbm5lbC1hcm4iOiJhcm46YXdzOml2czp1cy13ZXN0LTI6MTk2MjMzNzc1NTE4OmNoYW5uZWwvRHN1QXdDZ1VjOUJoIiwiYXdzOmFjY2Vzcy1jb250cm9sLWFsbG93LW9yaWdpbiI6Imh0dHBzOi8va2ljay5jb20saHR0cHM6Ly93d3cuZ3N0YXRpYy5jb20saHR0cHM6Ly8qLmtpY2subGl2ZSxodHRwczovL3BsYXllci5raWNrLmNvbSxodHRwczovL2FkbWluLmtpY2suY29tLGh0dHBzOi8vYmV0YS5raWNrLmNvbSxodHRwczovL25leHQua2ljay5jb20saHR0cHM6Ly9kYXNoYm9hcmQua2ljay5jb20saHR0cHM6Ly8qLnByZXZpZXcua2ljay5jb20saHR0cHM6Ly94Ym94LmtpY2suY29tLGh0dHBzOi8vcGxheXN0YXRpb24ua2ljay5jb20saHR0cHM6Ly90aXplbi5raWNrLmNvbSxodHRwczovL3dlYm9zLmtpY2suY29tLGh0dHBzOi8vKi5raWNrLXByZXByb2R1Y3Rpb24uY29tLGh0dHBzOi8vKi5raWNrLWRldmVsb3BtZW50LmNvbSIsImF3czpzdHJpY3Qtb3JpZ2luLWVuZm9yY2VtZW50IjpmYWxzZSwiYXdzOmFkcy1vcHQtb3V0Ijp0cnVlLCJleHAiOjE3OTQwMTMzNzh9.oYMoFax4aYMh3u6Tq_jeyRRUsGv7NzLbIDID6S-OBp76wmi2w8dwmN8LN6CmQ3F6B1MM5_iYSvL51R25KamBV4Cft3j36blryf1_yzj9gycxUx2UImAy70lZaxJDNjJv",
+    "vod_enabled":  true,
+    "subscription_enabled":  true,
+    "is_affiliate":  false,
+    "followers_count":  "1520997",
+    "subscriber_badges":  [
+                              {
+                                  "id":  97968,
+                                  "channel_id":  668,
+                                  "months":  1,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97968/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97975,
+                                  "channel_id":  668,
+                                  "months":  2,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97975/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97977,
+                                  "channel_id":  668,
+                                  "months":  3,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97977/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97978,
+                                  "channel_id":  668,
+                                  "months":  6,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97978/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97982,
+                                  "channel_id":  668,
+                                  "months":  9,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97982/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97985,
+                                  "channel_id":  668,
+                                  "months":  12,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97985/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97987,
+                                  "channel_id":  668,
+                                  "months":  18,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97987/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97988,
+                                  "channel_id":  668,
+                                  "months":  24,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97988/conversion/original-fullsize.png"
+                                                  }
+                              },
+                              {
+                                  "id":  97989,
+                                  "channel_id":  668,
+                                  "months":  30,
+                                  "badge_image":  {
+                                                      "srcset":  "",
+                                                      "src":  "https://files.kick.com/channel_subscriber_badges/97989/conversion/original-fullsize.png"
+                                                  }
+                              }
+                          ],
+    "banner_image":  {
+                         "url":  "https://files.kick.com/images/channel/668/banner_image/6fcf7418-df00-460b-9467-1fa95b8eb981"
+                     },
+    "livestream":  {
+                       "id":  136402571,
+                       "slug":  "9d2570d6-livefriday-is-heredramanewsgta-vnopixel-vpaleto-finalebig-puzzle-crackeron-the-joblock-it-in",
+                       "channel_id":  668,
+                       "created_at":  "2026-11-06 22:44:05",
+                       "session_title":  "🐤LIVE🐤FRIDAY IS HERE🐤DRAMA🐤NEWS🐤GTA V🐤NOPIXEL V🐤PALETO FINALE🐤BIG PUZZLE CRACKER🐤ON THE JOB🐤LOCK IT IN🐤",
+                       "is_live":  true,
+                       "risk_level_id":  null,
+                       "start_time":  "2026-11-06 22:44:01",
+                       "source":  null,
+                       "twitch_channel":  null,
+                       "duration":  0,
+                       "language":  "English",
+                       "is_mature":  true,
+                       "viewer_count":  8769,
+                       "thumbnail":  {
+                                         "url":  "https://stream.kick.com/thumbnails/livestream/136402571/thumb0/video_thumbnail/thumb0.jpg"
+                                     },
+                       "lang_iso":  "en",
+                       "tags":  [
+
+                                ],
+                       "categories":  [
+                                          {
+                                              "id":  8,
+                                              "category_id":  1,
+                                              "name":  "Grand Theft Auto V (GTA)",
+                                              "slug":  "grand-theft-auto-v",
+                                              "tags":  [
+                                                           "Shooter",
+                                                           "Action",
+                                                           "Open World"
+                                                       ],
+                                              "description":  "Grand Theft Auto V is a vast open world game set in Los Santos, a sprawling sun-soaked metropolis struggling to stay afloat in an era of economic uncertainty and cheap reality TV. The game blends storytelling and gameplay in new ways as players repeatedly jump in and out of the lives of the game’s three lead characters, playing all sides of the game’s interwoven story.",
+                                              "deleted_at":  null,
+                                              "is_mature":  false,
+                                              "viewers":  175181,
+                                              "is_fallback":  false,
+                                              "category":  {
+                                                               "id":  1,
+                                                               "name":  "Games",
+                                                               "slug":  "games",
+                                                               "icon":  "🕹️"
+                                                           }
+                                          }
+                                      ]
+                   },
+    "role":  null,
+    "muted":  false,
+    "follower_badges":  [
+
+                        ],
+    "offline_banner_image":  null,
+    "verified":  true,
+    "recent_categories":  [
+                              {
+                                  "id":  8,
+                                  "category_id":  1,
+                                  "name":  "Grand Theft Auto V (GTA)",
+                                  "slug":  "grand-theft-auto-v",
+                                  "tags":  [
+                                               "Shooter",
+                                               "Action",
+                                               "Open World"
+                                           ],
+                                  "description":  "Grand Theft Auto V is a vast open world game set in Los Santos, a sprawling sun-soaked metropolis struggling to stay afloat in an era of economic uncertainty and cheap reality TV. The game blends storytelling and gameplay in new ways as players repeatedly jump in and out of the lives of the game’s three lead characters, playing all sides of the game’s interwoven story.",
+                                  "deleted_at":  null,
+                                  "is_mature":  false,
+                                  "viewers":  175181,
+                                  "is_fallback":  false,
+                                  "banner":  {
+                                                 "responsive":  "https://files.kick.com/images/subcategories/8/banner/responsives/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d___banner_600_600.webp 600w, https://files.kick.com/images/subcategories/8/banner/responsives/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d___banner_501_501.webp 501w, https://files.kick.com/images/subcategories/8/banner/responsives/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d___banner_420_420.webp 420w, https://files.kick.com/images/subcategories/8/banner/responsives/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d___banner_351_351.webp 351w, https://files.kick.com/images/subcategories/8/banner/responsives/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d___banner_294_294.webp 294w, https://files.kick.com/images/subcategories/8/banner/responsives/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d___banner_245_245.webp 245w",
+                                                 "url":  "https://files.kick.com/images/subcategories/8/banner/dfc3bcf9-6dd1-4f88-bdac-066f17b7d14d"
+                                             },
+                                  "category":  {
+                                                   "id":  1,
+                                                   "name":  "Games",
+                                                   "slug":  "games",
+                                                   "icon":  "🕹️"
+                                               }
+                              },
+                              {
+                                  "id":  15,
+                                  "category_id":  2,
+                                  "name":  "Just Chatting",
+                                  "slug":  "just-chatting",
+                                  "tags":  [
+                                               "IRL",
+                                               "Casual"
+                                           ],
+                                  "description":  null,
+                                  "deleted_at":  null,
+                                  "is_mature":  false,
+                                  "viewers":  321552,
+                                  "is_fallback":  false,
+                                  "banner":  {
+                                                 "responsive":  "https://files.kick.com/images/subcategories/15/banner/responsives/5546d68b-e9f9-49f9-a658-9d2ece637064___banner_408_408.webp 408w, https://files.kick.com/images/subcategories/15/banner/responsives/5546d68b-e9f9-49f9-a658-9d2ece637064___banner_341_341.webp 341w, https://files.kick.com/images/subcategories/15/banner/responsives/5546d68b-e9f9-49f9-a658-9d2ece637064___banner_285_285.webp 285w, https://files.kick.com/images/subcategories/15/banner/responsives/5546d68b-e9f9-49f9-a658-9d2ece637064___banner_238_238.webp 238w",
+                                                 "url":  "https://files.kick.com/images/subcategories/15/banner/5546d68b-e9f9-49f9-a658-9d2ece637064"
+                                             },
+                                  "category":  {
+                                                   "id":  2,
+                                                   "name":  "IRL",
+                                                   "slug":  "irl",
+                                                   "icon":  "🎙️"
+                                               }
+                              }
+                          ],
+    "can_host":  true,
+    "user":  {
+                 "id":  676,
+                 "username":  "xQc",
+                 "profile_pic":  "https://files.kick.com/images/user/676/profile_image/conversion/931b4e8f-5445-427c-bd82-b473530390cc-fullsize.webp"
+             },
+    "chatroom":  {
+                     "id":  668,
+                     "chatable_type":  "App\\Models\\Channel",
+                     "channel_id":  668,
+                     "created_at":  "2022-10-22T06:59:51.000000Z",
+                     "updated_at":  "2026-01-08T23:32:57.000000Z",
+                     "chat_mode_old":  "public",
+                     "chat_mode":  "public",
+                     "slow_mode":  false,
+                     "chatable_id":  668,
+                     "followers_mode":  true,
+                     "subscribers_mode":  false,
+                     "emotes_mode":  false,
+                     "message_interval":  5,
+                     "following_min_duration":  5760
+                 }
+}

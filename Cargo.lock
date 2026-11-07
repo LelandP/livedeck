@@ -2105,6 +2105,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "htpc-kick-api"
+version = "0.3.0"
+dependencies = [
+ "async-tungstenite",
+ "futures-util",
+ "pico-args",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "htpc-player"
 version = "0.3.0"
 dependencies = [

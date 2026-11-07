@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twitch", "crates/storage", "crates/resolver", "crates/player", "crates/chat"]
+members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twitch", "crates/storage", "crates/resolver", "crates/player", "crates/chat", "crates/kick"]
 
 [workspace.package]
 version = "0.3.0"
@@ -21,6 +21,7 @@ htpc-storage = { path = "crates/storage", version = "0.3.0" }
 htpc-resolver = { path = "crates/resolver", version = "0.3.0" }
 htpc-player = { path = "crates/player", version = "0.3.0" }
 htpc-chat = { path = "crates/chat", version = "0.3.0" }
+htpc-kick-api = { path = "crates/kick", version = "0.3.0" }
 
 # UI
 slint = "1.18.1"

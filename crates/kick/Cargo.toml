@@ -1,0 +1,24 @@
+[package]
+name = "htpc-kick-api"
+description = "Kick client (the website's unofficial API) behind the mockable KickApi trait, with a FakeKick."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-tungstenite.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock.workspace = true
+serde_json.workspace = true
+# Only for the `kick_probe` example: argument parsing.
+pico-args.workspace = true
