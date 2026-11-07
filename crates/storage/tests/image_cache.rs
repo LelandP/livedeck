@@ -151,3 +151,17 @@ async fn corrupt_cache_file_is_refetched() {
     assert_eq!(cache.stats().entries, 1);
     assert_ne!(fs::read(&files[0]).unwrap(), b"bitrot");
 }
+
+#[test]
+fn big_pictures_are_scaled_down_to_card_size_and_small_ones_kept() {
+    let big = htpc_storage::decode(&png(1920, 1080, [0, 0, 255, 255])).unwrap();
+    assert_eq!(
+        (big.width, big.height),
+        (htpc_storage::MAX_DECODED_SIDE, 360)
+    );
+    assert_eq!(big.rgba.len(), (640 * 360 * 4) as usize);
+    let tall = htpc_storage::decode(&png(300, 1200, [0, 0, 255, 255])).unwrap();
+    assert_eq!(tall.height, htpc_storage::MAX_DECODED_SIDE);
+    let card = htpc_storage::decode(&png(440, 248, [0, 0, 255, 255])).unwrap();
+    assert_eq!((card.width, card.height), (440, 248));
+}

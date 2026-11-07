@@ -87,6 +87,28 @@ pub(crate) mod wire {
         /// The list answer names it `src`, a channel's livestream `url`.
         #[serde(alias = "url")]
         pub src: Option<String>,
+        /// The same picture in other sizes: `"<url> 1920w, <url> 1280w, ..."`.
+        #[serde(default)]
+        pub srcset: Option<String>,
+    }
+
+    impl Thumbnail {
+        /// The smallest size at least `CARD_WIDTH` wide, else `src` (1280 px, far more than a
+        /// card needs: a row of those made the UI sluggish).
+        pub fn for_card(self) -> Option<String> {
+            const CARD_WIDTH: u32 = 440;
+            let best = self.srcset.as_deref().and_then(|set| {
+                set.split(',')
+                    .filter_map(|entry| {
+                        let (url, width) = entry.trim().rsplit_once(' ')?;
+                        let width: u32 = width.strip_suffix('w')?.parse().ok()?;
+                        (width >= CARD_WIDTH && !url.is_empty()).then(|| (width, url.to_owned()))
+                    })
+                    .min_by_key(|(width, _)| *width)
+                    .map(|(_, url)| url)
+            });
+            best.or(self.src)
+        }
     }
 
     #[derive(Deserialize)]
@@ -204,7 +226,7 @@ impl From<wire::ListedStream> for LiveStream {
             title: s.session_title,
             category,
             viewers: s.viewer_count,
-            thumbnail: s.thumbnail.and_then(|t| t.src),
+            thumbnail: s.thumbnail.and_then(wire::Thumbnail::for_card),
         }
     }
 }
@@ -219,7 +241,7 @@ impl From<wire::Channel> for ChannelInfo {
             category: first_category(&l.categories),
             title: l.session_title,
             viewers: l.viewer_count,
-            thumbnail: l.thumbnail.and_then(|t| t.src),
+            thumbnail: l.thumbnail.and_then(wire::Thumbnail::for_card),
         });
         Self {
             id: c.id,

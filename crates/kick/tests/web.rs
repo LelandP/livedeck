@@ -38,10 +38,13 @@ async fn top_livestreams_maps_a_real_page_and_its_next_page() {
     assert_eq!(first.viewers, 46_034);
     assert_eq!(first.category, "Just Chatting");
     assert!(first.title.contains("SXBThone"));
-    assert!(first
-        .thumbnail
-        .as_deref()
-        .is_some_and(|u| u.starts_with("https://images.kick.com/") && u.contains("720.webp")));
+    assert!(
+        first
+            .thumbnail
+            .as_deref()
+            .is_some_and(|u| u.starts_with("https://images.kick.com/") && u.contains("/360.webp")),
+        "the 480 px preview, not the 1280 px one"
+    );
     // Viewers come first, like Twitch's list.
     assert!(page
         .streams

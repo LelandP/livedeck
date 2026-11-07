@@ -35,9 +35,17 @@ impl std::fmt::Debug for DecodedImage {
     }
 }
 
-/// Decodes JPEG, PNG or WebP bytes.
+/// Largest decoded size, in pixels on each side. Cards are at most 640 px wide (the hero), so a
+/// bigger picture only costs memory and time on its way to the window: a row of full-HD previews
+/// made the whole UI sluggish. Smaller images are left as they are.
+pub const MAX_DECODED_SIDE: u32 = 640;
+
+/// Decodes JPEG, PNG or WebP bytes, scaled down to fit [`MAX_DECODED_SIDE`].
 pub fn decode(bytes: &[u8]) -> Result<DecodedImage> {
-    let img = image::load_from_memory(bytes).map_err(|e| Error::Decode(e.to_string()))?;
+    let mut img = image::load_from_memory(bytes).map_err(|e| Error::Decode(e.to_string()))?;
+    if img.width() > MAX_DECODED_SIDE || img.height() > MAX_DECODED_SIDE {
+        img = img.thumbnail(MAX_DECODED_SIDE, MAX_DECODED_SIDE);
+    }
     let rgba = img.to_rgba8();
     Ok(DecodedImage {
         width: rgba.width(),

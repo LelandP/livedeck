@@ -15,7 +15,7 @@ mod fs_util;
 mod paths;
 mod tokens;
 
-pub use cache::{decode, CacheStats, DecodedImage, ImageCache, MAX_IMAGE_BYTES};
+pub use cache::{decode, CacheStats, DecodedImage, ImageCache, MAX_DECODED_SIDE, MAX_IMAGE_BYTES};
 pub use config::{Config, ConfigStore, DEFAULT_IMAGE_CACHE_MB, MIN_IMAGE_CACHE_MB};
 pub use error::{Error, Result};
 pub use paths::{Paths, APP_NAME};
