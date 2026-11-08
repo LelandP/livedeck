@@ -2,6 +2,8 @@
 
 LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: browse live streams and categories, watch with chat, and sign in to see who you follow and write in chat. It is built for the couch and for SteamOS Game Mode on the **Steam Deck**, and it also runs on **Windows** (and Linux) with a controller or keyboard. Written in Rust with [Slint](https://slint.dev), [libmpv](https://mpv.io) and [Streamlink](https://streamlink.github.io).
 
+![LiveDeck browsing Twitch, watching a stream and showing its chat](assets/livedeck-demo.gif)
+
 > **This is not an official Twitch or Valve product, and it is not affiliated with or endorsed by either.** Twitch and Steam are trademarks of their owners.
 >
 > **Use it at your own risk.** It finds streams through unofficial, undocumented Twitch endpoints. They can break without notice, and using them may conflict with the [Twitch Terms of Service](https://www.twitch.tv/p/legal/terms-of-service/). The software comes with no warranty (see [LICENSE](LICENSE)). You are responsible for how you use it.
