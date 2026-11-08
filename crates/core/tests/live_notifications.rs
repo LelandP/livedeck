@@ -165,11 +165,11 @@ fn the_channel_being_watched_is_never_announced() {
 #[test]
 fn toasts_show_on_every_screen_and_take_no_buttons() {
     let (s, _) = went_live(&signed_in(), &["a"]);
-    // A still opens the focused card, B still asks to quit.
+    // A still opens the focused card, B still opens the sidebar, and B on the sidebar asks to quit.
     let (watching, _) = reduce(&s, Intent::Select);
     assert_eq!(watching.screen, Screen::Player);
     assert_eq!(toast_channels(&watching), ["a"]);
-    let (asking, _) = reduce(&s, Intent::Back);
+    let (asking, _) = run(s, &[Intent::Back, Intent::Back]);
     assert!(asking.exit_prompt);
 }
 

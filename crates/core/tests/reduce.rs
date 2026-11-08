@@ -187,14 +187,15 @@ fn rail_owns_focus_while_open() {
 }
 
 #[test]
-fn right_or_back_closes_rail_and_keeps_cursor() {
-    for exit in [Intent::Right, Intent::Back] {
-        let (s, cmds) = run(home(), &[Intent::Left, Intent::Down, Intent::Down, exit]);
-        assert!(!s.rail.focused, "{exit:?} should close the rail");
-        assert_eq!(s.rail.index, RailEntry::Favorites);
-        assert_eq!(s.screen, Screen::Home);
-        assert!(cmds.is_empty());
-    }
+fn right_closes_rail_and_keeps_cursor() {
+    let (s, cmds) = run(
+        home(),
+        &[Intent::Left, Intent::Down, Intent::Down, Intent::Right],
+    );
+    assert!(!s.rail.focused, "Right should close the rail");
+    assert_eq!(s.rail.index, RailEntry::Favorites);
+    assert_eq!(s.screen, Screen::Home);
+    assert!(cmds.is_empty());
 }
 
 #[test]
@@ -573,45 +574,58 @@ fn chat_is_capped_and_drops_oldest() {
 // ---- back stack ----------------------------------------------------------------------------
 
 #[test]
-fn back_on_a_root_screen_asks_to_quit() {
+fn back_on_a_root_screen_opens_the_rail() {
     for entry in [RailEntry::Home, RailEntry::Browse, RailEntry::Settings] {
         let (s, _) = reduce(&home(), Intent::RailPick(entry));
         let (s, cmds) = reduce(&s, Intent::Back);
-        assert!(s.exit_prompt, "{entry:?}");
-        assert!(cmds.is_empty(), "asking is not quitting yet");
+        assert!(s.rail.focused, "{entry:?}");
+        assert!(!s.exit_prompt, "{entry:?}");
+        assert!(cmds.is_empty());
     }
 }
 
 #[test]
-fn back_with_the_rail_open_closes_the_rail_and_does_not_ask() {
-    let (s, _) = reduce(&home(), Intent::Menu);
-    let (s, _) = reduce(&s, Intent::Back);
-    assert!(!s.rail.focused);
-    assert!(!s.exit_prompt);
+fn back_on_the_rail_asks_to_quit() {
+    let (s, cmds) = run(home(), &[Intent::Back, Intent::Back]);
+    assert!(s.exit_prompt);
+    assert!(
+        s.rail.focused,
+        "the sidebar is still open behind the prompt"
+    );
+    assert!(cmds.is_empty(), "asking is not quitting yet");
+}
+
+#[test]
+fn menu_then_back_asks_to_quit() {
+    let (s, _) = run(home(), &[Intent::Menu, Intent::Back]);
+    assert!(s.exit_prompt);
 }
 
 #[test]
 fn a_on_the_quit_prompt_quits() {
-    let (s, _) = reduce(&home(), Intent::Back);
+    let (s, _) = run(home(), &[Intent::Back, Intent::Back]);
     let (_, cmds) = reduce(&s, Intent::Select);
     assert_eq!(cmds, vec![Command::Quit]);
 }
 
 #[test]
 fn b_on_the_quit_prompt_cancels_and_leaves_home_as_it_was() {
-    let start = home();
-    let (s, _) = reduce(&start, Intent::Back);
-    let (s, cmds) = reduce(&s, Intent::Back);
-    assert_eq!(s, start);
+    let (open, _) = run(home(), &[Intent::Back, Intent::Back]);
+    let (s, cmds) = reduce(&open, Intent::Back);
+    assert!(!s.exit_prompt);
+    assert!(
+        s.rail.focused,
+        "B closes the prompt and the sidebar stays open"
+    );
     assert!(cmds.is_empty());
     // Start closes it too.
-    let (s, _) = reduce(&reduce(&start, Intent::Back).0, Intent::Menu);
-    assert_eq!(s, start);
+    let (s, _) = reduce(&open, Intent::Menu);
+    assert!(!s.exit_prompt);
 }
 
 #[test]
 fn the_quit_prompt_takes_all_other_input() {
-    let (open, _) = reduce(&home(), Intent::Back);
+    let (open, _) = run(home(), &[Intent::Back, Intent::Back]);
     for intent in [
         Intent::Up,
         Intent::Down,

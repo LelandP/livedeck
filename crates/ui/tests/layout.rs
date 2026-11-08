@@ -199,9 +199,11 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     }
 
     // The quit prompt over Home: it lays out, draws its title in the middle of the screen, and
-    // the hints bar underneath is empty (the prompt has its own buttons).
+    // the hints bar underneath is empty (the prompt has its own buttons). Back twice: the first
+    // opens the sidebar, the second asks to quit.
     let (home, _) = init();
-    let (asking, _) = reduce(&home, Intent::Back);
+    let (sidebar, _) = reduce(&home, Intent::Back);
+    let (asking, _) = reduce(&sidebar, Intent::Back);
     assert!(asking.exit_prompt);
     Update::full(view_model(&asking)).apply(&ui);
     let image = render(&ui);

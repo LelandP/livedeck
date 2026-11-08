@@ -4,6 +4,7 @@
 import { Theme } from "theme.slint";
 import { StreamItem, ChatMsg, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
 import { ChatList, RaidCard } from "player.slint";
+import { ViewIcon } from "icons.slint";
 
 // A speaker, with sound waves or crossed out.
 component SpeakerIcon inherits Rectangle {
@@ -647,18 +648,13 @@ export component ViewPopup inherits Rectangle {
                 alignment: start;
                 Rectangle {
                     y: (parent.height - self.height) / 2;
-                    width: view-glyph.preferred-width + 18px;
+                    width: 44px;
                     height: 28px;
                     border-radius: 8px;
                     background: Theme.surface-high;
                     border-width: 1px;
                     border-color: #44444e;
-                    view-glyph := Text {
-                        text: "View";
-                        color: Theme.text;
-                        font-size: 13px;
-                        font-weight: 700;
-                    }
+                    ViewIcon { x: 13px; y: 5px; width: 18px; height: 18px; }
                 }
                 Text {
                     text: root.title;

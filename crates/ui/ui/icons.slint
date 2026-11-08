@@ -1,3 +1,18 @@
+// The View button's icon (Steam Deck and Xbox): two overlapping boxes, outlined.
+export component ViewIcon inherits Path {
+    in property <color> tone: Theme.text;
+    width: 18px;
+    height: 18px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M8 3h13v13H8zM3 8h13v13H3z";
+    fill: transparent;
+    stroke: root.tone;
+    stroke-width: 2.4px;
+}
+
+import { Theme } from "theme.slint";
+
 // Vector nav icons (24x24 viewbox) so no image assets are needed.
 // kind (RailEntry order): 0 home, 1 following (heart), 2 favorites (star), 3 browse (grid),
 // 4 search (magnifier), 5 settings (sliders), 6 account

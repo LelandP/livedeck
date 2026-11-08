@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
 import { StreamItem, ChatMsg, ChatPiece, ToastItem } from "types.slint";
+import { ViewIcon } from "icons.slint";
 
 // "<channel> is live": the stream preview, the name and the title line. It slides in when it is
 // created and slides out on its own just before Rust removes it (`TOAST_TIME` in live_watch.rs is
@@ -313,14 +314,22 @@ export component Hint inherits TouchArea {
     row := HorizontalLayout {
         spacing: 10px;
 
-        // A circle, or a pill for a longer glyph ("View").
+        // A circle, or a pill for the View button's two-box icon.
         Rectangle {
-            width: max(34px, glyph-text.preferred-width + 18px);
+            width: max(34px, root.glyph == "View" ? 44px : glyph-text.preferred-width + 18px);
             height: 34px;
             border-radius: 17px;
             border-width: 2px;
             border-color: root.has-hover ? Theme.accent-light : root.button-color;
+            if root.glyph == "View" : ViewIcon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                tone: root.button-color;
+            }
             glyph-text := Text {
+                visible: root.glyph != "View";
                 text: root.glyph;
                 color: root.button-color;
                 font-size: Theme.fs-small;

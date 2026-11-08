@@ -904,6 +904,9 @@ mod tests {
         use std::sync::atomic::Ordering;
         let (tx, rec) = start();
         rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
+        // Back opens the sidebar, the second Back asks to quit.
+        tx.send(Intent::Back.into()).unwrap();
+        rec.wait_for("sidebar", |vm| vm.rail_focused).await;
         tx.send(Intent::Back.into()).unwrap();
         rec.wait_for("prompt", |vm| vm.exit_prompt).await;
         assert!(!rec.2.load(Ordering::SeqCst), "asking must not quit");

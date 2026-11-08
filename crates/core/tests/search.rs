@@ -188,7 +188,10 @@ fn b_deletes_then_asks_to_quit_once_empty() {
     let (s, _) = typed(&search(), "ab");
     let (s, _) = run(s, &[Intent::Back, Intent::Back]);
     assert!(s.search.query.is_empty());
-    assert!(!s.exit_prompt);
+    assert!(!s.rail.focused && !s.exit_prompt);
+    // Empty, B opens the sidebar; B there asks to quit.
+    let (s, _) = reduce(&s, Intent::Back);
+    assert!(s.rail.focused && !s.exit_prompt);
     let (s, _) = reduce(&s, Intent::Back);
     assert!(s.exit_prompt);
 }
@@ -206,7 +209,7 @@ fn elsewhere_y_r_and_backspace_keep_their_meaning() {
     let (s, _) = reduce(&home(), Intent::Text('a'));
     assert_eq!(s, home(), "other letters do nothing");
     let (s, _) = reduce(&home(), Intent::Erase);
-    assert!(s.exit_prompt, "Backspace is B");
+    assert!(s.rail.focused, "Backspace is B");
     let (s, _) = reduce(&home(), Intent::Select);
     let (s, _) = reduce(&s, Intent::Text('y'));
     assert!(s.chat_open, "y toggles chat on the player");

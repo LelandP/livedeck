@@ -141,7 +141,7 @@ fn login_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
 
 /// Input on the Settings screen while the rail is closed. Up and Down move between rows. A, and
 /// Left or Right on a choice, change it and save the settings. Left on the account row goes to the
-/// rail (the choices use Left for "previous"). B asks to quit, as on every root screen.
+/// rail (the choices use Left for "previous"). B opens the rail, as on every root screen.
 fn settings_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
         Intent::Up => s.settings_focus = s.settings_focus.prev(),
@@ -155,7 +155,8 @@ fn settings_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             SettingsRow::Account => s.rail.focused = true,
             row => change_setting(s, row, false, cmds),
         },
-        Intent::Back => s.exit_prompt = true,
+        // Back opens the sidebar, where a second Back asks to quit.
+        Intent::Back => s.rail.focused = true,
         _ => {}
     }
 }
@@ -975,7 +976,9 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             Intent::Up => s.rail.index = s.rail.index.prev(),
             Intent::Down => s.rail.index = s.rail.index.next(),
             Intent::Select => activate_rail(s, s.rail.index, cmds),
-            Intent::Right | Intent::Back => s.rail.focused = false,
+            Intent::Right => s.rail.focused = false,
+            // Back on the sidebar asks to quit: the sidebar is where Back from a root screen leads.
+            Intent::Back => s.exit_prompt = true,
             _ => {}
         }
         return;
@@ -995,7 +998,7 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
 
 /// Input on the Search keyboard. The D-pad moves between keys and A presses one. Left at the left
 /// edge opens the rail, Down from the bottom row goes into the results. X deletes, Y types a
-/// space, Start jumps to the results. B deletes too, and only asks to quit once the text is empty.
+/// space, Start jumps to the results. B deletes too, and once the text is empty opens the sidebar.
 fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
         Intent::Up => {
@@ -1030,7 +1033,7 @@ fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Intent::Retry => edit_search(s, cmds, keyboard::backspace),
         Intent::ToggleChat => edit_search(s, cmds, |q| keyboard::type_char(q, ' ')),
         Intent::Menu => search_done(s, cmds),
-        Intent::Back | Intent::Erase if s.search.query.is_empty() => s.exit_prompt = true,
+        Intent::Back | Intent::Erase if s.search.query.is_empty() => s.rail.focused = true,
         Intent::Back | Intent::Erase => edit_search(s, cmds, keyboard::backspace),
         Intent::Text(c) => type_on_search(s, c, cmds),
         // Search has one page of keys. View is handled before (`home_intent`).
@@ -1157,9 +1160,9 @@ fn feed_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Intent::Select => select_tile(s, cmds),
         Intent::Retry => retry(s, cmds),
         // Category is the only feed screen above another one, so it is the only one Back leaves.
-        // On a root screen there is nowhere further back: B asks to quit.
+        // On a root screen there is nowhere further back: B opens the sidebar, and B there asks to quit.
         Intent::Back if s.screen == Screen::Category => back(s, cmds),
-        Intent::Back => s.exit_prompt = true,
+        Intent::Back => s.rail.focused = true,
         _ => {}
     }
 }

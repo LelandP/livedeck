@@ -5,6 +5,7 @@ import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
 import { Theme } from "theme.slint";
 import { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
 import { Hint, Toast } from "components.slint";
+import { ViewIcon } from "icons.slint";
 import { HomeContent } from "home.slint";
 import { GridContent } from "grid.slint";
 import { SearchContent } from "search.slint";
@@ -507,16 +508,16 @@ export component MainWindow inherits Window {
             alignment: start;
             Rectangle {
                 y: (parent.height - self.height) / 2;
-                width: tray-glyph.preferred-width + 16px;
+                width: 40px;
                 height: 26px;
                 border-radius: 13px;
                 border-width: 2px;
                 border-color: Theme.text;
-                tray-glyph := Text {
-                    text: "View";
-                    color: Theme.text;
-                    font-size: 13px;
-                    font-weight: 700;
+                ViewIcon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 14px;
+                    height: 14px;
                 }
             }
             Text {
@@ -746,8 +747,9 @@ export component MainWindow inherits Window {
             if root.screen == 1 && root.mv-active && root.mv-count > 1 && !root.player-menu-open && !root.subscribe-open : Hint { glyph: "RB"; label: "LB/RB Next stream"; clicked => { root.action(UiAction.page-right); } }
             if root.screen == 1 && !root.player-menu-open && !root.subscribe-open : Hint { glyph: "View"; label: "Multiview"; clicked => { root.action(UiAction.view); } }
             if (root.screen == 1 && !root.player-menu-open) || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: root.screen == 1 && root.mv-active ? "Grid" : "Back"; clicked => { root.action(UiAction.back); } }
-            // Root screens: nowhere further back, so B asks to quit (with the rail open, B only closes it).
-            if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
+            // Root screens: nowhere further back, so B opens the sidebar, and B on the sidebar asks to quit.
+            if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Sidebar"; clicked => { root.action(UiAction.back); } }
+            if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
             if root.screen == 2 && root.login-failed : Hint { glyph: "A"; label: "New code"; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 4 : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
@@ -757,7 +759,8 @@ export component MainWindow inherits Window {
             if root.screen == 5 && root.search-on-keys : Hint { glyph: "X"; label: "Delete"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 5 && root.search-on-keys : Hint { glyph: "Y"; label: "Space"; clicked => { root.action(UiAction.toggle-chat); } }
             if root.screen == 5 && root.search-on-keys : Hint { glyph: "≡"; label: "Results"; clicked => { root.action(UiAction.menu); } }
-            if root.screen == 5 && root.search-on-keys && root.search-query == "" : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
+            if root.screen == 5 && root.search-on-keys && root.search-query == "" && !root.rail-focused : Hint { glyph: "B"; label: "Sidebar"; clicked => { root.action(UiAction.back); } }
+            if root.screen == 5 && root.search-on-keys && root.search-query == "" && root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
             // Search, in the results (or the rail): like Home, and B returns to the keyboard.
             if root.screen == 5 && !root.search-on-keys : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 5 && root.search-in-results && root.can-retry && !root.rail-focused : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
