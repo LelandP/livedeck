@@ -42,7 +42,7 @@ Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
 **Big project**
 
-- [ ] **Kick support:** watch Kick streams next to Twitch. The app is Twitch-shaped throughout (API trait, feeds, chat, sign-in, config), so this starts with a platform abstraction. Then a read-only Kick platform (browse, play through Streamlink, chat over Kick's own WebSocket), with login and follows later
+- [x] **Kick support:** watch Kick streams next to Twitch, read-only: a Top Live row on Home, Kick channels in Search, playback through Streamlink, and chat over Kick's own WebSocket. Parked: Kick sign-in (it needs a client secret, so it would need a pairing service) and Kick follows, which Kick has no API for. See `plan/11-kick-support.md`
 
 **Parked**
 
