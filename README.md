@@ -4,6 +4,8 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 ![LiveDeck browsing Twitch, watching a stream and showing its chat](assets/livedeck-demo.gif)
 
+![LiveDeck multiview: four streams in a grid, with the chat of the stream with sound](assets/livedeck-multiview.gif)
+
 > **This is not an official Twitch or Valve product, and it is not affiliated with or endorsed by either.** Twitch and Steam are trademarks of their owners.
 >
 > **Use it at your own risk.** It finds streams through unofficial, undocumented Twitch endpoints. They can break without notice, and using them may conflict with the [Twitch Terms of Service](https://www.twitch.tv/p/legal/terms-of-service/). The software comes with no warranty (see [LICENSE](LICENSE)). You are responsible for how you use it.
