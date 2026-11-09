@@ -242,6 +242,10 @@ pub enum Event {
         feed: FeedId,
         message: String,
     },
+    /// The app's refresh timer (about once a minute). The feed on screen, or under the player,
+    /// reloads quietly, so a stream that went live shows up without a restart. See
+    /// `reduce::refresh_visible_feed`.
+    FeedRefreshDue,
     /// The answer to a `LoadMore`. `cursor` is the one that was requested: the reducer ignores
     /// the answer unless that page is still the one the row waits for.
     MoreLoaded {

@@ -2,7 +2,7 @@
 // Importing a font file registers it, so it works without being installed on the system.
 import "../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf";
 import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
-import { Theme } from "theme.slint";
+import { Theme, InputDevice } from "theme.slint";
 import { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
 import { Hint, Toast } from "components.slint";
 import { ViewIcon } from "icons.slint";
@@ -19,6 +19,8 @@ export { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastIt
 
 // Hint-bar actions (mouse fallback). Rust maps them to core Intents.
 export enum UiAction { select, back, toggle-chat, menu, retry, page-right, view }
+// Rust sets it from the last input (crates/app main.rs).
+export { InputDevice }
 
 // Pure view of `htpc_core::AppState`. Rust (crates/ui/src/view_model.rs) sets every property.
 // Navigation logic lives in `htpc_core::reduce`. This file only renders and animates.

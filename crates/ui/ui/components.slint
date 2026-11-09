@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+﻿import { Theme, InputDevice } from "theme.slint";
 import { StreamItem, ChatMsg, ChatPiece, ToastItem } from "types.slint";
 import { ViewIcon } from "icons.slint";
 
@@ -132,7 +132,7 @@ export component StreamCard inherits Rectangle {
             animate opacity { duration: Theme.t-med; easing: ease-out; }
         }
 
-        // *Resume multiview*: up to four of the set's previews, 2×2, each over its tint.
+        // *Resume multiview*: up to four of the set's previews, 2Ã—2, each over its tint.
         if root.item.resume : Rectangle {
             background: Theme.surface;
             for cell[i] in root.item.mosaic : Rectangle {
@@ -226,7 +226,7 @@ export component StreamCard inherits Rectangle {
                     background: Theme.live;
                 }
                 Text {
-                    text: root.item.viewers + "  ·  " + root.item.category;
+                    text: root.item.viewers + "  Â·  " + root.item.category;
                     color: Theme.muted;
                     font-size: Theme.fs-small;
                     overflow: elide;
@@ -298,7 +298,8 @@ export component StreamCard inherits Rectangle {
     }
 }
 
-// Controller glyph + label for the bottom hints bar.
+// Controller glyph + label for the bottom hints bar. On a keyboard (InputDevice.controller is off,
+// the last device used) the same button shows as the key that does it, in a keycap.
 // Also clickable, as the mouse fallback for the same action.
 export component Hint inherits TouchArea {
     in property <string> glyph;
@@ -308,20 +309,32 @@ export component Hint inherits TouchArea {
         : (root.glyph == "B" ? Theme.btn-b
         : (root.glyph == "X" ? Theme.btn-x
         : (root.glyph == "Y" ? Theme.btn-y : Theme.text)));
+    // The keys htpc_input maps: Return, Escape, the R and Y and V letters, PageDown, arrows.
+    property <bool> keys: !InputDevice.controller;
+    property <string> key-name: root.glyph == "A" ? "Enter"
+        : (root.glyph == "B" ? "Esc"
+        : (root.glyph == "X" ? "R"
+        : (root.glyph == "RB" ? "PgDn"
+        : (root.glyph == "View" ? "V"
+        : (root.glyph == "â‰¡" ? "Menu"
+        : (root.glyph == "â—€â–¶" ? "â† â†’" : root.glyph))))));
+    // The View button's two-box icon, on a controller only.
+    property <bool> view-icon: root.glyph == "View" && !root.keys;
 
     preferred-width: row.preferred-width;
 
     row := HorizontalLayout {
         spacing: 10px;
 
-        // A circle, or a pill for the View button's two-box icon.
+        // A circle on a controller, a keycap on a keyboard. The View icon is a pill.
         Rectangle {
-            width: max(34px, root.glyph == "View" ? 44px : glyph-text.preferred-width + 18px);
+            width: max(34px, root.view-icon ? 44px : glyph-text.preferred-width + 18px);
             height: 34px;
-            border-radius: 17px;
+            border-radius: root.keys ? 8px : 17px;
             border-width: 2px;
-            border-color: root.has-hover ? Theme.accent-light : root.button-color;
-            if root.glyph == "View" : ViewIcon {
+            border-color: root.has-hover ? Theme.accent-light : (root.keys ? #5a5a66 : root.button-color);
+            background: root.keys ? Theme.surface-high : transparent;
+            if root.view-icon : ViewIcon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 16px;
@@ -329,9 +342,9 @@ export component Hint inherits TouchArea {
                 tone: root.button-color;
             }
             glyph-text := Text {
-                visible: root.glyph != "View";
-                text: root.glyph;
-                color: root.button-color;
+                visible: !root.view-icon;
+                text: root.keys ? root.key-name : root.glyph;
+                color: root.keys ? Theme.text : root.button-color;
                 font-size: Theme.fs-small;
                 font-weight: 700;
             }

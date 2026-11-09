@@ -25,6 +25,7 @@ mod session;
 mod sleep;
 mod store;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,7 +39,7 @@ use htpc_resolver::{StreamResolver, StreamlinkResolver, TokioRunner};
 use htpc_storage::TokenStore;
 use htpc_twitch_api::{Credentials, FakeAuth, GqlClient, HelixClient, HttpAuth, HybridApi};
 use htpc_twitch_api::{RefreshingApi, RetryPolicy};
-use htpc_ui::{MainWindow, UiAction};
+use htpc_ui::{InputDevice, MainWindow, UiAction};
 use slint::ComponentHandle;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -606,6 +607,10 @@ fn eventsub_connect(session: &Arc<Session>) -> raids::Connect {
 /// wake from sleep within this time, which is when an old token is the likely state.
 const RESUME_CHECK: Duration = Duration::from_secs(60);
 
+/// How often the feed on screen reloads by itself, so a stream that went live shows up (the
+/// reducer's `Event::FeedRefreshDue`).
+const FEED_REFRESH: Duration = Duration::from_secs(60);
+
 /// Spawns the store with `provider` and runs the window until it closes.
 fn run_app<P: Provider, R: StreamResolver>(
     provider: P,
@@ -649,15 +654,21 @@ fn run_app<P: Provider, R: StreamResolver>(
     if fullscreen {
         ui.window().set_fullscreen(true);
     }
-    wire_ui(&ui, &tx);
+    // Which device was used last, so the hints bar shows its buttons. Starts with the controller.
+    let device = Arc::new(AtomicBool::new(true));
+    wire_ui(&ui, &tx, &device);
     let rate = RefreshRate::new();
     wire_window_events(&ui, &tx, rate.clone());
     let pool = make_pool(&ui, &tx, rate);
     sweep_idle_players(&runtime, &pool, &ui);
 
     let gamepad_tx = tx.clone();
+    let pad_ui = ui.as_weak();
     // Detached: the thread exits with the process or once the store channel closes.
-    let _gamepad = htpc_input::spawn_gamepad_thread(move |intent| send(&gamepad_tx, intent));
+    let _gamepad = htpc_input::spawn_gamepad_thread(move |intent| {
+        note_device(&device, &pad_ui, true);
+        send(&gamepad_tx, intent)
+    });
 
     let (mut state, mut startup) = htpc_core::init();
     state.settings = settings;
@@ -685,6 +696,19 @@ fn run_app<P: Provider, R: StreamResolver>(
         loop {
             tick.tick().await;
             resume.resume().await;
+        }
+    });
+    // Feeds reload on their own. The first tick is skipped: Home loads at start-up.
+    let refresh = tx.clone();
+    runtime.spawn(async move {
+        let mut tick = tokio::time::interval(FEED_REFRESH);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if refresh.send(Event::FeedRefreshDue.into()).is_err() {
+                return;
+            }
         }
     });
     let sleep = Sleep::new(pool.handle(MAIN_SLOT), power, tx.clone());
@@ -721,11 +745,26 @@ fn send(tx: &UnboundedSender<Msg>, intent: Intent) -> bool {
     tx.send(intent.into()).is_ok()
 }
 
+/// Tells the window which device was used last, for the hints bar's buttons or keys. Only when it
+/// changes, so a controller does not queue an update for every press. Works from any thread.
+fn note_device(last: &AtomicBool, ui: &slint::Weak<MainWindow>, controller: bool) {
+    if last.swap(controller, Ordering::Relaxed) != controller {
+        let _ = ui.upgrade_in_event_loop(move |ui| {
+            ui.global::<InputDevice>().set_controller(controller);
+        });
+    }
+}
+
 /// Forwards window input (keys and mouse fallbacks) to the store.
-fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>) {
+fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>, device: &Arc<AtomicBool>) {
     let t = tx.clone();
+    let keys_ui = ui.as_weak();
+    let keys_device = Arc::clone(device);
     ui.on_key(move |text| match htpc_input::map_key(&text) {
-        Some(intent) => send(&t, intent),
+        Some(intent) => {
+            note_device(&keys_device, &keys_ui, false);
+            send(&t, intent)
+        }
         None => false,
     });
 

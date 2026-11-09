@@ -119,3 +119,10 @@ export global Theme {
     // Period of the skeleton-card pulse (a loop, not a transition).
     out property <duration> t-pulse: 1400ms;
 }
+
+// Which device the player used last: a controller or a keyboard. The hints bar and the shoulder
+// glyphs show that device's buttons (set from crates/app main.rs).
+export global InputDevice {
+    in-out property <bool> controller: true;
+}
+

@@ -238,6 +238,30 @@ fn reload_home(s: &mut AppState, cmds: &mut Vec<Command>) {
     cmds.push(Command::LoadFeed { feed: FeedId::Home });
 }
 
+/// Reloads the feed on screen, or the one under the player, without a spinner, so the rows pick up
+/// streams that went live since the last load. Skipped while that feed is already loading, and on
+/// screens whose content is not a feed that lists live streams (Search follows its text, Settings,
+/// sign-in and multiview).
+fn refresh_visible_feed(s: &AppState, cmds: &mut Vec<Command>) {
+    let shows_feed = matches!(
+        s.screen,
+        Screen::Home
+            | Screen::Browse
+            | Screen::Category
+            | Screen::Following
+            | Screen::Favorites
+            | Screen::Player
+    );
+    if !shows_feed {
+        return;
+    }
+    let id = s.visible_feed_id();
+    if matches!(id, FeedId::Search(_)) || s.feed(&id).is_some_and(|f| f.loading) {
+        return;
+    }
+    cmds.push(Command::LoadFeed { feed: id });
+}
+
 /// Shows Following as a root screen and refreshes it. Rows from an earlier visit stay on screen
 /// until the new ones arrive.
 fn open_following(s: &mut AppState, cmds: &mut Vec<Command>) {
@@ -1191,6 +1215,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 f.error = Some(message);
             }
         }
+        Event::FeedRefreshDue => refresh_visible_feed(s, cmds),
         Event::MoreLoaded {
             feed,
             row,
