@@ -989,13 +989,22 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             return;
         }
         Intent::Menu if !on_search_keys => {
+            // Menu, Menu: a hidden refresh of the feed on screen. The second Menu closes the
+            // sidebar the first one opened (Menu, then Back, still asks to quit).
+            let closes_own = s.rail.focused && s.rail.opened_by_menu;
             s.rail.focused = !s.rail.focused;
+            s.rail.opened_by_menu = s.rail.focused;
+            if closes_own {
+                refresh_visible_feed(s, cmds);
+            }
             return;
         }
         _ => {}
     }
 
     if s.rail.focused {
+        // Any other press than Menu ends the Menu, Menu gesture.
+        s.rail.opened_by_menu = false;
         match intent {
             Intent::Up => s.rail.index = s.rail.index.prev(),
             Intent::Down => s.rail.index = s.rail.index.next(),

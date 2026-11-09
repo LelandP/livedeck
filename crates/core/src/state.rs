@@ -480,6 +480,9 @@ pub struct RailState {
     pub focused: bool,
     /// The rail cursor. Kept when the rail closes, like the scaffold.
     pub index: RailEntry,
+    /// The rail was opened with Menu and nothing else was pressed since. A second Menu then
+    /// reloads the feed on screen (a hidden refresh).
+    pub opened_by_menu: bool,
 }
 
 /// How the stream on the Player screen is doing.
