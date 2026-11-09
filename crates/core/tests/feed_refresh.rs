@@ -16,11 +16,15 @@ fn live(login: &str) -> Stream {
 }
 
 fn home_loaded(state: &AppState, login: &str) -> AppState {
-    let rows = vec![Row::new(
-        RowKind::TopLive,
-        vec![Tile::Stream(live(login))],
-    )];
-    reduce(state, Event::FeedLoaded { feed: FeedId::Home, rows }).0
+    let rows = vec![Row::new(RowKind::TopLive, vec![Tile::Stream(live(login))])];
+    reduce(
+        state,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows,
+        },
+    )
+    .0
 }
 
 #[test]
