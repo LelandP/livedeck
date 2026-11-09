@@ -2076,7 +2076,7 @@ checksum = "48ce8546b993eaf241d69ded33b1be6d205dd9857ec879d9d18bd05d3676e144"
 
 [[package]]
 name = "htpc-chat"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-tungstenite",
  "futures-util",
@@ -2094,11 +2094,11 @@ dependencies = [
 
 [[package]]
 name = "htpc-core"
-version = "0.5.0"
+version = "0.5.1"
 
 [[package]]
 name = "htpc-input"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "gilrs",
  "htpc-core",
@@ -2108,7 +2108,7 @@ dependencies = [
 
 [[package]]
 name = "htpc-kick-api"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-tungstenite",
  "futures-util",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "htpc-player"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "glow",
  "libmpv2",
@@ -2134,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "htpc-resolver"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "thiserror 2.0.21",
  "tokio",
@@ -2143,7 +2143,7 @@ dependencies = [
 
 [[package]]
 name = "htpc-storage"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "directories",
  "htpc-core",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "htpc-twitch-api"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-tungstenite",
  "futures-util",
@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "htpc-ui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "htpc-core",
  "i-slint-backend-testing",
@@ -3259,7 +3259,7 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
 name = "livedeck"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "futures-util",
