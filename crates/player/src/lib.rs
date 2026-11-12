@@ -6,6 +6,8 @@
 //!
 //! Options that can change while a stream plays go through [`Player::set_option`]. Latency is
 //! fixed per stream ([`LoadOptions`]). Stats are polled only while [`Player::set_stats`] is on.
+//! Videos and clips load with a start position ([`LoadOptions::video`]), seek with
+//! [`Player::seek`], and report their position and length in [`PlayerHealth`].
 //! - [`UnavailablePlayer`]: what a build without the `mpv` feature uses, or any build when libmpv
 //!   failed to start. Every load fails with the reason.
 //!
@@ -35,7 +37,7 @@ mod target;
 
 pub use fake::{FakePlayer, PlayerCall, UnavailablePlayer};
 #[cfg(feature = "mpv")]
-pub use mpv::MpvPlayer;
+pub use mpv::{encode_file, MpvPlayer};
 #[cfg(feature = "mpv")]
 pub use output::{VideoOutput, VideoOutputs};
 pub use pace::RefreshRate;
@@ -63,11 +65,13 @@ pub enum PlayerEvent {
     Paused(bool),
     /// About once a second while stats are on (see [`Player::set_stats`]).
     Stats(PlayerStats),
-    /// About once a second from the first frame of a stream until it stops, except while paused.
+    /// About once a second from the first frame of a stream until it stops, except while paused:
+    /// a paused video sends none, so its last position is the one from before the pause.
     Health(PlayerHealth),
 }
 
-/// How well the stream keeps up: the slow-network rule's input (plan.md, section 4).
+/// How well the stream keeps up: the slow-network rule's input (plan.md, section 4). For a video,
+/// also where it is: the position to save and to draw the seek bar from (vod-plan.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlayerHealth {
     /// The picture froze for lack of data: `paused-for-cache` (normal latency), or nothing at all
@@ -75,6 +79,12 @@ pub struct PlayerHealth {
     pub stalled: bool,
     /// Buffered ahead (`demuxer-cache-duration`), in milliseconds.
     pub buffer_ms: u32,
+    /// Where a video or clip is (`time-pos`), in milliseconds from its start. `None` for a live
+    /// stream, and while mpv cannot tell.
+    pub pos_ms: Option<u64>,
+    /// How long a video or clip is (`duration`), in milliseconds. `None` for a live stream, and
+    /// while mpv cannot tell (a broadcast still being recorded may have none).
+    pub length_ms: Option<u64>,
 }
 
 /// How the picture fills a screen of another shape.
@@ -99,7 +109,14 @@ pub enum PlayerOption {
     /// Silent (`true`) but still playing, or heard. Multiview mutes every tile but the one with
     /// sound. Kept for the streams loaded after it, so a muted tile stays muted on a reload.
     Muted(bool),
+    /// How fast a video plays (mpv's `speed`), in thousandths: 1000 is normal, 1500 is 1.5×.
+    /// Thousandths keep the option `Eq`. Kept for the videos loaded after it, but a live stream
+    /// always loads at normal speed.
+    Speed(u32),
 }
+
+/// [`PlayerOption::Speed`]'s normal speed.
+pub const NORMAL_SPEED: u32 = 1000;
 
 /// How much the player buffers. Set when a stream is loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -114,7 +131,38 @@ pub enum Latency {
 /// Options for one [`Player::load`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LoadOptions {
+    /// Ignored for a video: it always gets the normal buffers.
     pub latency: Latency,
+    /// `Some` for a video or clip: where to start, in milliseconds from its start (mpv's
+    /// `start=`). It also makes it a video: it loads with [`Latency::Normal`] whatever `latency`
+    /// says, it seeks, and its health reports carry its position and length. `None` for a live
+    /// stream.
+    pub start_ms: Option<u64>,
+}
+
+impl LoadOptions {
+    /// A video or clip from `start_ms`, with the normal buffers.
+    pub fn video(start_ms: u64) -> Self {
+        Self {
+            latency: Latency::Normal,
+            start_ms: Some(start_ms),
+        }
+    }
+
+    /// A video or clip, rather than a live stream.
+    pub fn is_video(&self) -> bool {
+        self.start_ms.is_some()
+    }
+
+    /// The latency the load really gets: always [`Latency::Normal`] for a video, as the
+    /// low-latency buffers would only make it stall more and gain nothing.
+    pub fn effective_latency(&self) -> Latency {
+        if self.is_video() {
+            Latency::Normal
+        } else {
+            self.latency
+        }
+    }
 }
 
 /// What the player knows about the stream it plays. `None` for what it cannot tell (yet). Whole
@@ -145,6 +193,9 @@ pub trait Player: Send + Sync + 'static {
     fn load(&self, url: &str, options: LoadOptions);
     /// Pauses or resumes.
     fn set_paused(&self, paused: bool);
+    /// Jumps to `to_ms` milliseconds from the start of the video that plays (mpv's `seek
+    /// <secs> absolute`). A paused video stays paused. Does nothing useful on a live stream.
+    fn seek(&self, to_ms: u64);
     /// Stops playback and clears the picture.
     fn stop(&self);
     /// Changes an option of the stream that plays now and of the ones after it.

@@ -9,6 +9,7 @@ use crate::netlimit::Health;
 use crate::quality::{FrameRate, Rendition};
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
+use crate::video::{ChannelInfo, VideoDetails, VideoTarget};
 
 /// What the user wants, independent of the input device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,34 @@ pub enum Intent {
     /// The View button (View, Back/Select or Create/Share, left of the face buttons) / `v`:
     /// multiview things on every screen (the View popup).
     View,
+    /// ◀ or ▶ was let go (D-pad or arrow key). Only a video uses it, to tell a tap from a hold
+    /// (`seek.rs`); every other screen ignores it. A controller that goes away lets go of what it
+    /// held. A key's own auto-repeat sends no presses while it is held.
+    Released(Dir),
+}
+
+/// ◀ or ▶: the directions whose release is reported (`Intent::Released`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Dir {
+    Left,
+    Right,
+}
+
+impl Dir {
+    /// The press of this direction.
+    pub fn intent(self) -> Intent {
+        match self {
+            Dir::Left => Intent::Left,
+            Dir::Right => Intent::Right,
+        }
+    }
+
+    pub fn other(self) -> Self {
+        match self {
+            Dir::Left => Dir::Right,
+            Dir::Right => Dir::Left,
+        }
+    }
 }
 
 /// Which of the app's players a playback command or event is about: 0 is the single player, 1 to
@@ -95,6 +124,33 @@ pub enum Command {
     SetStats { slot: Slot, on: bool },
     /// Stop the player of `slot` and drop its stream.
     StopPlayback { slot: Slot },
+    /// Resolve a Twitch video or clip and play it on the player of `slot` from `start_ms`
+    /// milliseconds in, replacing what it plays (vod-plan.md). It always gets the normal-latency
+    /// buffers. The same target again while it plays (another quality) loads behind the picture,
+    /// as `Play` does. A new target starts at normal speed. A failed resolve is answered with
+    /// `Event::PlaybackError` carrying `slot` (a video has no channel to put in
+    /// `PlaybackFailed`), and the player's own events follow as for `Play`, with `PlayerHealth`
+    /// carrying the position and length.
+    PlayVideo {
+        slot: Slot,
+        target: VideoTarget,
+        start_ms: u64,
+        stream: StreamKind,
+    },
+    /// Jump the video playing on `slot` to `to_ms` milliseconds from its start. There is no
+    /// `Event`: the next `PlayerHealth` shows the new position. Does nothing to a live stream.
+    Seek { slot: Slot, to_ms: u64 },
+    /// Play the video on `slot` at this speed, in thousandths (1000 is normal, 1500 is 1.5×). It
+    /// holds for that video, also across a quality change, until another video or a live stream
+    /// is loaded there. There is no `Event`.
+    SetSpeed { slot: Slot, milli: u32 },
+    /// Send `Event::SeekSettleDue(id)` in `ms` milliseconds: a run of taps on ◀ ▶ settles into
+    /// one seek, and later ends (`seek.rs`).
+    SettleSeek { id: u32, ms: u64 },
+    /// Send `Event::HoldDue(id)` in `seek::HOLD_AFTER_MS`: ◀ or ▶ still down by then is a hold.
+    HoldCheck { id: u32 },
+    /// Send `Event::ScrubTickDue(id)` in `seek::SCRUB_TICK_MS`: the next step of a scrub.
+    ScrubTick { id: u32 },
     /// Send `Event::QualitySettleDue(id)` in 2 s. Multiview reloads tiles at their new quality
     /// only once the layout has stayed put that long (plan.md, section 3).
     SettleQuality { id: u32 },
@@ -184,6 +240,14 @@ pub enum Command {
         broadcaster_id: String,
         text: String,
     },
+    /// Fetch `channel`'s page: who it is, whether it is live, its past broadcasts, highlights and
+    /// top clips (vod-plan.md). Answered with `Event::ChannelPageLoaded` or
+    /// `Event::ChannelPageFailed`. Twitch only (`Features::videos`): a Kick channel is answered
+    /// with a failure without a request.
+    LoadChannelPage { channel: ChannelRef },
+    /// Fetch the chapters, muted parts and seek previews of the Twitch video `id`. Answered with
+    /// `Event::VideoDetails`, or nothing if the lookup fails: the player then has no chapters.
+    LoadVideoDetails { id: String },
     /// Kick on or off ("Show Kick"). Off, the app asks Kick nothing: no Kick row, no Kick search
     /// results. The store applies it before the commands after it, so a `LoadFeed` that follows
     /// already sees it. Sent at startup with the saved setting. There is no `Event`.
@@ -293,11 +357,19 @@ pub enum Event {
     },
     /// The `Command::SettleQuality` timer `id` ran out. Ignored unless it is the latest.
     QualitySettleDue(u32),
+    /// The `Command::SettleSeek` timer `id` ran out. Ignored unless it is the latest seek timer.
+    SeekSettleDue(u32),
+    /// The `Command::HoldCheck` timer `id` ran out. Ignored unless it is the latest seek timer.
+    HoldDue(u32),
+    /// The `Command::ScrubTick` timer `id` ran out. Ignored unless it is the latest seek timer.
+    ScrubTickDue(u32),
     /// The player's latest numbers for the stats box. Ignored unless the box is on.
     PlayerStats(PlayerStats),
     /// How the player of `slot` is doing: sent about once a second while it plays (not while it
-    /// loads or is paused). `at_ms` is when, in milliseconds on the app's own clock, which only
-    /// goes forward. The slow-network rule (`NetLimit`) judges from these.
+    /// loads or is paused, so a paused video's last position is the one from before the pause).
+    /// `at_ms` is when, in milliseconds on the app's own clock, which only goes forward. The
+    /// slow-network rule (`NetLimit`) judges from these. For a video, `health` also carries its
+    /// position and length.
     PlayerHealth {
         slot: Slot,
         at_ms: u64,
@@ -393,6 +465,23 @@ pub enum Event {
         channel: ChannelRef,
         change: RoomModeChange,
     },
+    /// The answer to `LoadChannelPage`. `rows` are the non-empty ones, in this order:
+    /// `LiveNow` (one stream, only while live), `PastBroadcasts`, `Highlights`, then the Clips
+    /// tab's `ClipsWeek` and `ClipsAllTime`. Each holds GQL's first page (up to 30) and has no
+    /// further pages. `info` is boxed: with its live stream it would double the size of every
+    /// event.
+    ChannelPageLoaded {
+        info: Box<ChannelInfo>,
+        rows: Vec<Row>,
+    },
+    /// `LoadChannelPage` failed: no such channel, a platform without videos, or the request
+    /// failed (`message` says which).
+    ChannelPageFailed {
+        channel: ChannelRef,
+        message: String,
+    },
+    /// The answer to `LoadVideoDetails`.
+    VideoDetails(VideoDetails),
 }
 
 /// Anything the reducer accepts.

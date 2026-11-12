@@ -6,8 +6,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    ChannelResult, DropReason, Error, FollowedChannel, Game, HypeTrain, Page, PageRequest, Result,
-    SendOutcome, StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, ChannelVideos, ClipInfo, DropReason, Error, FollowedChannel, Game, HypeTrain,
+    LiveArchive, Page, PageRequest, Result, SendOutcome, StreamInfo, TwitchApi, UserInfo,
+    VideoChapter, VideoDetails, VideoInfo, VideoType,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -27,6 +28,15 @@ pub struct FakeApi {
     pub chat_drop: Option<DropReason>,
     /// The hype trains running, by channel login.
     pub hype_trains: Vec<(String, HypeTrain)>,
+    /// Every channel's videos, newest first. `owner_login` says whose. A `recording` archive is
+    /// the live stream's.
+    pub videos: Vec<VideoInfo>,
+    /// The top clips of the last 7 days, by channel login.
+    pub clips_week: Vec<(String, ClipInfo)>,
+    /// The top clips ever, by channel login.
+    pub clips_all_time: Vec<(String, ClipInfo)>,
+    /// Chapter markers, by video id. A video without any gets one chapter, as GQL's does.
+    pub chapters: Vec<(String, Vec<VideoChapter>)>,
 }
 
 impl FakeApi {
@@ -219,7 +229,120 @@ impl TwitchApi for FakeApi {
             .find(|(l, _)| l.eq_ignore_ascii_case(login))
             .map(|(_, t)| t.clone()))
     }
+
+    /// A channel is known if it is a user, live, or has videos. Every list is cut to 30, like
+    /// GQL's first page.
+    async fn channel_videos(&self, login: &str) -> Result<Option<ChannelVideos>> {
+        let live = self
+            .live()
+            .find(|s| s.user_login.eq_ignore_ascii_case(login))
+            .cloned();
+        let videos: Vec<&VideoInfo> = self
+            .videos
+            .iter()
+            .filter(|v| v.owner_login.eq_ignore_ascii_case(login))
+            .collect();
+        let user = self
+            .users
+            .iter()
+            .chain(&self.me)
+            .find(|u| u.login.eq_ignore_ascii_case(login))
+            .cloned()
+            .or_else(|| {
+                live.as_ref().map(|s| UserInfo {
+                    id: s.user_id.clone(),
+                    login: s.user_login.clone(),
+                    display_name: s.user_name.clone(),
+                    profile_image_url: String::new(),
+                })
+            })
+            .or_else(|| {
+                videos.first().map(|v| UserInfo {
+                    id: format!("id-{}", v.owner_login),
+                    login: v.owner_login.clone(),
+                    display_name: v.owner_name.clone(),
+                    profile_image_url: String::new(),
+                })
+            });
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let of_kind = |kind| -> Vec<VideoInfo> {
+            videos
+                .iter()
+                .filter(|v| v.kind == kind)
+                .take(FAKE_PAGE)
+                .map(|v| (*v).clone())
+                .collect()
+        };
+        let clips = |list: &[(String, ClipInfo)]| -> Vec<ClipInfo> {
+            list.iter()
+                .filter(|(l, _)| l.eq_ignore_ascii_case(login))
+                .take(FAKE_PAGE)
+                .map(|(_, c)| c.clone())
+                .collect()
+        };
+        let archives = of_kind(VideoType::Archive);
+        Ok(Some(ChannelVideos {
+            last_broadcast_at: archives.first().map(|v| v.created_at.clone()),
+            live,
+            archives,
+            highlights: of_kind(VideoType::Highlight),
+            clips_week: clips(&self.clips_week),
+            clips_all_time: clips(&self.clips_all_time),
+            user,
+        }))
+    }
+
+    async fn video_details(&self, id: &str) -> Result<Option<VideoDetails>> {
+        let Some(video) = self.videos.iter().find(|v| v.id == id) else {
+            return Ok(None);
+        };
+        let chapters = self
+            .chapters
+            .iter()
+            .find(|(v, _)| v == id)
+            .map(|(_, c)| c.clone())
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| {
+                vec![VideoChapter {
+                    position_ms: 0,
+                    duration_ms: u64::from(video.length_seconds) * 1000,
+                    name: video.game_name.clone(),
+                }]
+            });
+        Ok(Some(VideoDetails {
+            id: video.id.clone(),
+            length_seconds: video.length_seconds,
+            chapters,
+            muted: video.muted.clone(),
+            seek_previews_url: String::new(),
+        }))
+    }
+
+    /// The channel's `recording` archive while it is live. The stream "started" when the video was
+    /// created.
+    async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
+        if !self
+            .live()
+            .any(|s| s.user_login.eq_ignore_ascii_case(login))
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .videos
+            .iter()
+            .find(|v| v.owner_login.eq_ignore_ascii_case(login) && v.kind == VideoType::Archive)
+            .filter(|v| v.recording)
+            .map(|v| LiveArchive {
+                video_id: v.id.clone(),
+                stream_started_at: v.created_at.clone(),
+            }))
+    }
 }
+
+/// Items per row of a fake channel page: GQL's first page.
+const FAKE_PAGE: usize = 30;
 
 impl FakeApi {
     /// Every live stream the fake knows, Top Live first.

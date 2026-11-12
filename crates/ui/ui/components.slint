@@ -1,6 +1,6 @@
 ﻿import { Theme, InputDevice } from "theme.slint";
 import { StreamItem, ChatMsg, ChatPiece, ToastItem } from "types.slint";
-import { ViewIcon } from "icons.slint";
+import { ViewIcon, LockIcon } from "icons.slint";
 
 // "<channel> is live": the stream preview, the name and the title line. It slides in when it is
 // created and slides out on its own just before Rust removes it (`TOAST_TIME` in live_watch.rs is
@@ -84,6 +84,76 @@ export component Toast inherits Rectangle {
                 text: root.item.line;
                 color: Theme.muted;
                 font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// The subscribe card: a QR code of the channel's subscribe page, to finish on a phone. It fills
+// its parent on a dark scrim that swallows clicks, and sits above the hints bar. Over the stream
+// (player menu) and over the channel page (a subscriber-only video).
+export component SubscribeCard inherits Rectangle {
+    in property <string> channel;
+    // One pixel per module, with its quiet zone, drawn pixelated.
+    in property <image> qr;
+    // The address as it is read out, for typing.
+    in property <string> url;
+
+    background: #000000b8;
+    TouchArea { }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - Theme.hints-h - self.height) / 2;
+        width: 440px;
+        height: card-layout.preferred-height;
+        border-radius: 12px;
+        border-width: 2px;
+        border-color: Theme.surface-high;
+        background: Theme.surface;
+
+        card-layout := VerticalLayout {
+            padding: 32px;
+            spacing: 14px;
+            alignment: center;
+            Text {
+                text: "Subscribe to " + root.channel;
+                color: Theme.text;
+                font-size: Theme.fs-title;
+                font-weight: 800;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: "Scan to subscribe on your phone";
+                color: Theme.muted;
+                font-size: Theme.fs-body;
+                horizontal-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 240px;
+                    height: 240px;
+                    background: #ffffff;
+                    border-radius: 8px;
+                    clip: true;
+                    Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: root.qr;
+                        image-fit: contain;
+                        image-rendering: pixelated;
+                    }
+                }
+            }
+            Text {
+                text: root.url;
+                color: Theme.accent-light;
+                font-size: Theme.fs-body;
+                font-weight: 700;
+                horizontal-alignment: center;
                 overflow: elide;
             }
         }
@@ -180,6 +250,70 @@ export component StreamCard inherits Rectangle {
             }
         }
 
+        // A video of which Twitch muted a part (copyrighted music): an amber dot and the words,
+        // where a Kick card has its chip.
+        Rectangle {
+            visible: root.item.muted-audio && !root.item.loading;
+            x: 12px;
+            y: 12px;
+            width: muted-chip.preferred-width + 30px;
+            height: 26px;
+            border-radius: 4px;
+            background: #0e0e10d9;
+
+            Rectangle {
+                x: 9px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.amber;
+            }
+            muted-chip := Text {
+                x: 23px;
+                text: "Some audio muted";
+                color: Theme.text;
+                font-size: Theme.fs-chip;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
+        // Video and clip cards, top right: the length, and before it the lock of a
+        // subscriber-only video.
+        HorizontalLayout {
+            visible: !root.item.loading;
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            height: 26px;
+            alignment: end;
+            spacing: 6px;
+            if root.item.locked : Rectangle {
+                width: 30px;
+                border-radius: 4px;
+                background: Theme.accent;
+                LockIcon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 14px;
+                    height: 14px;
+                }
+            }
+            if root.item.length != "" : Rectangle {
+                width: length-chip.preferred-width + 20px;
+                border-radius: 4px;
+                background: #0e0e10d9;
+                length-chip := Text {
+                    x: 10px;
+                    text: root.item.length;
+                    color: Theme.text;
+                    font-size: Theme.fs-chip;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
         // Legibility scrim.
         Rectangle {
             visible: !root.item.loading && !root.item.retry;
@@ -231,6 +365,25 @@ export component StreamCard inherits Rectangle {
                     font-size: Theme.fs-small;
                     overflow: elide;
                 }
+            }
+            // A video or clip: the date and category, or the views and date.
+            if root.item.meta != "" : Text {
+                text: root.item.meta;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+
+        // A video left part-way (Continue watching): a bar along the bottom edge.
+        if root.item.progress > 0 && !root.item.loading : Rectangle {
+            y: parent.height - self.height;
+            height: 6px;
+            background: #ffffff40;
+            Rectangle {
+                x: 0px;
+                width: parent.width * root.item.progress / 1000;
+                background: Theme.accent-light;
             }
         }
 

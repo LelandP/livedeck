@@ -19,8 +19,9 @@ use serde_json::{json, Value};
 
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
-    ChannelResult, Error, FollowedChannel, Game, HypeTrain, Page, PageRequest, RateLimiter, Result,
-    RetryPolicy, StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, ChannelVideos, ClipInfo, Error, FollowedChannel, Game, HypeTrain, LiveArchive,
+    MutedSegment, Page, PageRequest, RateLimiter, Result, RetryPolicy, StreamInfo, TwitchApi,
+    UserInfo, VideoChapter, VideoDetails, VideoInfo, VideoType,
 };
 
 pub const GQL_URL: &str = "https://gql.twitch.tv/gql";
@@ -57,6 +58,412 @@ const HYPE_TRAIN_QUERY: &str = "query($login: String!) { user(login: $login) { c
     hypeTrain { execution { id isActive endedAt \
     progress { level { value } goal progression remainingSeconds } \
     allTimeHigh { level { value } } } } } } }";
+
+/// Fields of one video in [`CHANNEL_VIDEOS_QUERY`]. `muteInfo` is small (a few segments at most),
+/// so cards can show "Some audio muted" without a second request.
+const VIDEO_FIELDS: &str = "id title lengthSeconds createdAt viewCount status \
+    previewThumbnailURL(width: 440, height: 248) game { name } resourceRestriction { type } \
+    muteInfo { mutedSegmentConnection { nodes { offset duration } } } \
+    owner { login displayName }";
+
+const CLIP_FIELDS: &str =
+    "slug title durationSeconds viewCount createdAt thumbnailURL curator { displayName } game { name }";
+
+/// Videos and clips per row of a channel page: the largest page GQL gives.
+const CHANNEL_PAGE_SIZE: u8 = GQL_MAX_PAGE_SIZE;
+
+/// A channel page in one request: the user, the live stream, past broadcasts, highlights and the
+/// top clips of the week and of all time. Checked live 2026-11-11: about 430 ms signed out, and
+/// an unknown login is `user: null`. Later pages fail the integrity check, so none are asked for.
+fn channel_videos_query() -> String {
+    let n = CHANNEL_PAGE_SIZE;
+    format!(
+        "query($login: String!) {{ user(login: $login) {{ id login displayName \
+         profileImageURL(width: 150) lastBroadcast {{ startedAt }} \
+         stream {{ createdAt title viewersCount game {{ id name }} \
+         previewImageURL(width: 440, height: 248) }} \
+         archives: videos(first: {n}, type: ARCHIVE, sort: TIME) {{ edges {{ node {{ {VIDEO_FIELDS} }} }} }} \
+         highlights: videos(first: {n}, type: HIGHLIGHT, sort: TIME) {{ edges {{ node {{ {VIDEO_FIELDS} }} }} }} \
+         clipsWeek: clips(first: {n}, criteria: {{ period: LAST_WEEK, sort: VIEWS_DESC }}) \
+         {{ edges {{ node {{ {CLIP_FIELDS} }} }} }} \
+         clipsAll: clips(first: {n}, criteria: {{ period: ALL_TIME, sort: VIEWS_DESC }}) \
+         {{ edges {{ node {{ {CLIP_FIELDS} }} }} }} }} }}"
+    )
+}
+
+/// Chapters (`GAME_CHANGE` moments), muted parts and the seek-preview storyboard of one video.
+const VIDEO_DETAILS_QUERY: &str = "query($id: ID!) { video(id: $id) { id lengthSeconds \
+    seekPreviewsURL game { name } \
+    muteInfo { mutedSegmentConnection { nodes { offset duration } } } \
+    moments(momentRequestType: VIDEO_CHAPTER_MARKERS) { edges { node { \
+    positionMilliseconds durationMilliseconds description \
+    details { ... on GameChangeMomentDetails { game { name } } } } } } } }";
+
+/// The live stream's start and the newest past broadcast, `RECORDING` while live (checked live
+/// 2026-11-11: created about 5 s after the stream started).
+const LIVE_ARCHIVE_QUERY: &str = "query($login: String!) { user(login: $login) { \
+    stream { createdAt } \
+    videos(first: 1, type: ARCHIVE, sort: TIME) { edges { node { id status } } } } }";
+
+#[derive(Deserialize, Default)]
+struct NameNode {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct DisplayNameNode {
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MutedNode {
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    duration: u32,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MuteInfo {
+    #[serde(default)]
+    muted_segment_connection: Option<MutedNodes>,
+}
+
+#[derive(Deserialize, Default)]
+struct MutedNodes {
+    #[serde(default)]
+    nodes: Vec<MutedNode>,
+}
+
+impl MuteInfo {
+    fn segments(self) -> Vec<MutedSegment> {
+        self.muted_segment_connection
+            .map(|c| c.nodes)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| n.duration > 0)
+            .map(|n| MutedSegment {
+                offset: n.offset,
+                duration: n.duration,
+            })
+            .collect()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoNode {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    length_seconds: u32,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    view_count: u64,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(rename = "previewThumbnailURL", default)]
+    preview_thumbnail_url: Option<String>,
+    #[serde(default)]
+    game: Option<NameNode>,
+    /// Any restriction (`SUB`, …) means a viewer without it cannot watch.
+    #[serde(default)]
+    resource_restriction: Option<Value>,
+    #[serde(default)]
+    mute_info: Option<MuteInfo>,
+    #[serde(default)]
+    owner: Option<OwnerNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnerNode {
+    login: String,
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+impl VideoNode {
+    fn into_info(self, kind: VideoType) -> VideoInfo {
+        let (owner_login, owner_name) = self
+            .owner
+            .map(|o| {
+                let name = o.display_name.unwrap_or_else(|| o.login.clone());
+                (o.login, name)
+            })
+            .unwrap_or_default();
+        VideoInfo {
+            id: self.id,
+            kind,
+            title: self.title.unwrap_or_default(),
+            length_seconds: self.length_seconds,
+            created_at: self.created_at.unwrap_or_default(),
+            view_count: self.view_count,
+            game_name: self.game.and_then(|g| g.name).unwrap_or_default(),
+            thumbnail_url: self.preview_thumbnail_url.unwrap_or_default(),
+            recording: self.status.as_deref() == Some("RECORDING"),
+            sub_only: self.resource_restriction.is_some_and(|r| !r.is_null()),
+            muted: self.mute_info.unwrap_or_default().segments(),
+            owner_login,
+            owner_name,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipNode {
+    slug: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    duration_seconds: u32,
+    #[serde(default)]
+    view_count: u64,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(rename = "thumbnailURL", default)]
+    thumbnail_url: Option<String>,
+    #[serde(default)]
+    curator: Option<DisplayNameNode>,
+    #[serde(default)]
+    game: Option<NameNode>,
+}
+
+impl From<ClipNode> for ClipInfo {
+    fn from(c: ClipNode) -> Self {
+        ClipInfo {
+            slug: c.slug,
+            title: c.title.unwrap_or_default(),
+            duration_seconds: c.duration_seconds,
+            view_count: c.view_count,
+            created_at: c.created_at.unwrap_or_default(),
+            thumbnail_url: c.thumbnail_url.unwrap_or_default(),
+            curator_name: c.curator.and_then(|u| u.display_name).unwrap_or_default(),
+            game_name: c.game.and_then(|g| g.name).unwrap_or_default(),
+        }
+    }
+}
+
+/// A connection read only for its nodes (the channel page asks for no cursors).
+#[derive(Deserialize)]
+#[serde(bound = "N: Deserialize<'de>")]
+struct Nodes<N> {
+    #[serde(default)]
+    edges: Vec<NodeEdge<N>>,
+}
+
+#[derive(Deserialize)]
+struct NodeEdge<N> {
+    node: Option<N>,
+}
+
+impl<N> Nodes<N> {
+    fn into_items<T>(self, map: impl FnMut(N) -> T) -> Vec<T> {
+        self.edges
+            .into_iter()
+            .filter_map(|e| e.node)
+            .map(map)
+            .collect()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChannelNode {
+    id: String,
+    login: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(rename = "profileImageURL", default)]
+    profile_image_url: Option<String>,
+    #[serde(default)]
+    last_broadcast: Option<LastBroadcast>,
+    #[serde(default)]
+    stream: Option<ChannelStream>,
+    #[serde(default)]
+    archives: Option<Nodes<VideoNode>>,
+    #[serde(default)]
+    highlights: Option<Nodes<VideoNode>>,
+    #[serde(default)]
+    clips_week: Option<Nodes<ClipNode>>,
+    #[serde(default)]
+    clips_all: Option<Nodes<ClipNode>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LastBroadcast {
+    #[serde(default)]
+    started_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChannelStream {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    viewers_count: u64,
+    #[serde(default)]
+    game: Option<GameNode>,
+    #[serde(rename = "previewImageURL", default)]
+    preview_image_url: Option<String>,
+}
+
+impl ChannelNode {
+    fn into_videos(self) -> ChannelVideos {
+        let user = UserInfo {
+            display_name: self
+                .display_name
+                .clone()
+                .unwrap_or_else(|| self.login.clone()),
+            id: self.id,
+            login: self.login,
+            profile_image_url: self.profile_image_url.unwrap_or_default(),
+        };
+        let live = self.stream.map(|s| {
+            let (game_id, game_name) = s.game.map(|g| (g.id, g.name)).unwrap_or_default();
+            StreamInfo {
+                user_id: user.id.clone(),
+                user_login: user.login.clone(),
+                user_name: user.display_name.clone(),
+                game_id,
+                game_name,
+                title: s.title.unwrap_or_default(),
+                viewer_count: s.viewers_count,
+                thumbnail_url: s.preview_image_url.unwrap_or_default(),
+            }
+        });
+        let videos = |n: Option<Nodes<VideoNode>>, kind| {
+            n.map(|n| n.into_items(|v| v.into_info(kind)))
+                .unwrap_or_default()
+        };
+        let clips = |n: Option<Nodes<ClipNode>>| {
+            n.map(|n| n.into_items(ClipInfo::from)).unwrap_or_default()
+        };
+        ChannelVideos {
+            live,
+            last_broadcast_at: self
+                .last_broadcast
+                .and_then(|b| b.started_at)
+                .filter(|s| !s.is_empty()),
+            archives: videos(self.archives, VideoType::Archive),
+            highlights: videos(self.highlights, VideoType::Highlight),
+            clips_week: clips(self.clips_week),
+            clips_all_time: clips(self.clips_all),
+            user,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetailsNode {
+    id: String,
+    #[serde(default)]
+    length_seconds: u32,
+    #[serde(rename = "seekPreviewsURL", default)]
+    seek_previews_url: Option<String>,
+    #[serde(default)]
+    game: Option<NameNode>,
+    #[serde(default)]
+    mute_info: Option<MuteInfo>,
+    #[serde(default)]
+    moments: Option<Nodes<MomentNode>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MomentNode {
+    #[serde(default)]
+    position_milliseconds: u64,
+    #[serde(default)]
+    duration_milliseconds: u64,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    details: Option<MomentDetails>,
+}
+
+#[derive(Deserialize, Default)]
+struct MomentDetails {
+    #[serde(default)]
+    game: Option<NameNode>,
+}
+
+impl DetailsNode {
+    fn into_details(self) -> VideoDetails {
+        let mut chapters: Vec<VideoChapter> = self
+            .moments
+            .map(|m| {
+                m.into_items(|n| VideoChapter {
+                    position_ms: n.position_milliseconds,
+                    duration_ms: n.duration_milliseconds,
+                    name: n
+                        .details
+                        .and_then(|d| d.game)
+                        .and_then(|g| g.name)
+                        .or(n.description)
+                        .unwrap_or_default(),
+                })
+            })
+            .unwrap_or_default();
+        chapters.sort_by_key(|c| c.position_ms);
+        if chapters.is_empty() {
+            chapters.push(VideoChapter {
+                position_ms: 0,
+                duration_ms: u64::from(self.length_seconds) * 1000,
+                name: self.game.and_then(|g| g.name).unwrap_or_default(),
+            });
+        }
+        VideoDetails {
+            id: self.id,
+            length_seconds: self.length_seconds,
+            chapters,
+            muted: self.mute_info.unwrap_or_default().segments(),
+            seek_previews_url: self.seek_previews_url.unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct LiveArchiveNode {
+    #[serde(default)]
+    stream: Option<StreamStart>,
+    #[serde(default)]
+    videos: Option<Nodes<ArchiveStatus>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamStart {
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ArchiveStatus {
+    id: String,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+impl LiveArchiveNode {
+    fn into_archive(self) -> Option<LiveArchive> {
+        let started = self.stream?.created_at.filter(|s| !s.is_empty())?;
+        let newest = self.videos?.into_items(|v| v).into_iter().next()?;
+        (newest.status.as_deref() == Some("RECORDING")).then_some(LiveArchive {
+            video_id: newest.id,
+            stream_started_at: started,
+        })
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -464,6 +871,25 @@ impl TwitchApi for GqlClient {
     /// Only search uses it, and search needs a sign-in.
     async fn streams_by_login(&self, _logins: &[String]) -> Result<Vec<StreamInfo>> {
         Err(Error::NotSignedIn)
+    }
+
+    async fn channel_videos(&self, login: &str) -> Result<Option<ChannelVideos>> {
+        let data = self
+            .query(&channel_videos_query(), json!({ "login": login }))
+            .await?;
+        Ok(at::<ChannelNode>(&data, &["user"])?.map(ChannelNode::into_videos))
+    }
+
+    async fn video_details(&self, id: &str) -> Result<Option<VideoDetails>> {
+        let data = self.query(VIDEO_DETAILS_QUERY, json!({ "id": id })).await?;
+        Ok(at::<DetailsNode>(&data, &["video"])?.map(DetailsNode::into_details))
+    }
+
+    async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
+        let data = self
+            .query(LIVE_ARCHIVE_QUERY, json!({ "login": login }))
+            .await?;
+        Ok(at::<LiveArchiveNode>(&data, &["user"])?.and_then(LiveArchiveNode::into_archive))
     }
 }
 

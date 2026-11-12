@@ -21,6 +21,8 @@ fn is_favorites_row(kind: RowKind) -> bool {
 pub(super) fn open(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.back_stack.clear();
     s.category = None;
+    s.channel_page = None;
+    s.subscribe_card = false;
     s.screen = Screen::Favorites;
     s.rail.index = RailEntry::Favorites;
     reload(s, cmds);
@@ -84,7 +86,7 @@ pub(super) fn toggle(s: &mut AppState, tile: Tile, cmds: &mut Vec<Command>) {
                 let at = s.favorites_feed.rows.len();
                 add_to_row(&mut s.favorites_feed, RowKind::FavoritesOffline, at, tile);
             }
-            Tile::Category(_) | Tile::Resume(_) => {}
+            Tile::Category(_) | Tile::Resume(_) | Tile::Video(_) | Tile::Clip(_) => {}
         }
     }
     cmds.push(Command::SaveFavorites(s.favorites.clone()));

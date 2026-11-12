@@ -59,6 +59,8 @@ const LATENCY_OPTIONS: &[(&str, &str, &str)] = &[
 enum Control {
     Load(String, LoadOptions),
     Pause(bool),
+    /// Jump to this many milliseconds from the start of the video.
+    Seek(u64),
     Stop,
     Option(PlayerOption),
     Stats(bool),
@@ -174,6 +176,10 @@ impl Player for MpvPlayer {
         self.send(Control::Pause(paused));
     }
 
+    fn seek(&self, to_ms: u64) {
+        self.send(Control::Seek(to_ms));
+    }
+
     fn stop(&self) {
         self.send(Control::Stop);
     }
@@ -193,6 +199,42 @@ impl Player for MpvPlayer {
     fn restore_volume(&self) {
         self.send(Control::RestoreVolume);
     }
+}
+
+/// Writes `source` (anything mpv plays, such as a `lavfi` graph with a duration) to the Matroska
+/// file `path`, as fast as libmpv can encode it. For `--mock`'s videos: a generated `lavfi`
+/// picture cannot seek backwards and has no known length, but a file made from it can and has.
+/// Blocks until the file is written. A small picture at a low rate encodes at hundreds of times
+/// real time.
+pub fn encode_file(source: &str, path: &std::path::Path) -> Result<(), String> {
+    use_c_numeric_locale();
+    let out = path.to_str().ok_or("the path is not UTF-8")?;
+    let mpv = Mpv::with_initializer(|init| {
+        init.set_option("o", out)?;
+        init.set_option("of", "matroska")?;
+        init.set_option("ovc", "libx264")?;
+        // A keyframe a second, so a seek lands quickly anywhere.
+        init.set_option("ovcopts", "preset=ultrafast,crf=32,g=15")?;
+        init.set_option("oac", "aac")?;
+        init.set_option("ytdl", false)?;
+        Ok(())
+    })
+    .map_err(|e| format!("libmpv failed to start: {}", describe(&e)))?;
+    mpv.command("loadfile", &[source, "replace"])
+        .map_err(|e| format!("loadfile failed: {}", describe(&e)))?;
+    loop {
+        match mpv.wait_event(1.0) {
+            Some(Ok(Event::EndFile(reason))) if reason == mpv_end_file_reason::Eof => break,
+            Some(Ok(Event::EndFile(_) | Event::Shutdown)) => {
+                return Err("the encoder stopped before the end".into())
+            }
+            Some(Err(e)) => return Err(describe(&e)),
+            _ => {}
+        }
+    }
+    // Dropping the handle finishes the file.
+    drop(mpv);
+    Ok(())
 }
 
 /// Sets the buffering options of `latency` for the next load. Best effort: an option this mpv
@@ -227,9 +269,38 @@ fn apply_option(mpv: &Mpv, option: PlayerOption) {
         // `mute` moves the sound between tiles at once and without dropped frames (phase 0 of
         // plan.md). The audio is still decoded; `aid=no` would save that but is untested.
         PlayerOption::Muted(muted) => mpv.set_property("mute", muted),
+        // mpv keeps the pitch (`audio-pitch-correction` is on by default).
+        PlayerOption::Speed(milli) => mpv.set_property("speed", speed(milli)),
     };
     if let Err(e) = result {
         tracing::warn!(?option, %e, "mpv option not changed");
+    }
+}
+
+/// mpv's `speed` for [`PlayerOption::Speed`]'s thousandths. mpv accepts 0.01 to 100.
+fn speed(milli: u32) -> f64 {
+    (f64::from(milli) / 1000.0).clamp(0.01, 100.0)
+}
+
+/// Milliseconds as the seconds mpv's time options and commands take (`start=`, `seek`), with
+/// the fraction kept.
+fn seconds(ms: u64) -> String {
+    format!("{}.{:03}", ms / 1000, ms % 1000)
+}
+
+/// Seconds from mpv to whole milliseconds.
+fn millis(seconds: f64) -> u64 {
+    (seconds * 1000.0).round() as u64
+}
+
+/// Sets where the next file starts: `start_ms` for a video, or mpv's default (the beginning, or
+/// the live edge) for a live stream. Set as the `start` option rather than `loadfile`'s per-file
+/// options, whose place among `loadfile`'s arguments changed in mpv 0.38, so it works with older
+/// libmpv builds too.
+fn apply_start(mpv: &Mpv, start_ms: Option<u64>) {
+    let value = start_ms.map_or_else(|| "none".to_owned(), seconds);
+    if let Err(e) = mpv.set_property("start", value.as_str()) {
+        tracing::warn!(%e, value, "mpv start position not applied");
     }
 }
 
@@ -272,8 +343,13 @@ fn read_stats(mpv: &Mpv) -> PlayerStats {
 }
 
 /// Reads the health report. `None` while paused by the user: a paused stream only fills its
-/// buffer, which says nothing about the network.
-fn read_health(mpv: &Mpv) -> Option<PlayerHealth> {
+/// buffer, which says nothing about the network. For a video (`video`), also its position and
+/// length.
+///
+/// A video is stalled only when mpv waits for its cache: it always has `cache-pause` on (normal
+/// latency), and its buffer runs dry at its end anyway, which is no stall. While it seeks it is
+/// never stalled: the buffer refills from the new spot, which says nothing about the network.
+fn read_health(mpv: &Mpv, video: bool) -> Option<PlayerHealth> {
     if mpv.get_property::<bool>("pause").unwrap_or(false) {
         return None;
     }
@@ -283,9 +359,17 @@ fn read_health(mpv: &Mpv) -> Option<PlayerHealth> {
     let waiting = mpv
         .get_property::<bool>("paused-for-cache")
         .unwrap_or(false);
+    let stalled = if video {
+        waiting && !mpv.get_property::<bool>("seeking").unwrap_or(false)
+    } else {
+        waiting || buffer_ms < DRY_BUFFER_MS
+    };
+    let at = |name| video.then(|| number(mpv, name).map(millis)).flatten();
     Some(PlayerHealth {
-        stalled: waiting || buffer_ms < DRY_BUFFER_MS,
+        stalled,
         buffer_ms,
+        pos_ms: at("time-pos"),
+        length_ms: at("duration"),
     })
 }
 
@@ -363,6 +447,8 @@ fn control_loop(
     let mut fade: Option<(Instant, Duration)> = None;
     // When the next health report is due: from the first frame of a stream until it stops.
     let mut health_due: Option<Instant> = None;
+    // The loaded file is a video or clip, so health carries its position and length.
+    let mut video = false;
     loop {
         let mut load = None;
         match rx.recv_timeout(POLL) {
@@ -371,6 +457,13 @@ fn control_loop(
             Ok(Control::Pause(paused)) => {
                 if let Err(e) = mpv.set_property("pause", paused) {
                     tracing::warn!(%e, "could not change the pause state");
+                }
+            }
+            // Precise, as mpv's `hr-seek=default` makes absolute seeks. A paused video stays
+            // paused, showing the new spot.
+            Ok(Control::Seek(to_ms)) => {
+                if let Err(e) = mpv.command("seek", &[seconds(to_ms).as_str(), "absolute"]) {
+                    tracing::warn!(%e, to_ms, "could not seek");
                 }
             }
             Ok(Control::Stop) => {
@@ -405,7 +498,14 @@ fn control_loop(
             }
             recent.clear();
             health_due = None;
-            apply_latency(mpv, options.latency);
+            video = options.is_video();
+            // Never the low-latency buffers for a video (`effective_latency`).
+            apply_latency(mpv, options.effective_latency());
+            apply_start(mpv, options.start_ms);
+            // A live stream always plays at normal speed. A video keeps the speed set for it.
+            if !video {
+                apply_option(mpv, PlayerOption::Speed(crate::NORMAL_SPEED));
+            }
             let _ = mpv.set_property("pause", false);
             // A fade only quietens the stream it ran on.
             fade = None;
@@ -474,7 +574,7 @@ fn control_loop(
         if let Some(due) = health_due {
             let now = Instant::now();
             if now >= due {
-                if let Some(health) = read_health(mpv) {
+                if let Some(health) = read_health(mpv, video) {
                     on_event(PlayerEvent::Health(health));
                 }
                 health_due = Some(now + HEALTH_EVERY);
@@ -496,5 +596,16 @@ mod tests {
         assert_eq!(fade_volume(five, five), 0.0);
         assert_eq!(fade_volume(Duration::from_secs(9), five), 0.0);
         assert_eq!(fade_volume(Duration::ZERO, Duration::ZERO), 0.0);
+    }
+
+    #[test]
+    fn times_and_speeds_in_mpvs_units() {
+        assert_eq!(seconds(0), "0.000");
+        assert_eq!(seconds(4_360_250), "4360.250");
+        assert_eq!(seconds(7), "0.007");
+        assert_eq!(millis(4360.2504), 4_360_250);
+        assert_eq!(speed(1500), 1.5);
+        assert_eq!(speed(750), 0.75);
+        assert_eq!(speed(0), 0.01);
     }
 }

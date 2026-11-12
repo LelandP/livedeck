@@ -28,6 +28,12 @@ pub struct Health {
     pub stalled: bool,
     /// Seconds buffered ahead (`demuxer-cache-duration`), in milliseconds.
     pub buffer_ms: u32,
+    /// Where a video or clip is, in milliseconds from its start. `None` for a live stream, and
+    /// while the player cannot tell. The slow-network rule ignores it.
+    pub pos_ms: Option<u64>,
+    /// How long a video or clip is, in milliseconds. `None` for a live stream, and while the
+    /// player cannot tell. The slow-network rule ignores it.
+    pub length_ms: Option<u64>,
 }
 
 /// Which streams a step lowers, in the order they are lowered.

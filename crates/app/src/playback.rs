@@ -1,6 +1,6 @@
-//! Playback commands: resolve a channel with the `StreamResolver`, then hand the playlist to the
-//! slot's player in the `PlayerPool`. Player events come back as core `Event`s carrying the slot.
-//! Slot 0 (`MAIN_SLOT`) is the single player; multiview's tiles use the others too.
+//! Playback commands: resolve a channel, video or clip with the `StreamResolver`, then hand the
+//! URL to the slot's player in the `PlayerPool`. Player events come back as core `Event`s carrying
+//! the slot. Slot 0 (`MAIN_SLOT`) is the single player; multiview's tiles use the others too.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use htpc_core::{
     ChannelRef, Command, Event, Health, Hwdec, Latency, Platform, PlayerOption, PlayerStats,
-    StreamKind, Zoom,
+    StreamKind, VideoTarget, Zoom,
 };
-use htpc_player::{LoadOptions, PlayerEvent, PlayerPool, Slot, SLOTS};
-use htpc_resolver::{ResolveError, Site, StreamResolver};
+use htpc_player::{LoadOptions, PlayerEvent, PlayerPool, Slot, NORMAL_SPEED, SLOTS};
+use htpc_resolver::{PlaylistUrl, ResolveError, Site, StreamResolver, Target};
 
 /// How long the offline screen waits before looking for the stream again
 /// (`Command::ScheduleOfflineRecheck`). The player's end screen says this number too.
@@ -26,23 +26,53 @@ pub const QUALITY_SETTLE: Duration = Duration::from_secs(2);
 /// the stream with sound first, so it starts first.
 pub const RESOLVES_AT_ONCE: usize = 3;
 
-/// Runs `Play`, `SetPaused`, `SetMuted`, `StopPlayback`, `SetPlayerOption` and `SetStats`. Returns
-/// the events to send back, if any.
+/// What a slot has loaded: a channel's live stream, or a video or clip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Loaded {
+    Live(ChannelRef),
+    Video(VideoTarget),
+}
+
+impl Loaded {
+    /// The same stream, maybe at another quality.
+    fn is_same(&self, other: &Loaded) -> bool {
+        match (self, other) {
+            (Loaded::Live(a), Loaded::Live(b)) => a.is_same(b),
+            (Loaded::Video(a), Loaded::Video(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// The video a slot plays or is about to play, and the speed it plays at
+/// (`Command::SetSpeed`, thousandths).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoSpeed {
+    target: VideoTarget,
+    milli: u32,
+}
+
+/// Runs `Play`, `PlayVideo`, `Seek`, `SetSpeed`, `SetPaused`, `SetMuted`, `StopPlayback`,
+/// `SetPlayerOption` and `SetStats`. Returns the events to send back, if any.
 pub struct Playback<R> {
     resolver: R,
     pool: Arc<PlayerPool>,
     /// A permit per running resolve, at most [`RESOLVES_AT_ONCE`]. Waiters go in the order they
     /// asked.
     resolves: tokio::sync::Semaphore,
-    /// One per slot, bumped by every `Play` and `StopPlayback` of that slot. A resolve that
-    /// finishes after a newer one started in its slot, or after the slot was stopped, is dropped:
-    /// it must not load a stream nobody is watching, nor answer for the newer one. Per slot, so a
-    /// late resolve can never load into another tile either.
+    /// One per slot, bumped by every `Play`, `PlayVideo` and `StopPlayback` of that slot. A
+    /// resolve that finishes after a newer one started in its slot, or after the slot was
+    /// stopped, is dropped: it must not load a stream nobody is watching, nor answer for the newer
+    /// one. Per slot, so a late resolve can never load into another tile either.
     generations: [AtomicU64; SLOTS],
-    /// The channel each slot last loaded, until it is stopped. Loading it again (another quality,
+    /// What each slot last loaded, until it is stopped. Loading it again (another quality,
     /// latency or sound only, or back to live) while it plays goes through the slot's spare player,
     /// so the picture never stops (`PlayerPool::spare`).
-    loaded: std::sync::Mutex<[Option<ChannelRef>; SLOTS]>,
+    loaded: std::sync::Mutex<[Option<Loaded>; SLOTS]>,
+    /// The video each slot plays or is loading, and its speed: set by `PlayVideo` (a new video
+    /// starts at normal speed), cleared by `Play` and `StopPlayback`. Kept here, not only in the
+    /// player, so a quality change, which loads in a fresh spare player, keeps the speed.
+    speeds: std::sync::Mutex<[Option<VideoSpeed>; SLOTS]>,
 }
 
 impl<R: StreamResolver> Playback<R> {
@@ -53,13 +83,25 @@ impl<R: StreamResolver> Playback<R> {
             resolves: tokio::sync::Semaphore::new(RESOLVES_AT_ONCE),
             generations: std::array::from_fn(|_| AtomicU64::new(0)),
             loaded: std::sync::Mutex::default(),
+            speeds: std::sync::Mutex::default(),
         }
     }
 
-    /// Notes that `slot` loads `channel` now (or nothing). Returns what it loaded before.
-    fn set_loaded(&self, slot: Slot, channel: Option<ChannelRef>) -> Option<ChannelRef> {
+    /// Notes that `slot` loads `what` now (or nothing). Returns what it loaded before.
+    fn set_loaded(&self, slot: Slot, what: Option<Loaded>) -> Option<Loaded> {
         let mut loaded = self.loaded.lock().expect("loaded lock");
-        std::mem::replace(&mut loaded[usize::from(slot)], channel)
+        std::mem::replace(&mut loaded[usize::from(slot)], what)
+    }
+
+    /// A video or clip is loaded in `slot` (it may still be starting).
+    fn has_video(&self, slot: Slot) -> bool {
+        let loaded = self.loaded.lock().expect("loaded lock");
+        matches!(loaded[usize::from(slot)], Some(Loaded::Video(_)))
+    }
+
+    /// The speeds lock, for `slot`'s entry.
+    fn speeds(&self) -> std::sync::MutexGuard<'_, [Option<VideoSpeed>; SLOTS]> {
+        self.speeds.lock().expect("speeds lock")
     }
 
     fn generation(&self, slot: Slot) -> &AtomicU64 {
@@ -71,6 +113,9 @@ impl<R: StreamResolver> Playback<R> {
         matches!(
             cmd,
             Command::Play { .. }
+                | Command::PlayVideo { .. }
+                | Command::Seek { .. }
+                | Command::SetSpeed { .. }
                 | Command::SetPaused { .. }
                 | Command::SetMuted { .. }
                 | Command::StopPlayback { .. }
@@ -88,6 +133,25 @@ impl<R: StreamResolver> Playback<R> {
                 stream,
                 latency,
             } if usize::from(slot) < SLOTS => self.play(slot, channel, stream, latency).await,
+            Command::PlayVideo {
+                slot,
+                target,
+                start_ms,
+                stream,
+            } if usize::from(slot) < SLOTS => self.play_video(slot, target, start_ms, stream).await,
+            // Only into a video: a live stream has nowhere to seek to.
+            Command::Seek { slot, to_ms } if usize::from(slot) < SLOTS => {
+                if !self.has_video(slot) {
+                    tracing::debug!(slot, "no video to seek in");
+                } else if let Some(player) = self.existing(slot) {
+                    player.seek(to_ms);
+                }
+                Vec::new()
+            }
+            Command::SetSpeed { slot, milli } if usize::from(slot) < SLOTS => {
+                self.set_speed(slot, milli);
+                Vec::new()
+            }
             Command::SetPaused { slot, paused } => {
                 if let Some(player) = self.existing(slot) {
                     player.set_paused(paused);
@@ -102,6 +166,7 @@ impl<R: StreamResolver> Playback<R> {
             Command::StopPlayback { slot } if usize::from(slot) < SLOTS => {
                 self.generation(slot).fetch_add(1, Ordering::SeqCst);
                 self.set_loaded(slot, None);
+                self.speeds()[usize::from(slot)] = None;
                 self.pool.stop(slot);
                 Vec::new()
             }
@@ -128,6 +193,58 @@ impl<R: StreamResolver> Playback<R> {
         }
     }
 
+    /// Resolves `target` for `slot` in its turn, under a new generation. `None` if a newer play
+    /// or a stop of the slot replaced it meanwhile: then nothing may be loaded or reported.
+    async fn resolve(
+        &self,
+        slot: Slot,
+        target: &Target,
+        rendition: &str,
+    ) -> Option<Result<PlaylistUrl, ResolveError>> {
+        let generation = self.generation(slot).fetch_add(1, Ordering::SeqCst) + 1;
+        // Made (or kept from idle) before resolving, so it is not dropped meanwhile.
+        let _player = self.pool.player(slot);
+        let stale = || {
+            let stale = self.generation(slot).load(Ordering::SeqCst) != generation;
+            if stale {
+                tracing::debug!(
+                    slot,
+                    target = target.name(),
+                    "a newer play or stop replaced this one"
+                );
+            }
+            stale
+        };
+        let resolved = {
+            // The semaphore is never closed, so this only fails if it were.
+            let _permit = self.resolves.acquire().await.ok()?;
+            // Replaced or stopped while waiting its turn: no need to ask at all.
+            if stale() {
+                return None;
+            }
+            self.resolver.resolve(target, rendition).await
+        };
+        (!stale()).then_some(resolved)
+    }
+
+    /// The player to load `what` into `slot`, noting it as loaded. The stream on screen again, at
+    /// another quality, goes to the spare: the old one plays until the new one's first frame.
+    /// Anything else replaces it at once.
+    fn loader(&self, slot: Slot, what: Loaded) -> Arc<dyn htpc_player::Player> {
+        let before = self.set_loaded(slot, Some(what.clone()));
+        let again = before.is_some_and(|b| b.is_same(&what));
+        let spare = (again && self.pool.is_playing(slot))
+            .then(|| self.pool.spare(slot))
+            .flatten();
+        match spare {
+            Some(spare) => {
+                tracing::debug!(slot, "loading the new quality behind the old one");
+                spare
+            }
+            None => self.pool.fresh(slot),
+        }
+    }
+
     async fn play(
         &self,
         slot: Slot,
@@ -136,28 +253,12 @@ impl<R: StreamResolver> Playback<R> {
         latency: Latency,
     ) -> Vec<Event> {
         let rendition = rendition_name(stream);
-        let generation = self.generation(slot).fetch_add(1, Ordering::SeqCst) + 1;
-        // Made (or kept from idle) before resolving, so it is not dropped meanwhile.
-        let player = self.pool.player(slot);
-        let stale = || self.generation(slot).load(Ordering::SeqCst) != generation;
-        let resolved = {
-            // The semaphore is never closed, so this only fails if it were.
-            let Ok(_permit) = self.resolves.acquire().await else {
-                return Vec::new();
-            };
-            // Replaced or stopped while waiting its turn: no need to ask at all.
-            if stale() {
-                tracing::debug!(slot, channel = %channel.login, "a newer play or stop replaced this one");
-                return Vec::new();
-            }
-            self.resolver
-                .resolve(site(channel.platform), &channel.login, &rendition)
-                .await
-        };
-        if stale() {
-            tracing::debug!(slot, channel = %channel.login, "a newer play or stop replaced this one");
+        // A live stream plays at normal speed (the player sees to that).
+        self.speeds()[usize::from(slot)] = None;
+        let target = Target::channel(site(channel.platform), channel.login.clone());
+        let Some(resolved) = self.resolve(slot, &target, &rendition).await else {
             return Vec::new();
-        }
+        };
         match resolved {
             Ok(url) => {
                 tracing::info!(slot, channel = %channel.login, %rendition, "playlist resolved, starting the player");
@@ -165,28 +266,18 @@ impl<R: StreamResolver> Playback<R> {
                     Latency::Low => htpc_player::Latency::Low,
                     Latency::Normal => htpc_player::Latency::Normal,
                 };
-                // The stream on screen again, at another quality: the old one plays until the
-                // new one's first frame. Anything else replaces it at once.
-                let before = self.set_loaded(slot, Some(channel.clone()));
-                let again = before.is_some_and(|b| b.is_same(&channel));
-                let spare = (again && self.pool.is_playing(slot))
-                    .then(|| self.pool.spare(slot))
-                    .flatten();
-                let player = match spare {
-                    Some(spare) => {
-                        tracing::debug!(slot, "loading the new quality behind the old one");
-                        spare
-                    }
-                    None => {
-                        drop(player);
-                        self.pool.fresh(slot)
-                    }
-                };
+                let player = self.loader(slot, Loaded::Live(channel));
                 // Before the load, as mpv reads it when the file opens. Without an audio
                 // rendition Streamlink falls back to video, which is then still not decoded.
                 let video = !matches!(stream, StreamKind::AudioOnly);
                 player.set_option(htpc_player::PlayerOption::Video(video));
-                player.load(&url.0, LoadOptions { latency });
+                player.load(
+                    &url.0,
+                    LoadOptions {
+                        latency,
+                        start_ms: None,
+                    },
+                );
                 Vec::new()
             }
             Err(ResolveError::Offline) => vec![Event::StreamOffline { channel }],
@@ -196,6 +287,80 @@ impl<R: StreamResolver> Playback<R> {
                     channel,
                     message: user_message(&err),
                 }]
+            }
+        }
+    }
+
+    /// `Command::PlayVideo`: as [`Self::play`], but from a start position, always with the
+    /// normal buffers, at the video's speed, and failing with `PlaybackError` on the slot.
+    async fn play_video(
+        &self,
+        slot: Slot,
+        video: VideoTarget,
+        start_ms: u64,
+        stream: StreamKind,
+    ) -> Vec<Event> {
+        let rendition = rendition_name(stream);
+        {
+            // A new video starts at normal speed. The same one again (another quality) keeps
+            // its speed.
+            let mut speeds = self.speeds();
+            let speed = &mut speeds[usize::from(slot)];
+            if speed.as_ref().is_none_or(|s| s.target != video) {
+                *speed = Some(VideoSpeed {
+                    target: video.clone(),
+                    milli: NORMAL_SPEED,
+                });
+            }
+        }
+        let target = match &video {
+            VideoTarget::Video(id) => Target::TwitchVideo(id.clone()),
+            VideoTarget::Clip(slug) => Target::TwitchClip(slug.clone()),
+        };
+        let Some(resolved) = self.resolve(slot, &target, &rendition).await else {
+            return Vec::new();
+        };
+        match resolved {
+            Ok(url) => {
+                tracing::info!(slot, target = target.name(), start_ms, %rendition, "video resolved, starting the player");
+                let milli = self.speeds()[usize::from(slot)]
+                    .as_ref()
+                    .map_or(NORMAL_SPEED, |s| s.milli);
+                let player = self.loader(slot, Loaded::Video(video));
+                let picture = !matches!(stream, StreamKind::AudioOnly);
+                player.set_option(htpc_player::PlayerOption::Video(picture));
+                player.set_option(htpc_player::PlayerOption::Speed(milli));
+                player.load(&url.0, LoadOptions::video(start_ms));
+                Vec::new()
+            }
+            Err(err) => {
+                tracing::warn!(slot, target = target.name(), %err, "could not resolve the video");
+                vec![Event::PlaybackError {
+                    slot,
+                    message: video_message(&video, &err),
+                }]
+            }
+        }
+    }
+
+    /// `Command::SetSpeed`: kept for the video the slot plays or is loading, and applied to its
+    /// player at once if it is already loaded. Ignored without a video, so a live stream never
+    /// speeds up.
+    fn set_speed(&self, slot: Slot, milli: u32) {
+        let target = {
+            let mut speeds = self.speeds();
+            let Some(speed) = speeds[usize::from(slot)].as_mut() else {
+                tracing::debug!(slot, milli, "no video to change the speed of");
+                return;
+            };
+            speed.milli = milli;
+            speed.target.clone()
+        };
+        // Still resolving (or replacing another video): the load applies it.
+        let loaded = Some(Loaded::Video(target));
+        if self.loaded.lock().expect("loaded lock")[usize::from(slot)] == loaded {
+            if let Some(player) = self.existing(slot) {
+                player.set_option(htpc_player::PlayerOption::Speed(milli));
             }
         }
     }
@@ -234,6 +399,20 @@ fn user_message(err: &ResolveError) -> String {
     }
 }
 
+/// What the error screen says when a video or clip cannot be resolved. Streamlink answers "no
+/// playable streams" for one that was deleted or never existed (checked 2026-11-12).
+fn video_message(video: &VideoTarget, err: &ResolveError) -> String {
+    let what = match video {
+        VideoTarget::Video(_) => "video",
+        VideoTarget::Clip(_) => "clip",
+    };
+    match err {
+        ResolveError::Offline => format!("This {what} is no longer available."),
+        ResolveError::NotFound => format!("That {what} could not be found."),
+        other => user_message(other),
+    }
+}
+
 /// The player crate's form of a core player option.
 fn player_option(option: PlayerOption) -> htpc_player::PlayerOption {
     match option {
@@ -259,6 +438,8 @@ pub fn player_event(slot: Slot, event: PlayerEvent, at_ms: u64) -> Option<Event>
             health: Health {
                 stalled: h.stalled,
                 buffer_ms: h.buffer_ms,
+                pos_ms: h.pos_ms,
+                length_ms: h.length_ms,
             },
         }),
     }
@@ -402,7 +583,8 @@ mod tests {
                 PlayerCall::Load(
                     "u".into(),
                     LoadOptions {
-                        latency: htpc_player::Latency::Normal
+                        latency: htpc_player::Latency::Normal,
+                        start_ms: None
                     }
                 )
             ]
@@ -452,12 +634,7 @@ mod tests {
     struct Slow;
 
     impl StreamResolver for Slow {
-        async fn resolve(
-            &self,
-            _: Site,
-            _: &str,
-            _: &str,
-        ) -> Result<htpc_resolver::PlaylistUrl, ResolveError> {
+        async fn resolve(&self, _: &Target, _: &str) -> Result<PlaylistUrl, ResolveError> {
             tokio::time::sleep(Duration::from_secs(1)).await;
             Ok(htpc_resolver::PlaylistUrl("u".into()))
         }
@@ -534,14 +711,9 @@ mod tests {
     struct Counted(Arc<Counting>);
 
     impl StreamResolver for Counted {
-        async fn resolve(
-            &self,
-            _: Site,
-            channel: &str,
-            _: &str,
-        ) -> Result<htpc_resolver::PlaylistUrl, ResolveError> {
+        async fn resolve(&self, target: &Target, _: &str) -> Result<PlaylistUrl, ResolveError> {
             let me = &self.0;
-            me.asked.lock().unwrap().push(channel.to_owned());
+            me.asked.lock().unwrap().push(target.name().to_owned());
             let now = me.running.fetch_add(1, Ordering::SeqCst) + 1;
             me.most.fetch_max(now, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -692,6 +864,197 @@ mod tests {
             .is_empty());
     }
 
+    fn play_video(id: &str, start_ms: u64) -> Command {
+        Command::PlayVideo {
+            slot: MAIN_SLOT,
+            target: VideoTarget::Video(id.into()),
+            start_ms,
+            stream: StreamKind::Video(Quality::P720),
+        }
+    }
+
+    const NORMAL: PlayerCall = PlayerCall::SetOption(htpc_player::PlayerOption::Speed(1000));
+
+    #[tokio::test]
+    async fn a_video_loads_from_its_start_with_normal_buffers_and_speed() {
+        let resolver = FakeResolver::playing("https://x/v.m3u8");
+        let (pb, player) = playback(resolver.clone());
+        assert!(Playback::<FakeResolver>::handles(&play_video("1", 0)));
+        assert!(pb
+            .execute(play_video("2612345678", 4_360_000))
+            .await
+            .is_empty());
+        assert_eq!(
+            player.calls(),
+            [
+                VIDEO_ON,
+                NORMAL,
+                PlayerCall::Load(
+                    "https://x/v.m3u8".into(),
+                    LoadOptions {
+                        latency: htpc_player::Latency::Normal,
+                        start_ms: Some(4_360_000)
+                    }
+                )
+            ]
+        );
+        let (target, quality) = &resolver.asked()[0];
+        assert_eq!(*target, Target::TwitchVideo("2612345678".into()));
+        assert!(quality.starts_with("720p60,720p,"), "{quality}");
+    }
+
+    #[tokio::test]
+    async fn a_clip_resolves_as_a_clip() {
+        let resolver = FakeResolver::playing("https://x/c.mp4");
+        let (pb, player) = playback(resolver.clone());
+        let clip = Command::PlayVideo {
+            slot: MAIN_SLOT,
+            target: VideoTarget::Clip("CleverOtter-AbC".into()),
+            start_ms: 0,
+            stream: StreamKind::Video(Quality::Best),
+        };
+        pb.execute(clip).await;
+        assert_eq!(
+            resolver.asked(),
+            [(Target::TwitchClip("CleverOtter-AbC".into()), "best".into())]
+        );
+        assert_eq!(
+            player.calls().last(),
+            Some(&PlayerCall::Load(
+                "https://x/c.mp4".into(),
+                LoadOptions::video(0)
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn seeks_reach_a_video_but_never_a_live_stream() {
+        let (pb, player) = playback(FakeResolver::playing("u"));
+        let seek = |to_ms| Command::Seek {
+            slot: MAIN_SLOT,
+            to_ms,
+        };
+        assert!(Playback::<FakeResolver>::handles(&seek(0)));
+        pb.execute(play("chan")).await;
+        pb.execute(seek(10_000)).await;
+        assert!(!player.calls().contains(&PlayerCall::Seek(10_000)));
+
+        pb.execute(play_video("42", 0)).await;
+        pb.execute(seek(70_000)).await;
+        assert_eq!(player.calls().last(), Some(&PlayerCall::Seek(70_000)));
+        // Stopped: nothing to seek in.
+        pb.execute(Command::StopPlayback { slot: MAIN_SLOT }).await;
+        pb.execute(seek(1)).await;
+        assert_eq!(player.calls().last(), Some(&PlayerCall::Stop));
+    }
+
+    #[tokio::test]
+    async fn speed_holds_for_its_video_across_a_quality_change_and_resets_for_the_next() {
+        let (pool, fakes) = pool();
+        let pb = Playback::new(FakeResolver::playing("u"), pool);
+        let speed = |milli| Command::SetSpeed {
+            slot: MAIN_SLOT,
+            milli,
+        };
+        let fast = PlayerCall::SetOption(htpc_player::PlayerOption::Speed(1500));
+        // Nothing to speed up yet, and a live stream never is.
+        pb.execute(speed(1500)).await;
+        pb.execute(play("chan")).await;
+        pb.execute(speed(1500)).await;
+        assert!(!fakes.calls(MAIN_SLOT).contains(&fast));
+
+        pb.execute(play_video("42", 0)).await;
+        fakes.emit(MAIN_SLOT, PlayerEvent::Playing);
+        pb.execute(speed(1500)).await;
+        assert_eq!(fakes.calls(MAIN_SLOT).last(), Some(&fast));
+
+        // Another quality loads in the spare, at the same speed.
+        pb.execute(play_video("42", 65_000)).await;
+        let spare = fakes.spare(MAIN_SLOT).expect("a spare").calls();
+        assert_eq!(
+            spare[1..],
+            [
+                VIDEO_ON,
+                fast.clone(),
+                PlayerCall::Load("u".into(), LoadOptions::video(65_000))
+            ]
+        );
+
+        // Another video starts at normal speed.
+        pb.execute(play_video("43", 0)).await;
+        let calls = fakes.calls(MAIN_SLOT);
+        assert_eq!(calls[calls.len() - 2], NORMAL);
+    }
+
+    #[tokio::test]
+    async fn a_video_that_cannot_be_resolved_is_a_playback_error_on_its_slot() {
+        let (pb, player) = playback(FakeResolver::failing(ResolveError::Offline));
+        let events = pb.execute(play_video("42", 0)).await;
+        assert_eq!(
+            events,
+            [Event::PlaybackError {
+                slot: MAIN_SLOT,
+                message: "This video is no longer available.".into()
+            }]
+        );
+        assert!(player.calls().is_empty());
+
+        let (pb, _) = playback(FakeResolver::failing(ResolveError::NotFound));
+        let clip = Command::PlayVideo {
+            slot: 2,
+            target: VideoTarget::Clip("x".into()),
+            start_ms: 0,
+            stream: StreamKind::Video(Quality::Best),
+        };
+        assert_eq!(
+            pb.execute(clip).await,
+            [Event::PlaybackError {
+                slot: 2,
+                message: "That clip could not be found.".into()
+            }]
+        );
+
+        let (pb, _) = playback(FakeResolver::failing(ResolveError::TimedOut));
+        let [Event::PlaybackError { message, .. }] = &pb.execute(play_video("42", 0)).await[..]
+        else {
+            panic!("expected one PlaybackError");
+        };
+        assert_eq!(message, "Twitch took too long to answer.");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_late_video_resolve_never_loads_over_a_newer_choice() {
+        let (pb, player) = playback(Slow);
+        let pb = Arc::new(pb);
+        // A video, then a live channel chosen while it resolves: only the channel loads.
+        let video = tokio::spawn({
+            let pb = Arc::clone(&pb);
+            async move { pb.execute(play_video("42", 5_000)).await }
+        });
+        tokio::task::yield_now().await;
+        pb.execute(play("chan")).await;
+        assert!(video.await.unwrap().is_empty());
+        let loads: Vec<_> = player
+            .calls()
+            .into_iter()
+            .filter(|c| matches!(c, PlayerCall::Load(..)))
+            .collect();
+        assert_eq!(
+            loads,
+            [PlayerCall::Load("u".into(), LoadOptions::default())]
+        );
+
+        // A video stopped while it resolves loads nothing.
+        let video = tokio::spawn({
+            let pb = Arc::clone(&pb);
+            async move { pb.execute(play_video("42", 0)).await }
+        });
+        tokio::task::yield_now().await;
+        pb.execute(Command::StopPlayback { slot: MAIN_SLOT }).await;
+        video.await.unwrap();
+        assert_eq!(player.calls().last(), Some(&PlayerCall::Stop));
+    }
+
     #[test]
     fn player_events_map_to_core_events() {
         let main = |e| player_event(MAIN_SLOT, e, 0);
@@ -720,6 +1083,8 @@ mod tests {
         let health = htpc_player::PlayerHealth {
             stalled: true,
             buffer_ms: 120,
+            pos_ms: Some(65_000),
+            length_ms: Some(3_600_000),
         };
         assert_eq!(
             player_event(3, PlayerEvent::Health(health), 4_200),
@@ -728,7 +1093,9 @@ mod tests {
                 at_ms: 4_200,
                 health: Health {
                     stalled: true,
-                    buffer_ms: 120
+                    buffer_ms: 120,
+                    pos_ms: Some(65_000),
+                    length_ms: Some(3_600_000),
                 }
             })
         );

@@ -13,6 +13,19 @@ export component ViewIcon inherits Path {
 
 import { Theme } from "theme.slint";
 
+// A padlock, for subscriber-only videos: the body, and the shackle above it.
+export component LockIcon inherits Path {
+    in property <color> tone: Theme.text;
+    width: 18px;
+    height: 18px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4";
+    fill: transparent;
+    stroke: root.tone;
+    stroke-width: 2.4px;
+}
+
 // Vector nav icons (24x24 viewbox) so no image assets are needed.
 // kind (RailEntry order): 0 home, 1 following (heart), 2 favorites (star), 3 browse (grid),
 // 4 search (magnifier), 5 settings (sliders), 6 account

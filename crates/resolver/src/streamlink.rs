@@ -1,9 +1,11 @@
-//! `StreamlinkResolver`: `streamlink --stream-url https://twitch.tv/<channel> <quality>,best`.
+//! `StreamlinkResolver`: `streamlink --stream-url <page> <quality>,best`, where the page is a
+//! channel (`https://twitch.tv/<login>`), a video (`https://www.twitch.tv/videos/<id>`) or a clip
+//! (`https://clips.twitch.tv/<slug>`).
 
 use std::time::Duration;
 
 use crate::runner::{ProcessOutput, ProcessRunner, RunError};
-use crate::{PlaylistUrl, ResolveError, Site, StreamResolver};
+use crate::{PlaylistUrl, ResolveError, StreamResolver, Target};
 
 /// Streamlink fetches a token and a playlist, so a slow network needs a few seconds.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -32,29 +34,6 @@ impl<R: ProcessRunner> StreamlinkResolver<R> {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
-    }
-}
-
-/// Twitch channel logins are letters, digits and underscores, Kick slugs also take `-`. Checking
-/// here keeps anything else out of the URL that is handed to the program.
-fn valid_channel(site: Site, channel: &str) -> bool {
-    let (max, extra) = match site {
-        Site::Twitch => (25, '_'),
-        Site::Kick => (50, '-'),
-    };
-    !channel.is_empty()
-        && channel.len() <= max
-        && !channel.starts_with('-')
-        && channel
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == extra)
-}
-
-/// The channel's page, which Streamlink picks its plugin by.
-fn page_url(site: Site, channel: &str) -> String {
-    match site {
-        Site::Twitch => format!("https://twitch.tv/{channel}"),
-        Site::Kick => format!("https://kick.com/{channel}"),
     }
 }
 
@@ -114,21 +93,12 @@ pub fn map_output(out: &ProcessOutput) -> Result<PlaylistUrl, ResolveError> {
 }
 
 impl<R: ProcessRunner> StreamResolver for StreamlinkResolver<R> {
-    async fn resolve(
-        &self,
-        site: Site,
-        channel: &str,
-        quality: &str,
-    ) -> Result<PlaylistUrl, ResolveError> {
-        if !valid_channel(site, channel) {
+    async fn resolve(&self, target: &Target, quality: &str) -> Result<PlaylistUrl, ResolveError> {
+        let Some(page) = target.page_url() else {
             return Err(ResolveError::NotFound);
-        }
-        let args = vec![
-            "--stream-url".to_owned(),
-            page_url(site, channel),
-            quality_arg(quality),
-        ];
-        tracing::debug!(channel, ?args, "resolving the stream");
+        };
+        let args = vec!["--stream-url".to_owned(), page, quality_arg(quality)];
+        tracing::debug!(target = target.name(), ?args, "resolving the stream");
         match self.runner.run(&self.program, &args, self.timeout).await {
             Ok(out) => map_output(&out),
             Err(RunError::NotFound) => Err(ResolveError::NotInstalled),

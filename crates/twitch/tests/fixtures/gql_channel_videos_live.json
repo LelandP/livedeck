@@ -1,0 +1,223 @@
+{
+    "data":  {
+                 "user":  {
+                              "id":  "71092938",
+                              "login":  "xqc",
+                              "displayName":  "xQc",
+                              "profileImageURL":  "https://static-cdn.jtvnw.net/jtv_user_pictures/xqc-profile_image-9298dca608632101-150x150.jpeg",
+                              "lastBroadcast":  {
+                                                    "startedAt":  "2026-11-11T21:55:19.763152Z"
+                                                },
+                              "stream":  {
+                                             "createdAt":  "2026-11-11T21:55:14Z",
+                                             "title":  "🦑LIVE🦑DRAMA🦑ALERT🦑QUICK🦑CLICK🦑LOCK IN🦑GTA V MAYBE?🦑GAMES?🦑IDK🦑LOCK IN THO🦑MEGA DAY🦑",
+                                             "viewersCount":  21076,
+                                             "game":  {
+                                                          "id":  "32982",
+                                                          "name":  "Grand Theft Auto V"
+                                                      },
+                                             "previewImageURL":  "https://static-cdn.jtvnw.net/previews-ttv/live_user_xqc-440x248.jpg"
+                                         },
+                              "archives":  {
+                                               "edges":  [
+                                                             {
+                                                                 "node":  {
+                                                                              "id":  "2926188923",
+                                                                              "title":  "🦑LIVE🦑DRAMA🦑ALERT🦑QUICK🦑CLICK🦑LOCK IN🦑GTA V MAYBE?🦑GAMES?🦑IDK🦑LOCK IN THO🦑MEGA DAY🦑",
+                                                                              "lengthSeconds":  13264,
+                                                                              "createdAt":  "2026-11-11T21:55:19Z",
+                                                                              "viewCount":  4445,
+                                                                              "status":  "RECORDING",
+                                                                              "previewThumbnailURL":  "https://vod-secure.twitch.tv/_404/404_processing_440x248.png",
+                                                                              "game":  {
+                                                                                           "name":  "Just Chatting"
+                                                                                       },
+                                                                              "resourceRestriction":  null,
+                                                                              "muteInfo":  {
+                                                                                               "mutedSegmentConnection":  null
+                                                                                           },
+                                                                              "owner":  {
+                                                                                            "login":  "xqc",
+                                                                                            "displayName":  "xQc"
+                                                                                        }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "id":  "2924308181",
+                                                                              "title":  "👕LIVE👕CLICK👕HERE👕DRAMA👕NEWS👕VIDEOS👕GTA V👕NOPIXEL V👕PROGRESS PERHAPS👕LOCK IT IN👕PULL UP👕YAY👕",
+                                                                              "lengthSeconds":  38801,
+                                                                              "createdAt":  "2026-11-09T20:18:30Z",
+                                                                              "viewCount":  597504,
+                                                                              "status":  "RECORDED",
+                                                                              "previewThumbnailURL":  "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/e49e784e6bdf740461b4_xqc_321094008540_1794255505//thumb/thumb0-440x248.jpg",
+                                                                              "game":  {
+                                                                                           "name":  "Just Chatting"
+                                                                                       },
+                                                                              "resourceRestriction":  null,
+                                                                              "muteInfo":  {
+                                                                                               "mutedSegmentConnection":  {
+                                                                                                                              "nodes":  [
+                                                                                                                                            {
+                                                                                                                                                "offset":  180,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  3600,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  7380,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  7560,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  7920,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  12602,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  12782,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  15122,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  15302,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  15482,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  15662,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  15842,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  20165,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  20345,
+                                                                                                                                                "duration":  182
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  20707,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  20887,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  21067,
+                                                                                                                                                "duration":  180
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                                "offset":  38541,
+                                                                                                                                                "duration":  180
+                                                                                                                                            }
+                                                                                                                                        ]
+                                                                                                                          }
+                                                                                           },
+                                                                              "owner":  {
+                                                                                            "login":  "xqc",
+                                                                                            "displayName":  "xQc"
+                                                                                        }
+                                                                          }
+                                                             }
+                                                         ]
+                                           },
+                              "highlights":  {
+                                                 "edges":  [
+
+                                                           ]
+                                             },
+                              "clipsWeek":  {
+                                                "edges":  [
+                                                              {
+                                                                  "node":  {
+                                                                               "slug":  "ResourcefulBlazingKumquatPraiseIt-dbnC1oRVhIZpi3Bp",
+                                                                               "title":  "Raia the Brick Boi",
+                                                                               "durationSeconds":  58,
+                                                                               "viewCount":  4489,
+                                                                               "createdAt":  "2026-11-10T11:33:19Z",
+                                                                               "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/515a5975-68ee-4a94-8b31-2a29721d2f0c/landscape/thumb/thumb-0000000000-1920x1080.jpg",
+                                                                               "curator":  {
+                                                                                               "displayName":  "SovereignOfTheSeas"
+                                                                                           },
+                                                                               "game":  {
+                                                                                            "name":  "Grand Theft Auto V"
+                                                                                        }
+                                                                           }
+                                                              },
+                                                              {
+                                                                  "node":  {
+                                                                               "slug":  "HardEvilPuddingCharlietheUnicorn-o2AxD-9bQVeyvSbu",
+                                                                               "title":  "xQc\u0027s gun shooting straight BBs",
+                                                                               "durationSeconds":  48,
+                                                                               "viewCount":  4269,
+                                                                               "createdAt":  "2026-11-06T06:21:38Z",
+                                                                               "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/884d296e-49e0-4f05-a0bd-92ea01fcb16f/landscape/thumb/thumb-0000000000-1920x1080.jpg",
+                                                                               "curator":  {
+                                                                                               "displayName":  "ssSwagMessiah"
+                                                                                           },
+                                                                               "game":  {
+                                                                                            "name":  "Grand Theft Auto V"
+                                                                                        }
+                                                                           }
+                                                              }
+                                                          ]
+                                            },
+                              "clipsAll":  {
+                                               "edges":  [
+                                                             {
+                                                                 "node":  {
+                                                                              "slug":  "DeliciousDelightfulPicklesWOOP",
+                                                                              "title":  "xqc makes the wrong choice",
+                                                                              "durationSeconds":  44,
+                                                                              "viewCount":  959569,
+                                                                              "createdAt":  "2020-12-09T19:18:10Z",
+                                                                              "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/ce4b4ef1-4e8d-4391-bff6-2bc4c5506a4d/landscape/thumb/thumb-0000000000-1920x1080.jpg",
+                                                                              "curator":  {
+                                                                                              "displayName":  "sopranohh"
+                                                                                          },
+                                                                              "game":  {
+                                                                                           "name":  "Cyberpunk 2077"
+                                                                                       }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "slug":  "NimbleProductiveAsparagusHeyGuys-s77ZvN10Yr-O2sfo",
+                                                                              "title":  "wow",
+                                                                              "durationSeconds":  26,
+                                                                              "viewCount":  783138,
+                                                                              "createdAt":  "2021-04-04T21:34:33Z",
+                                                                              "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/b0181c83-be87-4dab-ad46-15dde4d81647/landscape/thumb/thumb-0000000000-1920x1080.jpg",
+                                                                              "curator":  {
+                                                                                              "displayName":  "shungiteeworks"
+                                                                                          },
+                                                                              "game":  {
+                                                                                           "name":  "Grand Theft Auto V"
+                                                                                       }
+                                                                          }
+                                                             }
+                                                         ]
+                                           }
+                          }
+             }
+}

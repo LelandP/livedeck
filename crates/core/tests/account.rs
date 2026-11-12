@@ -298,28 +298,19 @@ fn a_live_followed_channel_plays_and_back_returns_to_following() {
 }
 
 #[test]
-fn an_offline_followed_channel_still_tries_to_play() {
+fn an_offline_followed_channel_opens_its_channel_page() {
+    // Past broadcasts and clips are what there is to watch (vod-plan.md): not the end screen.
     let (s, cmds) = run(following(), &[Intent::Down, Intent::Select]);
-    assert_eq!(s.screen, Screen::Player);
-    assert_eq!(s.playback, Playback::Loading);
+    assert_eq!(s.screen, Screen::Channel);
+    assert_eq!(s.now_playing, None);
     assert_eq!(
-        s.now_playing.as_ref().map(|p| p.channel.login.as_str()),
-        Some("off0")
+        cmds,
+        vec![Command::LoadChannelPage {
+            channel: ChannelRef::twitch("off0")
+        }]
     );
-    assert!(cmds
-        .iter()
-        .any(|c| matches!(c, Command::Play { slot: 0, channel, .. } if channel.login == "off0")));
-    let join = Command::JoinChat {
-        channel: ChannelRef::twitch("off0"),
-    };
-    assert!(cmds.contains(&join));
-
-    // The resolver says it is still offline: the end screen, like any other offline channel.
-    let offline = Event::StreamOffline {
-        channel: ChannelRef::twitch("off0"),
-    };
-    let (s, _) = reduce(&s, offline);
-    assert_eq!(s.playback, Playback::Offline);
+    let (s, _) = reduce(&s, Intent::Back);
+    assert_eq!(s.screen, Screen::Following);
 }
 
 #[test]

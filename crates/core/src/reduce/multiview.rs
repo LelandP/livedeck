@@ -41,7 +41,8 @@ pub(super) fn browse_view(s: &mut AppState) {
     let on_keys = s.screen == Screen::Search && !s.search.in_results;
     let card = match s.focused_tile() {
         Some(t @ (Tile::Stream(_) | Tile::Channel(_))) => t.clone(),
-        Some(Tile::Category(_) | Tile::Resume(_)) | None => return,
+        // Videos never go into multiview (vod-plan.md section 1).
+        Some(Tile::Category(_) | Tile::Resume(_) | Tile::Video(_) | Tile::Clip(_)) | None => return,
     };
     if on_keys {
         return;
@@ -455,7 +456,8 @@ pub(super) fn grid_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Comma
         | Intent::Text(_)
         | Intent::Erase
         | Intent::Pick { .. }
-        | Intent::RailPick(_) => {}
+        | Intent::RailPick(_)
+        | Intent::Released(_) => {}
     }
 }
 

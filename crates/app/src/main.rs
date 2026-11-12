@@ -760,11 +760,24 @@ fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>, device: &Arc<AtomicBool>)
     let t = tx.clone();
     let keys_ui = ui.as_weak();
     let keys_device = Arc::clone(device);
-    ui.on_key(move |text| match htpc_input::map_key(&text) {
-        Some(intent) => {
-            note_device(&keys_device, &keys_ui, false);
-            send(&t, intent)
+    ui.on_key(move |text, repeat| {
+        // A held arrow is one press and one release, as on a controller: its auto-repeat is
+        // taken and dropped here.
+        if htpc_input::is_dropped_repeat(&text, repeat) {
+            return true;
         }
+        match htpc_input::map_key(&text) {
+            Some(intent) => {
+                note_device(&keys_device, &keys_ui, false);
+                send(&t, intent)
+            }
+            None => false,
+        }
+    });
+
+    let t = tx.clone();
+    ui.on_key_released(move |text| match htpc_input::map_key_release(&text) {
+        Some(intent) => send(&t, intent),
         None => false,
     });
 

@@ -146,6 +146,110 @@ pub struct HypeTrain {
     pub all_time_high: u32,
 }
 
+/// Which videos of a channel: its past broadcasts or its highlights. (Uploads are left out: few
+/// channels have any, see vod-plan.md section 8.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoType {
+    /// A past broadcast (Twitch's `ARCHIVE`). The newest one is still `recording` while live.
+    Archive,
+    Highlight,
+}
+
+/// A part of a video Twitch muted (copyrighted music), in seconds from its start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MutedSegment {
+    pub offset: u32,
+    pub duration: u32,
+}
+
+/// A video of a channel, as the website's GQL API lists it to any viewer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoInfo {
+    /// Digits only: `https://www.twitch.tv/videos/<id>`.
+    pub id: String,
+    pub kind: VideoType,
+    pub title: String,
+    pub length_seconds: u32,
+    /// RFC 3339, as Twitch writes it (`2026-11-10T18:28:22Z`).
+    pub created_at: String,
+    pub view_count: u64,
+    pub game_name: String,
+    /// Already sized (440x248). Empty when Twitch has none.
+    pub thumbnail_url: String,
+    /// Still being recorded: the broadcast is live.
+    pub recording: bool,
+    /// Only the channel's subscribers can watch it (`resourceRestriction` is set).
+    pub sub_only: bool,
+    pub muted: Vec<MutedSegment>,
+    pub owner_login: String,
+    pub owner_name: String,
+}
+
+/// A clip of a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipInfo {
+    /// Letters, digits, `_` and `-`: `https://clips.twitch.tv/<slug>`.
+    pub slug: String,
+    pub title: String,
+    pub duration_seconds: u32,
+    pub view_count: u64,
+    /// RFC 3339.
+    pub created_at: String,
+    /// Already sized by Twitch. Empty when there is none.
+    pub thumbnail_url: String,
+    /// Who made the clip. Empty when Twitch does not say.
+    pub curator_name: String,
+    pub game_name: String,
+}
+
+/// Everything a channel page shows, in one request (`TwitchApi::channel_videos`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelVideos {
+    pub user: UserInfo,
+    /// The live stream, if the channel is live now.
+    pub live: Option<StreamInfo>,
+    /// RFC 3339 start of the last broadcast, live or not. `None` if it never streamed.
+    pub last_broadcast_at: Option<String>,
+    /// Past broadcasts, newest first (the first page only: later pages need an integrity token).
+    pub archives: Vec<VideoInfo>,
+    pub highlights: Vec<VideoInfo>,
+    /// The most watched clips of the last 7 days.
+    pub clips_week: Vec<ClipInfo>,
+    /// The most watched clips ever.
+    pub clips_all_time: Vec<ClipInfo>,
+}
+
+/// One chapter of a video: where the streamer changed category.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoChapter {
+    pub position_ms: u64,
+    pub duration_ms: u64,
+    /// The category (game) name.
+    pub name: String,
+}
+
+/// What the player needs about one video beyond its card (`TwitchApi::video_details`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoDetails {
+    pub id: String,
+    pub length_seconds: u32,
+    /// In order. A video without chapter markers gets one chapter, the whole video, named after
+    /// its category (empty if it has none).
+    pub chapters: Vec<VideoChapter>,
+    pub muted: Vec<MutedSegment>,
+    /// The storyboard description (`…-info.json`) for seek previews. Empty when there is none.
+    pub seek_previews_url: String,
+}
+
+/// The past broadcast being recorded from a live stream (`TwitchApi::live_archive`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveArchive {
+    pub video_id: String,
+    /// RFC 3339 start of the live stream. A point in the stream maps to this many seconds into
+    /// the video (the recording starts a few seconds after it).
+    pub stream_started_at: String,
+}
+
 /// A Twitch user (`GET /users`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UserInfo {

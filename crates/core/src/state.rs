@@ -13,6 +13,7 @@ use crate::multiview::{Multiview, SavedSet, ViewPopup};
 use crate::netlimit::{NetLimit, Tier};
 use crate::quality::{FrameRate, Rendition};
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
+use crate::video::{Progress, VideoItem, VideoSession};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
@@ -37,6 +38,10 @@ pub enum Screen {
     /// Multiview's grid: several streams at once, one with sound. Signed in only to start, and
     /// not a root: Back returns to the screen it was started from.
     Multiview,
+    /// A Twitch channel's page: its live stream, past broadcasts, highlights and clips
+    /// (`AppState::channel_page`). Not a root: Back returns to where it was opened. Needs no
+    /// account.
+    Channel,
 }
 
 impl Screen {
@@ -161,10 +166,20 @@ pub enum PlayerMenuRow {
     Subscribe,
     /// An action row: A opens the chat compose panel (see `AppState::compose`). Signed in only.
     WriteChat,
+    /// An action row: A opens the channel's page (Twitch only, and not in multiview). The stream
+    /// stops, like B.
+    ChannelVideos,
+    /// A video's speed (`seek::SPEEDS`). Videos only.
+    Speed,
+    /// A video's chapters: Left and Right pick one, A jumps there. Videos only, not clips.
+    Chapters,
+    /// An action row: the video from 0:00. Videos and clips.
+    StartOver,
 }
 
 impl PlayerMenuRow {
-    pub const ALL: [PlayerMenuRow; 9] = [
+    /// The live player's rows, in order.
+    pub const ALL: [PlayerMenuRow; 10] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Hwdec,
         PlayerMenuRow::Latency,
@@ -174,26 +189,56 @@ impl PlayerMenuRow {
         PlayerMenuRow::SleepTimer,
         PlayerMenuRow::Subscribe,
         PlayerMenuRow::WriteChat,
+        PlayerMenuRow::ChannelVideos,
     ];
 
-    pub fn index(self) -> usize {
-        self as usize
-    }
+    /// A video's rows (vod-plan.md section 2): Latency, Subscribe and Write in chat are hidden.
+    pub const VIDEO: [PlayerMenuRow; 10] = [
+        PlayerMenuRow::Quality,
+        PlayerMenuRow::Speed,
+        PlayerMenuRow::Chapters,
+        PlayerMenuRow::StartOver,
+        PlayerMenuRow::Hwdec,
+        PlayerMenuRow::Zoom,
+        PlayerMenuRow::Stats,
+        PlayerMenuRow::AudioOnly,
+        PlayerMenuRow::SleepTimer,
+        PlayerMenuRow::ChannelVideos,
+    ];
+
+    /// A clip's rows: a video's, without chapters.
+    pub const CLIP: [PlayerMenuRow; 9] = [
+        PlayerMenuRow::Quality,
+        PlayerMenuRow::Speed,
+        PlayerMenuRow::StartOver,
+        PlayerMenuRow::Hwdec,
+        PlayerMenuRow::Zoom,
+        PlayerMenuRow::Stats,
+        PlayerMenuRow::AudioOnly,
+        PlayerMenuRow::SleepTimer,
+        PlayerMenuRow::ChannelVideos,
+    ];
 
     /// A runs it, Left and Right do nothing. The other rows are values that A, Left and Right
-    /// step through.
+    /// step through (on *Chapters* Left and Right pick and A jumps).
     pub fn is_action(self) -> bool {
-        matches!(self, PlayerMenuRow::Subscribe | PlayerMenuRow::WriteChat)
+        matches!(
+            self,
+            PlayerMenuRow::Subscribe
+                | PlayerMenuRow::WriteChat
+                | PlayerMenuRow::ChannelVideos
+                | PlayerMenuRow::StartOver
+        )
     }
 
-    /// The row above, stopping at the top.
-    pub fn prev(self) -> Self {
-        Self::ALL[self.index().saturating_sub(1)]
-    }
-
-    /// The row below, stopping at the bottom.
-    pub fn next(self) -> Self {
-        Self::ALL[(self.index() + 1).min(Self::ALL.len() - 1)]
+    /// The row `by` rows away in `rows` (negative: up), stopping at the ends. A row that is not
+    /// in `rows` goes to the first.
+    pub fn step(self, rows: &[PlayerMenuRow], by: isize) -> Self {
+        let Some(at) = rows.iter().position(|r| *r == self) else {
+            return rows.first().copied().unwrap_or_default();
+        };
+        let to = (at as isize + by).clamp(0, rows.len() as isize - 1);
+        rows[to as usize]
     }
 }
 
@@ -336,6 +381,9 @@ pub enum ToastKind {
     /// The network could not keep up, and the quality went down for the first time this run:
     /// of the muted streams (`muted`), or of the stream with sound (the single player's).
     SlowNetwork { muted: bool },
+    /// A video opened at its saved place, `pos_s` seconds in: *Resumed at 1:12:40 · Start over
+    /// in the menu*.
+    Resumed { pos_s: u32 },
 }
 
 impl Toast {
@@ -343,7 +391,9 @@ impl Toast {
     pub fn stream(&self) -> Option<&Stream> {
         match &self.kind {
             ToastKind::Live(stream) => Some(stream),
-            ToastKind::OfflineSkipped(_) | ToastKind::SlowNetwork { .. } => None,
+            ToastKind::OfflineSkipped(_)
+            | ToastKind::SlowNetwork { .. }
+            | ToastKind::Resumed { .. } => None,
         }
     }
 }
@@ -445,6 +495,89 @@ pub struct CategoryFeed {
     pub feed: Feed,
 }
 
+/// The tabs of a channel page (LB / RB switch between them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChannelTab {
+    /// *Live now* (while live), *Past broadcasts*, *Highlights*.
+    #[default]
+    Videos,
+    /// *Top clips · last 7 days*, *Top clips · all time*.
+    Clips,
+}
+
+impl ChannelTab {
+    /// The other tab. With two of them, LB and RB both do this.
+    pub fn other(self) -> Self {
+        match self {
+            ChannelTab::Videos => ChannelTab::Clips,
+            ChannelTab::Clips => ChannelTab::Videos,
+        }
+    }
+}
+
+/// The channel page on screen: who it is, whether it is live, and the rows of each tab. Each tab
+/// is a `Feed` of its own, so focus stays where it was when switching back and forth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelPage {
+    pub channel: ChannelRef,
+    /// The name as the streamer writes it. The login until the page has loaded.
+    pub name: String,
+    /// Profile picture URL, once the page has loaded.
+    pub avatar: Option<String>,
+    /// The live stream: from the card the page was opened on, then from the page itself.
+    pub live: Option<Stream>,
+    /// When the last broadcast started, in Unix seconds, once the page has loaded.
+    pub last_live_at: Option<u64>,
+    /// The time the page was fetched (`ChannelInfo::loaded_at`). 0 before the first load.
+    pub now: u64,
+    pub tab: ChannelTab,
+    pub videos: Feed,
+    pub clips: Feed,
+}
+
+impl ChannelPage {
+    /// A page whose first load is about to start. `live` is the stream of the card it was opened
+    /// from, so the header already says *Live now*.
+    pub fn opening(channel: ChannelRef, name: String, live: Option<Stream>) -> Self {
+        Self {
+            channel,
+            name,
+            avatar: None,
+            live,
+            last_live_at: None,
+            now: 0,
+            tab: ChannelTab::Videos,
+            videos: Feed::loading(),
+            clips: Feed::loading(),
+        }
+    }
+
+    /// The feed of the tab on screen.
+    pub fn feed(&self) -> &Feed {
+        match self.tab {
+            ChannelTab::Videos => &self.videos,
+            ChannelTab::Clips => &self.clips,
+        }
+    }
+
+    pub fn feed_mut(&mut self) -> &mut Feed {
+        match self.tab {
+            ChannelTab::Videos => &mut self.videos,
+            ChannelTab::Clips => &mut self.clips,
+        }
+    }
+
+    /// A load is under way (the first, or a retry).
+    pub fn loading(&self) -> bool {
+        self.videos.loading
+    }
+
+    /// Why the last load failed. Both tabs come from the same request, so both hold it.
+    pub fn error(&self) -> Option<&str> {
+        self.videos.error.as_deref()
+    }
+}
+
 /// Shortest search text (letters and digits, spaces trimmed) that is looked up.
 pub const SEARCH_MIN_CHARS: usize = 2;
 
@@ -522,6 +655,19 @@ pub struct AppState {
     pub browse: Feed,
     /// The open category, while the Category screen is on the back stack or on screen.
     pub category: Option<CategoryFeed>,
+    /// The channel page, while the Channel screen is on screen or on the back stack under the
+    /// player (a video or the live stream opened from it).
+    pub channel_page: Option<ChannelPage>,
+    /// *Continue watching*: the videos left part-way, newest first, at most 10 (vod-plan.md
+    /// section 5). Nothing fills it until Phase 5, so it is empty: the channel page already reads
+    /// it for its progress bars, *Resume at …* and *Start over*.
+    pub continue_watching: Vec<Progress>,
+    /// The video or clip on the Player screen (vod-plan.md, phase 4). `now_playing` is `None`
+    /// meanwhile, and `playback`, `paused` and `audio_only` are the video's.
+    pub video: Option<VideoSession>,
+    /// The id of the last seek timer (`Command::SettleSeek`, `HoldCheck`, `ScrubTick`), kept so
+    /// ids never repeat, also from one video to the next.
+    pub last_seek_id: u32,
     /// The Search screen.
     pub search: SearchState,
     /// The newest chat lines of the channel being watched.
@@ -574,8 +720,9 @@ pub struct AppState {
     pub sleep: Option<SleepTimer>,
     /// The id of the last sleep timer set, kept after it ends so ids never repeat.
     pub last_sleep_id: u32,
-    /// The subscribe card is open over the stream (player menu): a QR code of the channel's
-    /// subscribe page. It takes A and B and ignores the other buttons.
+    /// The subscribe card is open over the stream (player menu), or over the channel page (A on
+    /// a subscriber-only video): a QR code of the channel's subscribe page. It takes A and B and
+    /// ignores the other buttons.
     pub subscribe_card: bool,
     /// The platform can open a web page in a browser the user will see. False in Game Mode on
     /// the Deck, where a browser opens behind gamescope or not at all. Set once at startup.
@@ -681,7 +828,49 @@ impl AppState {
         }
     }
 
-    /// The feed a screen shows, or `None` for screens without one (Player, Login).
+    /// The Twitch login whose subscribe page the card shows: the channel page's, or else the
+    /// stream (or video) on screen's.
+    pub fn subscribe_channel(&self) -> Option<&ChannelRef> {
+        match self.screen {
+            Screen::Channel => self.channel_page.as_ref().map(|p| &p.channel),
+            _ => self
+                .now_playing
+                .as_ref()
+                .map(|p| &p.channel)
+                .or_else(|| self.video.as_ref().map(|v| v.item.channel())),
+        }
+    }
+
+    /// The player menu's rows for what is on screen: a live stream's, a video's or a clip's.
+    pub fn player_menu_rows(&self) -> &'static [PlayerMenuRow] {
+        match self.video.as_ref().map(|v| &v.item) {
+            Some(VideoItem::Video(_)) => &PlayerMenuRow::VIDEO,
+            Some(VideoItem::Clip(_)) => &PlayerMenuRow::CLIP,
+            None => &PlayerMenuRow::ALL,
+        }
+    }
+
+    /// Where `video` was left, if it is in *Continue watching*.
+    pub fn progress_of(&self, video_id: &str) -> Option<&Progress> {
+        self.continue_watching
+            .iter()
+            .find(|p| p.video.id == video_id)
+    }
+
+    /// On the channel page: where the focused video was left, if it is in *Continue watching*.
+    /// A and X read it (*Resume at …*, *Start over*).
+    pub fn focused_progress(&self) -> Option<&Progress> {
+        if self.screen != Screen::Channel {
+            return None;
+        }
+        match self.current_feed()?.focused_tile()? {
+            Tile::Video(video) => self.progress_of(&video.id),
+            _ => None,
+        }
+    }
+
+    /// The feed a screen shows, or `None` for screens without one (Player, Login). The channel
+    /// page's rows are not a `FeedId`: its two tabs are `ChannelPage::feed`.
     pub fn feed_id_of(&self, screen: Screen) -> Option<FeedId> {
         match screen {
             Screen::Home => Some(FeedId::Home),
@@ -693,7 +882,11 @@ impl AppState {
                 .as_ref()
                 .map(|c| FeedId::Category(c.id.clone())),
             Screen::Search => Some(FeedId::Search(self.search.results_for.clone())),
-            Screen::Player | Screen::Login | Screen::Settings | Screen::Multiview => None,
+            Screen::Player
+            | Screen::Login
+            | Screen::Settings
+            | Screen::Multiview
+            | Screen::Channel => None,
         }
     }
 
@@ -851,11 +1044,18 @@ impl AppState {
         }
     }
 
+    /// The feed of the current screen. On the channel page, the tab on screen.
     pub fn current_feed(&self) -> Option<&Feed> {
+        if self.screen == Screen::Channel {
+            return self.channel_page.as_ref().map(ChannelPage::feed);
+        }
         self.current_feed_id().and_then(|id| self.feed(&id))
     }
 
     pub fn current_feed_mut(&mut self) -> Option<&mut Feed> {
+        if self.screen == Screen::Channel {
+            return self.channel_page.as_mut().map(ChannelPage::feed_mut);
+        }
         let id = self.current_feed_id()?;
         self.feed_mut(&id)
     }

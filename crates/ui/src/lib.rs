@@ -9,11 +9,11 @@ slint::include_modules!();
 pub mod view_model;
 
 pub use view_model::{
-    apply_chat_image, apply_thumbnail, format_bitrate, format_fps, format_viewers, layout_name,
-    readable_name_colour, room_mode_text, send_problem_text, show_video, video_size, view_model,
-    CardVm, ChatLineKind, ChatLineVm, KeyVm, LayoutChipVm, MultiviewVm, MvTileVm, PieceVm,
-    PlaybackId, PopupRowVm, RowVm, ScreenId, Shape, StripVm, Thumbnail, ToastVm, Update, ViewModel,
-    CHAT_LINES_SHOWN,
+    apply_chat_image, apply_thumbnail, format_ago, format_bitrate, format_date, format_fps,
+    format_viewers, layout_name, readable_name_colour, room_mode_text, send_problem_text,
+    show_video, video_size, view_model, CardVm, ChatLineKind, ChatLineVm, KeyVm, LayoutChipVm,
+    MultiviewVm, MvTileVm, PieceVm, PlaybackId, PopupRowVm, RowVm, ScreenId, Shape, StripVm,
+    Thumbnail, ToastVm, Update, ViewModel, CHAT_LINES_SHOWN,
 };
 
 /// The size the layout is designed for and the scale that fits it to a window. They live in core,

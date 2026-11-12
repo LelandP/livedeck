@@ -1,0 +1,19 @@
+{
+    "data":  {
+                 "user":  {
+                              "stream":  {
+                                             "createdAt":  "2026-11-11T21:55:14Z"
+                                         },
+                              "videos":  {
+                                             "edges":  [
+                                                           {
+                                                               "node":  {
+                                                                            "id":  "2926188923",
+                                                                            "status":  "RECORDING"
+                                                                        }
+                                                           }
+                                                       ]
+                                         }
+                          }
+             }
+}

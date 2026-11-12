@@ -766,6 +766,283 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
 
     multiview(&ui);
     resume_card(&ui);
+    channel_page(&ui);
+    video_player(&ui);
+}
+
+/// A video on the Player screen: the HUD and seek bar lay out (no binding loop) with the played
+/// part (`Theme.accent`) along the bottom above the hints bar; the tap chip, the scrub, the menu
+/// and the end card all lay out; and the end card's focused row (`Theme.accent-light`) is drawn
+/// in the middle.
+fn video_player(ui: &MainWindow) {
+    let played =
+        |p: &Rgba8Pixel| (100..150).contains(&p.r) && (75..120).contains(&p.g) && p.b > 230;
+    let ring = |p: &Rgba8Pixel| (150..185).contains(&p.r) && (130..165).contains(&p.g) && p.b > 240;
+    let a_button = |p: &Rgba8Pixel| p.g > 150 && p.r < 150 && p.b < 120;
+    let shown = |ui: &MainWindow, s: &AppState| {
+        Update::full(view_model(s)).apply(ui);
+        render(ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        render(ui)
+    };
+    let health = |pos_ms: u64| Event::PlayerHealth {
+        slot: 0,
+        at_ms: 0,
+        health: htpc_core::Health {
+            stalled: false,
+            buffer_ms: 60_000,
+            pos_ms: Some(pos_ms),
+            length_ms: Some(3_600_000),
+        },
+    };
+
+    let (loading, _) = reduce(&channel_page_state(), Intent::Select);
+    assert!(loading.video.is_some());
+    shown(ui, &loading);
+    let s = reduce(&loading, Event::PlaybackStarted { slot: 0 }).0;
+    let chapter = |start_ms: u64, name: &str| htpc_core::Chapter {
+        start_ms,
+        length_ms: 0,
+        name: name.into(),
+    };
+    let s = reduce(
+        &s,
+        Event::VideoDetails(htpc_core::VideoDetails {
+            id: "1".into(),
+            length_s: 3_600,
+            chapters: vec![
+                chapter(0, "Just Chatting"),
+                chapter(900_000, "Hollow Knight"),
+            ],
+            muted: vec![htpc_core::Span {
+                start_s: 1_500,
+                length_s: 300,
+            }],
+            previews: None,
+        }),
+    )
+    .0;
+    // A third of the way in, inside the muted part.
+    let s = reduce(&s, health(1_600_000)).0;
+    let image = shown(ui, &s);
+    let bar = count(&image, 0..WIDTH, 600..HINTS_TOP, played);
+    assert!(
+        bar > 1_000,
+        "the seek bar's played part is not drawn: {bar}"
+    );
+    assert_eq!(
+        count(&image, 0..WIDTH, 0..600, played),
+        0,
+        "the seek bar is not along the bottom"
+    );
+    assert!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0);
+    assert_ne!(htpc_ui::video_size(ui, 0), (0, 0), "the video is drawn");
+
+    // Taps: the chip; a hold: the scrub, with the time above the playhead. Both lay out.
+    let (tapped, cmds) = reduce(&s, Intent::Right);
+    shown(ui, &tapped);
+    let id = cmds
+        .iter()
+        .find_map(|c| match c {
+            htpc_core::Command::HoldCheck { id } => Some(*id),
+            _ => None,
+        })
+        .expect("a hold check");
+    let (scrubbing, _) = reduce(&tapped, Event::HoldDue(id));
+    assert!(view_model(&scrubbing).video.scrubbing);
+    let image = shown(ui, &scrubbing);
+    assert!(count(&image, 0..WIDTH, 600..HINTS_TOP, played) > 1_000);
+
+    // The menu with a video's ten rows stays on screen above the HUD.
+    let (menu, _) = reduce(&s, Intent::Menu);
+    let image = shown(ui, &menu);
+    let first_ring_row = (0..HINTS_TOP)
+        .find(|&y| count(&image, 0..560, y..y + 1, ring) > 0)
+        .expect("the focused first row is drawn");
+    assert!(
+        first_ring_row >= 40,
+        "the video menu runs off the top: its first row is at y={first_ring_row}"
+    );
+
+    // The end card, in the middle, with the hints bar kept.
+    let (ended, _) = reduce(&s, Event::PlaybackEnded { slot: 0 });
+    let image = shown(ui, &ended);
+    assert!(
+        count(&image, 360..920, 200..600, ring) > 500,
+        "the end card's focused row is not drawn"
+    );
+    assert!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0);
+
+    // A video that is gone: the error screen lays out.
+    let (gone, _) = reduce(
+        &loading,
+        Event::PlaybackError {
+            slot: 0,
+            message: "This video is no longer available.".into(),
+        },
+    );
+    shown(ui, &gone);
+}
+
+/// The offline channel `sleepy_fox`'s page, opened from Home and loaded: a broadcast (focused),
+/// a subscriber-only one, and a clip.
+fn channel_page_state() -> AppState {
+    use htpc_core::{Channel, ChannelInfo, Clip, Video, VideoKind};
+    let video = |id: &str, sub_only: bool| Video {
+        id: id.into(),
+        channel: ChannelRef::twitch("sleepy_fox"),
+        channel_name: "Sleepy Fox".into(),
+        kind: VideoKind::Archive,
+        title: format!("broadcast {id}"),
+        category: "Hollow Knight".into(),
+        length_s: 3_600,
+        created_at: 1_794_335_302,
+        views: 0,
+        tint: Rgb::new(40, 60, 90),
+        thumbnail: None,
+        muted: Vec::new(),
+        sub_only,
+        recording: false,
+    };
+    let clip = Clip {
+        slug: "ThePerfectDodge".into(),
+        channel: ChannelRef::twitch("sleepy_fox"),
+        title: "the dodge".into(),
+        category: "Hollow Knight".into(),
+        length_s: 28,
+        views: 41_000,
+        clipped_by: "mossy_k".into(),
+        created_at: 1_794_335_302,
+        tint: Rgb::new(90, 40, 60),
+        thumbnail: None,
+    };
+    let offline = Tile::Channel(Channel {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        name: "Sleepy Fox".into(),
+        tint: Rgb::default(),
+    });
+    let (s, _) = init();
+    let (s, _) = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows: vec![Row::new(RowKind::TopLive, vec![offline])],
+        },
+    );
+    let (s, _) = reduce(&s, Intent::Select);
+    assert_eq!(s.screen, htpc_core::Screen::Channel);
+    let info = ChannelInfo {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        user_id: "77".into(),
+        name: "Sleepy Fox".into(),
+        avatar: None,
+        live: None,
+        last_live_at: Some(1_794_335_302),
+        loaded_at: 1_794_346_102,
+    };
+    let rows = vec![
+        Row::new(
+            RowKind::PastBroadcasts,
+            vec![
+                Tile::Video(video("1", false)),
+                Tile::Video(video("2", true)),
+            ],
+        ),
+        Row::new(RowKind::ClipsWeek, vec![Tile::Clip(clip)]),
+    ];
+    reduce(
+        &s,
+        Event::ChannelPageLoaded {
+            info: Box::new(info),
+            rows,
+        },
+    )
+    .0
+}
+
+/// The channel page lays out under the header and the hints bar, shows its tabs, focus ring and
+/// hints, and its subscribe card covers the page. No video renders on it.
+fn channel_page(ui: &MainWindow) {
+    let tab_on =
+        |p: &Rgba8Pixel| (100..150).contains(&p.r) && (75..120).contains(&p.g) && p.b > 230;
+    let ring = |p: &Rgba8Pixel| (150..185).contains(&p.r) && (130..165).contains(&p.g) && p.b > 240;
+    let x_button = |p: &Rgba8Pixel| p.b > 200 && (100..170).contains(&p.g) && p.r < 100;
+    let a_button = |p: &Rgba8Pixel| p.g > 150 && p.r < 150 && p.b < 120;
+    let white = |p: &Rgba8Pixel| p.r > 240 && p.g > 240 && p.b > 240;
+    let shown = |ui: &MainWindow, s: &AppState| {
+        Update::full(view_model(s)).apply(ui);
+        render(ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        render(ui)
+    };
+
+    let s = channel_page_state();
+    let image = shown(ui, &s);
+    // The Videos pill (top right) is lit, the focused broadcast has its ring, and the hints bar
+    // has A but no X: nothing was left part-way.
+    assert!(
+        count(&image, 1020..1140, 30..80, tab_on) > 2_000,
+        "no Videos tab"
+    );
+    assert_eq!(
+        count(&image, 1150..1250, 30..80, tab_on),
+        0,
+        "the Clips tab is lit too"
+    );
+    assert!(
+        count(&image, 130..500, 205..460, ring) > 800,
+        "no focus ring on the first card"
+    );
+    assert!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0);
+    assert_eq!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, x_button), 0);
+    assert_eq!(
+        htpc_ui::video_size(ui, 0),
+        (0, 0),
+        "a video is drawn on the page"
+    );
+
+    // Left part-way: X says *Start over*.
+    let mut saved = s.clone();
+    let htpc_core::Tile::Video(first) =
+        saved.channel_page.as_ref().unwrap().videos.rows[0].tiles[0].clone()
+    else {
+        panic!("the first card is a video");
+    };
+    saved.continue_watching = vec![htpc_core::Progress {
+        video: first,
+        pos_s: 1_000,
+        saved_at: 1,
+    }];
+    let image = shown(ui, &saved);
+    assert!(
+        count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, x_button) > 0,
+        "no X Start over"
+    );
+
+    // The Clips tab lights the other pill.
+    let (clips, _) = reduce(&s, Intent::PageRight);
+    let image = shown(ui, &clips);
+    assert_eq!(count(&image, 1020..1140, 30..80, tab_on), 0);
+    assert!(
+        count(&image, 1150..1250, 30..80, tab_on) > 1_500,
+        "no Clips tab"
+    );
+
+    // The subscribe card (A on the subscriber-only broadcast) covers the page with a QR code.
+    let mut s = s;
+    s.can_open_browser = true;
+    let (on_sub, _) = reduce(&s, Intent::Right);
+    let (card, _) = reduce(&on_sub, Intent::Select);
+    assert!(card.subscribe_card);
+    let before = count(&shown(ui, &on_sub), 300..980, 100..560, white);
+    let image = shown(ui, &card);
+    assert!(
+        count(&image, 300..980, 100..560, white) > before + 30_000,
+        "no QR code over the page"
+    );
+    // Only A and B are left in the hints bar.
+    assert!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0);
+    assert_eq!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, x_button), 0);
 }
 
 /// Home's *Resume multiview* card lays out its mosaic, and a preview that arrives later is

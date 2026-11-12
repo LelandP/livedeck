@@ -5,10 +5,14 @@ use std::time::Duration;
 
 use crate::{LoadOptions, Player, PlayerEvent, PlayerOption};
 
+/// One call to a [`FakePlayer`]. A load's start position and a speed change are in its
+/// [`LoadOptions`] and [`PlayerOption`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerCall {
     Load(String, LoadOptions),
     SetPaused(bool),
+    /// [`Player::seek`], in milliseconds.
+    Seek(u64),
     Stop,
     SetOption(PlayerOption),
     SetStats(bool),
@@ -58,6 +62,10 @@ impl Player for FakePlayer {
 
     fn set_paused(&self, paused: bool) {
         self.record(PlayerCall::SetPaused(paused));
+    }
+
+    fn seek(&self, to_ms: u64) {
+        self.record(PlayerCall::Seek(to_ms));
     }
 
     fn stop(&self) {
@@ -117,6 +125,8 @@ impl Player for UnavailablePlayer {
 
     fn set_paused(&self, _paused: bool) {}
 
+    fn seek(&self, _to_ms: u64) {}
+
     fn stop(&self) {}
 
     fn set_option(&self, _option: PlayerOption) {}
@@ -161,6 +171,43 @@ mod tests {
             ]
         );
         assert_eq!(*seen.lock().unwrap(), [PlayerEvent::Playing]);
+    }
+
+    #[test]
+    fn the_fake_records_start_positions_seeks_and_speed() {
+        let player = FakePlayer::new();
+        player.set_option(PlayerOption::Speed(1500));
+        player.load("https://x/v.m3u8", LoadOptions::video(4_360_000));
+        player.seek(4_370_000);
+        player.seek(0);
+        assert_eq!(
+            player.calls(),
+            [
+                PlayerCall::SetOption(PlayerOption::Speed(1500)),
+                PlayerCall::Load(
+                    "https://x/v.m3u8".into(),
+                    LoadOptions {
+                        latency: crate::Latency::Normal,
+                        start_ms: Some(4_360_000)
+                    }
+                ),
+                PlayerCall::Seek(4_370_000),
+                PlayerCall::Seek(0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_video_always_gets_the_normal_buffers() {
+        let low = LoadOptions {
+            latency: crate::Latency::Low,
+            start_ms: Some(0),
+        };
+        assert!(low.is_video());
+        assert_eq!(low.effective_latency(), crate::Latency::Normal);
+        let live = LoadOptions::default();
+        assert!(!live.is_video());
+        assert_eq!(live.effective_latency(), crate::Latency::Low);
     }
 
     #[test]

@@ -1,0 +1,28 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+screen=Player more=0
+  [#1 note: Resumed at 1:12:40 · Start over in the menu]
+screen=Player playback=Loading paused=false select="" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Hollow Knight"
+  bar: 1:12:40 / "4:12:08" head=2882 chapter="" ticks=[] muted=[(3569, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- a clip
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [CLIP] "sleepy_fox" | "the 0.4 s dodge" | "Clipped by mossy_k · Nov 10 · 41.0K views"
+  bar: 0:00 / "0:28" head=0 chapter="" ticks=[] muted=[] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=false end_card=false end_focus=0
+  stream card: "sleepy_fox" "the 0.4 s dodge"
+menu_open=true focus=0 select="Change"
+  > Quality = "Best available"
+    Speed = "1×"
+    Start over = "" (action)
+    Hardware decoding = "Auto"
+    Zoom = "Fit"
+    Stats = "Off"
+    Audio only = "Off"
+    Sleep timer = "Off"
+    Channel videos = "" (action)
+  help: Picture quality. Lower uses less data and battery. Reloads the video where it is.

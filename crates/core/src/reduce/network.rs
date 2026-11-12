@@ -51,8 +51,13 @@ pub(super) fn health(
 }
 
 /// Only a stream that plays is judged: not one loading (its buffer is still filling), offline,
-/// failed, paused or sound only.
+/// failed, paused or sound only. Never a video (vod-plan.md): its buffer runs minutes ahead and
+/// empties at every seek, which says nothing about the network (`video::health` takes its
+/// reports instead).
 fn counts(s: &AppState, slot: Slot) -> bool {
+    if s.video.is_some() {
+        return false;
+    }
     match &s.multiview {
         Some(mv) => mv.place_of_slot(slot).is_some_and(|place| {
             mv.tile(place).is_some_and(|t| t.state == Playback::Playing)

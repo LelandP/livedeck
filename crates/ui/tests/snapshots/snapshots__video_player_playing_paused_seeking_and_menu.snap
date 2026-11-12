@@ -1,0 +1,127 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- A on the first broadcast: loading
+screen=Player playback=Loading paused=false select="" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Hollow Knight"
+  bar: 0:00 / "4:12:08" head=0 chapter="" ticks=[] muted=[(3569, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- playing at 1:12:40, with chapters and muted parts
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:12:40 / "4:12:08" head=2882 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- paused
+screen=Player playback=Playing paused=true select="Resume" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:12:40 / "4:12:08" head=2882 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- two taps forward, adding up
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:13:00 / "4:12:08" head=2895 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="+20 s" side=1 seeking=true scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- one tap back
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:12:30 / "4:12:08" head=2875 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="−10 s" side=-1 seeking=true scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- held: scrubbing forward, a few steps in
+screen=Player playback=Playing paused=false select="Jump here" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:12:56 / "4:12:08" head=2892 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=true scrubbing=true speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- let go: the jump
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:12:56 / "4:12:08" head=2892 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- in a muted part
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:31:00 / "4:12:08" head=3609 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=true
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- the menu: a video's rows
+menu_open=true focus=0 select="Change"
+  > Quality = "Best available"
+    Speed = "1×"
+    Chapters = "2 of 5 · Hollow Depths · 21:00"
+    Start over = "" (action)
+    Hardware decoding = "Auto"
+    Zoom = "Fit"
+    Stats = "Off"
+    Audio only = "Off"
+    Sleep timer = "Off"
+    Channel videos = "" (action)
+  help: Picture quality. Lower uses less data and battery. Reloads the video where it is.
+-- speed 1.5x
+menu_open=true focus=1 select="Change"
+    Quality = "Best available"
+  > Speed = "1.5×"
+    Chapters = "2 of 5 · Hollow Depths · 21:00"
+    Start over = "" (action)
+    Hardware decoding = "Auto"
+    Zoom = "Fit"
+    Stats = "Off"
+    Audio only = "Off"
+    Sleep timer = "Off"
+    Channel videos = "" (action)
+  help: Faster or slower, with the pitch kept. For this video only.
+-- the chapter list, pointing at the next chapter
+menu_open=true focus=2 select="Jump there"
+    Quality = "Best available"
+    Speed = "1.5×"
+  > Chapters = "3 of 5 · Night Circuit · 2:10:00"
+    Start over = "" (action)
+    Hardware decoding = "Auto"
+    Zoom = "Fit"
+    Stats = "Off"
+    Audio only = "Off"
+    Sleep timer = "Off"
+    Channel videos = "" (action)
+  help: Left and Right pick a chapter, A jumps there. With the menu closed, LB and RB jump to the previous and next one.
+-- start over, and the HUD with the speed
+menu_open=true focus=3 select="Start over"
+    Quality = "Best available"
+    Speed = "1.5×"
+    Chapters = "3 of 5 · Night Circuit · 2:10:00"
+  > Start over = "" (action)
+    Hardware decoding = "Auto"
+    Zoom = "Fit"
+    Stats = "Off"
+    Audio only = "Off"
+    Sleep timer = "Off"
+    Channel videos = "" (action)
+  help: Plays the video again from 0:00.
+screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
+  bar: 1:12:40 / "4:12:08" head=2882 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="1.5×" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- the end card
+screen=Player playback=Playing paused=false select="Select" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 5 of 5: Just Chatting"
+  bar: 4:12:08 / "4:12:08" head=10000 chapter="Just Chatting" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=true end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+screen=Player playback=Playing paused=false select="Select" retry=false hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 5 of 5: Just Chatting"
+  bar: 4:12:08 / "4:12:08" head=10000 chapter="Just Chatting" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=true end_focus=2
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+-- a video that is gone
+screen=Player playback=Failed paused=false select="Retry" retry=true hints_menu=false
+  top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Hollow Knight"
+  bar: 0:00 / "4:12:08" head=0 chapter="" ticks=[] muted=[(3569, 238)] in_muted=false
+  seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
+  stream card: "Sleepy Fox" "No-hit run attempts, night 12"
+  error="This video is no longer available."

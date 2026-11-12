@@ -1,5 +1,37 @@
-use htpc_core::Intent;
+use htpc_core::{Dir, Intent};
 use slint::platform::Key;
+
+/// The direction of a key whose release is reported (`Intent::Released`): the left and right
+/// arrows, which seek in a video (a tap or a hold).
+fn arrow_dir(text: &str) -> Option<Dir> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if c == char::from(Key::LeftArrow) {
+        Some(Dir::Left)
+    } else if c == char::from(Key::RightArrow) {
+        Some(Dir::Right)
+    } else {
+        None
+    }
+}
+
+/// The system's auto-repeat of a held left or right arrow (`repeat` is Slint's
+/// `KeyEvent::repeat`), which the window takes and drops instead of mapping it with [`map_key`]:
+/// a held arrow is one press and, later, one release, as on a controller (whose D-pad never
+/// repeats). A video tells a tap from a hold by that. Other keys repeat as before, so a held Down
+/// still scrolls and a held Backspace still deletes.
+pub fn is_dropped_repeat(text: &str, repeat: bool) -> bool {
+    repeat && arrow_dir(text).is_some()
+}
+
+/// Maps a Slint key release: the left and right arrows report `Intent::Released`, everything
+/// else nothing.
+pub fn map_key_release(text: &str) -> Option<Intent> {
+    arrow_dir(text).map(Intent::Released)
+}
 
 /// Maps the `text` of a Slint `KeyEvent` to an intent. Unmapped keys return `None` so the
 /// window can let them propagate.
@@ -73,6 +105,49 @@ mod tests {
             assert_eq!(map_key(&c.to_string()), Some(Intent::Text(c)), "{c:?}");
         }
         assert_eq!(map_key(&key(Key::Space)), Some(Intent::Text(' ')));
+    }
+
+    #[test]
+    fn a_held_arrows_auto_repeat_is_dropped() {
+        for arrow in [key(Key::LeftArrow), key(Key::RightArrow)] {
+            assert!(is_dropped_repeat(&arrow, true), "{arrow:?}");
+            assert!(!is_dropped_repeat(&arrow, false), "the first press counts");
+        }
+    }
+
+    #[test]
+    fn other_keys_still_repeat() {
+        for other in [
+            key(Key::DownArrow),
+            key(Key::UpArrow),
+            key(Key::Backspace),
+            key(Key::Return),
+            "a".into(),
+        ] {
+            assert!(!is_dropped_repeat(&other, true), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn only_left_and_right_report_their_release() {
+        assert_eq!(
+            map_key_release(&key(Key::LeftArrow)),
+            Some(Intent::Released(Dir::Left))
+        );
+        assert_eq!(
+            map_key_release(&key(Key::RightArrow)),
+            Some(Intent::Released(Dir::Right))
+        );
+        for other in [
+            key(Key::UpArrow),
+            key(Key::DownArrow),
+            key(Key::Return),
+            key(Key::Escape),
+        ] {
+            assert_eq!(map_key_release(&other), None, "{other:?}");
+        }
+        assert_eq!(map_key_release("a"), None);
+        assert_eq!(map_key_release(""), None);
     }
 
     #[test]

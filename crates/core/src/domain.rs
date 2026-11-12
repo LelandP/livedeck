@@ -1,5 +1,7 @@
 //! Domain types. These are UI-agnostic: no Slint types, no pre-formatted strings.
 
+use crate::video::{Clip, Video};
+
 /// An sRGB colour. The placeholder tint shown until a card's thumbnail has loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rgb {
@@ -39,6 +41,8 @@ pub struct Features {
     pub subscribe: bool,
     /// Write in chat. Kick needs a Kick sign-in, which LiveDeck does not have.
     pub chat_send: bool,
+    /// A channel page with past broadcasts, highlights and clips (vod-plan.md). Twitch's GQL API.
+    pub videos: bool,
 }
 
 impl Platform {
@@ -49,12 +53,14 @@ impl Platform {
                 hype_train: true,
                 subscribe: true,
                 chat_send: true,
+                videos: true,
             },
             Platform::Kick => Features {
                 raids: false,
                 hype_train: false,
                 subscribe: false,
                 chat_send: false,
+                videos: false,
             },
         }
     }
@@ -159,6 +165,10 @@ pub enum Tile {
     Channel(Channel),
     /// *Resume multiview*, at the start of Home's first row of cards.
     Resume(ResumeCard),
+    /// A past broadcast or highlight (a channel page's rows).
+    Video(Video),
+    /// A clip (a channel page's Clips tab).
+    Clip(Clip),
 }
 
 impl Tile {
@@ -168,6 +178,8 @@ impl Tile {
         match self {
             Tile::Stream(s) => s.thumbnail.as_deref(),
             Tile::Category(c) => c.thumbnail.as_deref(),
+            Tile::Video(v) => v.thumbnail.as_deref(),
+            Tile::Clip(c) => c.thumbnail.as_deref(),
             Tile::Channel(_) | Tile::Resume(_) => None,
         }
     }
@@ -185,12 +197,13 @@ impl Tile {
         }
     }
 
-    /// The channel of a stream or channel card. `None` for a category and the resume card.
+    /// The channel of a stream or channel card. `None` for a category, the resume card, and
+    /// video and clip cards: those are about the video, so multiview and favorites leave them out.
     pub fn channel(&self) -> Option<&ChannelRef> {
         match self {
             Tile::Stream(s) => Some(&s.channel),
             Tile::Channel(c) => Some(&c.channel),
-            Tile::Category(_) | Tile::Resume(_) => None,
+            Tile::Category(_) | Tile::Resume(_) | Tile::Video(_) | Tile::Clip(_) => None,
         }
     }
 
@@ -204,6 +217,9 @@ impl Tile {
             Tile::Category(c) => (Platform::Twitch, &c.id),
             Tile::Channel(c) => (c.channel.platform, &c.channel.login),
             Tile::Resume(_) => (Platform::Twitch, RESUME_KEY),
+            // A channel page row holds only videos or only clips, so the id is enough.
+            Tile::Video(v) => (v.channel.platform, &v.id),
+            Tile::Clip(c) => (c.channel.platform, &c.slug),
         }
     }
 }
@@ -238,6 +254,23 @@ pub enum RowKind {
     /// *Resume multiview* card at the start of the first row, and it is never drawn as a row
     /// itself, except to hold that card when Home has no other row of streams.
     Resume,
+    /// A channel page: its live stream, one card, only while live (vod-plan.md section 2).
+    LiveNow,
+    /// A channel page: past broadcasts, newest first.
+    PastBroadcasts,
+    /// A channel page: highlights, newest first.
+    Highlights,
+    /// A channel page's Clips tab: the most watched clips of the last 7 days.
+    ClipsWeek,
+    /// A channel page's Clips tab: the most watched clips ever.
+    ClipsAllTime,
+}
+
+impl RowKind {
+    /// Rows of a channel page's Clips tab. The others belong to its Videos tab.
+    pub fn is_clips(self) -> bool {
+        matches!(self, RowKind::ClipsWeek | RowKind::ClipsAllTime)
+    }
 }
 
 /// How a row continues past the tiles it already has.

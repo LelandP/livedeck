@@ -2128,7 +2128,10 @@ version = "0.5.1"
 dependencies = [
  "glow",
  "libmpv2",
+ "reqwest",
+ "serde_json",
  "slint",
+ "tokio",
  "tracing",
 ]
 

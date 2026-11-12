@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::runner::{ProcessOutput, ProcessRunner, RunError};
-use crate::{PlaylistUrl, ResolveError, Site, StreamResolver};
+use crate::{PlaylistUrl, ResolveError, StreamResolver, Target};
 
 /// The `(program, args)` of one call.
 type Call = (String, Vec<String>);
@@ -45,32 +45,43 @@ impl ProcessRunner for FakeRunner {
     }
 }
 
-/// A [`StreamResolver`] that answers every channel with the same result.
+/// A [`StreamResolver`] that answers every target with the same result, and records what it was
+/// asked.
 #[derive(Debug, Clone)]
 pub struct FakeResolver {
     pub result: Result<PlaylistUrl, ResolveError>,
+    asked: Arc<Mutex<Vec<(Target, String)>>>,
 }
 
 impl FakeResolver {
-    /// Resolves every channel to `url`.
+    /// Resolves every target to `url`.
     pub fn playing(url: &str) -> Self {
         Self {
             result: Ok(PlaylistUrl(url.to_owned())),
+            asked: Arc::default(),
         }
     }
 
+    /// Fails every target with `error`.
     pub fn failing(error: ResolveError) -> Self {
-        Self { result: Err(error) }
+        Self {
+            result: Err(error),
+            asked: Arc::default(),
+        }
+    }
+
+    /// The `(target, quality)` of every resolve so far. Clones share the list.
+    pub fn asked(&self) -> Vec<(Target, String)> {
+        self.asked.lock().expect("asked lock").clone()
     }
 }
 
 impl StreamResolver for FakeResolver {
-    async fn resolve(
-        &self,
-        _site: Site,
-        _channel: &str,
-        _quality: &str,
-    ) -> Result<PlaylistUrl, ResolveError> {
+    async fn resolve(&self, target: &Target, quality: &str) -> Result<PlaylistUrl, ResolveError> {
+        self.asked
+            .lock()
+            .expect("asked lock")
+            .push((target.clone(), quality.to_owned()));
         self.result.clone()
     }
 }

@@ -9,8 +9,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::{
-    ChannelResult, Error, FollowedChannel, Game, HypeTrain, Page, PageRequest, Result, SendOutcome,
-    StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, ChannelVideos, Error, FollowedChannel, Game, HypeTrain, LiveArchive, Page,
+    PageRequest, Result, SendOutcome, StreamInfo, TwitchApi, UserInfo, VideoDetails,
 };
 
 /// Renews the credentials of the inner API. The app's session implements it.
@@ -128,5 +128,17 @@ impl<A: TwitchApi, R: Refresher> TwitchApi for RefreshingApi<A, R> {
 
     async fn hype_train(&self, login: &str) -> Result<Option<HypeTrain>> {
         self.with_refresh(|| self.inner.hype_train(login)).await
+    }
+
+    async fn channel_videos(&self, login: &str) -> Result<Option<ChannelVideos>> {
+        self.with_refresh(|| self.inner.channel_videos(login)).await
+    }
+
+    async fn video_details(&self, id: &str) -> Result<Option<VideoDetails>> {
+        self.with_refresh(|| self.inner.video_details(id)).await
+    }
+
+    async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
+        self.with_refresh(|| self.inner.live_archive(login)).await
     }
 }

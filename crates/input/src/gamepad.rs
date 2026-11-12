@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use gilrs::{Button, EventType, Gamepad, Gilrs};
-use htpc_core::Intent;
+use htpc_core::{Dir, Intent};
 
 /// Maps a gamepad button (gilrs uses positional names: South is A on an Xbox pad) to an intent.
 pub fn map_button(button: Button) -> Option<Intent> {
@@ -26,6 +26,55 @@ pub fn map_button(button: Button) -> Option<Intent> {
         _ => return None,
     };
     Some(intent)
+}
+
+/// The direction of a button whose release is reported (`Intent::Released`): the D-pad's left
+/// and right, which seek in a video. Nothing else needs its release.
+pub fn held_dir(button: Button) -> Option<Dir> {
+    match button {
+        Button::DPadLeft => Some(Dir::Left),
+        Button::DPadRight => Some(Dir::Right),
+        _ => None,
+    }
+}
+
+/// Which of ◀ ▶ each controller holds. A release is sent only for a press that was sent (a press
+/// dropped as a duplicate, or from a controller Steam replaced, has its release dropped too), and
+/// a controller that goes away lets go of what it held: its key-up will never come.
+#[derive(Debug, Default)]
+struct Held {
+    down: Vec<(usize, Dir)>,
+}
+
+impl Held {
+    /// A press of `button` on `pad` was sent.
+    fn pressed(&mut self, pad: usize, button: Button) {
+        if let Some(dir) = held_dir(button) {
+            if !self.down.contains(&(pad, dir)) {
+                self.down.push((pad, dir));
+            }
+        }
+    }
+
+    /// `button` was let go on `pad`: the release to send, if its press was sent.
+    fn released(&mut self, pad: usize, button: Button) -> Option<Intent> {
+        let dir = held_dir(button)?;
+        let at = self.down.iter().position(|d| *d == (pad, dir))?;
+        self.down.remove(at);
+        Some(Intent::Released(dir))
+    }
+
+    /// `pad` went away: the releases of what it held.
+    fn disconnected(&mut self, pad: usize) -> Vec<Intent> {
+        let mut gone = Vec::new();
+        self.down.retain(|(p, dir)| {
+            if *p == pad {
+                gone.push(Intent::Released(*dir));
+            }
+            *p != pad
+        });
+        gone
+    }
 }
 
 /// How long one blocking poll waits before looping again.
@@ -89,8 +138,9 @@ impl Dedup {
 }
 
 /// Polls gamepads on a dedicated thread (`Gilrs` is not `Send`) and calls `on_intent` for each
-/// mapped button press. The thread is detached: it ends when `on_intent` returns `false`
-/// (the receiver is gone) or when the process exits.
+/// mapped button press, and for the release of the D-pad's left and right (`Intent::Released`,
+/// also when the controller goes away while holding one). The thread is detached: it ends when
+/// `on_intent` returns `false` (the receiver is gone) or when the process exits.
 ///
 /// Returns `None` if no gamepad backend is available. Keyboard input (and Steam Input's
 /// keyboard mapping) keeps working in that case.
@@ -121,11 +171,13 @@ where
                 log_connected(&pad, &ignored);
             }
             let mut dedup = Dedup::default();
+            let mut held = Held::default();
             loop {
                 let Some(ev) = gilrs.next_event_blocking(Some(POLL)) else {
                     continue;
                 };
-                let intent = match ev.event {
+                let pad_id: usize = ev.id.into();
+                let intents: Vec<Intent> = match ev.event {
                     EventType::ButtonPressed(button, _) => {
                         let pad = gilrs.gamepad(ev.id);
                         // Skip a controller Steam has replaced, but only while another one is
@@ -134,24 +186,31 @@ where
                             && gilrs
                                 .gamepads()
                                 .any(|(id, other)| id != ev.id && !is_listed(&other, &ignored));
-                        if replaced || !dedup.accept(button, ev.id.into(), Instant::now()) {
+                        if replaced || !dedup.accept(button, pad_id, Instant::now()) {
                             tracing::trace!(?button, name = pad.name(), "duplicate press dropped");
-                            None
+                            Vec::new()
                         } else {
-                            map_button(button)
+                            let intent = map_button(button);
+                            if intent.is_some() {
+                                held.pressed(pad_id, button);
+                            }
+                            intent.into_iter().collect()
                         }
+                    }
+                    EventType::ButtonReleased(button, _) => {
+                        held.released(pad_id, button).into_iter().collect()
                     }
                     EventType::Connected => {
                         log_connected(&gilrs.gamepad(ev.id), &ignored);
-                        None
+                        Vec::new()
                     }
                     EventType::Disconnected => {
                         tracing::info!("gamepad disconnected");
-                        None
+                        held.disconnected(pad_id)
                     }
-                    _ => None,
+                    _ => Vec::new(),
                 };
-                if let Some(intent) = intent {
+                for intent in intents {
                     if !on_intent(intent) {
                         return;
                     }
@@ -217,6 +276,68 @@ mod tests {
         let list = parse_ignore_list("0x28de/0x1205, 0x045E/0x028e,junk,0x1/zz");
         assert_eq!(list, HashSet::from([(0x28de, 0x1205), (0x045e, 0x028e)]));
         assert!(parse_ignore_list("").is_empty());
+    }
+
+    #[test]
+    fn only_left_and_right_report_their_release() {
+        assert_eq!(held_dir(Button::DPadLeft), Some(Dir::Left));
+        assert_eq!(held_dir(Button::DPadRight), Some(Dir::Right));
+        for b in [
+            Button::DPadUp,
+            Button::DPadDown,
+            Button::South,
+            Button::East,
+            Button::LeftTrigger,
+            Button::Start,
+        ] {
+            assert_eq!(held_dir(b), None, "{b:?}");
+        }
+    }
+
+    #[test]
+    fn a_release_follows_its_press() {
+        let mut held = Held::default();
+        held.pressed(0, Button::DPadRight);
+        assert_eq!(
+            held.released(0, Button::DPadRight),
+            Some(Intent::Released(Dir::Right))
+        );
+        // Once only.
+        assert_eq!(held.released(0, Button::DPadRight), None);
+        // Other buttons never report a release.
+        held.pressed(0, Button::South);
+        assert_eq!(held.released(0, Button::South), None);
+    }
+
+    #[test]
+    fn a_release_whose_press_was_not_sent_is_dropped() {
+        // The second pad's press was a duplicate (Steam's virtual pad): it was never sent, so
+        // neither is its release, while the first pad's is.
+        let mut held = Held::default();
+        held.pressed(0, Button::DPadLeft);
+        assert_eq!(held.released(1, Button::DPadLeft), None);
+        assert_eq!(
+            held.released(0, Button::DPadLeft),
+            Some(Intent::Released(Dir::Left))
+        );
+    }
+
+    #[test]
+    fn a_controller_that_goes_away_lets_go_of_what_it_held() {
+        let mut held = Held::default();
+        held.pressed(0, Button::DPadLeft);
+        held.pressed(0, Button::DPadRight);
+        held.pressed(1, Button::DPadRight);
+        assert_eq!(
+            held.disconnected(0),
+            [Intent::Released(Dir::Left), Intent::Released(Dir::Right)]
+        );
+        assert!(held.disconnected(0).is_empty(), "nothing twice");
+        // The other pad still holds its own.
+        assert_eq!(
+            held.released(1, Button::DPadRight),
+            Some(Intent::Released(Dir::Right))
+        );
     }
 
     #[test]

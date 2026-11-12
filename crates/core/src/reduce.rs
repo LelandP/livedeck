@@ -3,10 +3,12 @@
 //! All navigation behaviour lives here, not in the Slint files: the back stack, paged feeds (Home,
 //! Browse, Category) and the commands needed to fetch data.
 
+mod channel;
 mod favorites;
 mod multiview;
 mod network;
 mod resume;
+mod video;
 
 use std::collections::HashSet;
 
@@ -54,6 +56,12 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
 }
 
 fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
+    // A release is not a button press: only a video's seeking listens, whatever is in front of it
+    // (a hold started before the prompt or menu opened still ends). Every other screen ignores it.
+    if let Intent::Released(dir) = intent {
+        video::released(s, dir, cmds);
+        return;
+    }
     let Some(intent) = typed_key(s, intent) else {
         return;
     };
@@ -81,9 +89,11 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             pulse_hud(s);
         }
         // Settings has no cards, but shares the rail handling and the Left-opens-the-rail rule.
+        // So does the channel page, which sits above the screen it was opened from.
         Screen::Home
         | Screen::Browse
         | Screen::Category
+        | Screen::Channel
         | Screen::Following
         | Screen::Favorites
         | Screen::Search
@@ -267,6 +277,8 @@ fn refresh_visible_feed(s: &AppState, cmds: &mut Vec<Command>) {
 fn open_following(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.back_stack.clear();
     s.category = None;
+    s.channel_page = None;
+    s.subscribe_card = false;
     s.screen = Screen::Following;
     s.rail.index = RailEntry::Following;
     s.following.loading = true;
@@ -291,6 +303,10 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     }
     if let Some(row) = s.player_menu {
         player_menu_intent(s, row, intent, cmds);
+        return;
+    }
+    if s.video.is_some() {
+        video::intent(s, intent, cmds);
         return;
     }
     if s.multiview.is_some() && multiview::full_screen_intent(s, intent, cmds) {
@@ -324,13 +340,14 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         }
         // Any other button only brings the HUD back.
         Intent::Up | Intent::Down | Intent::Left | Intent::Right => pulse_hud(s),
-        // Typing never reaches the player (see `typed_key`).
+        // Typing never reaches the player (see `typed_key`), nor do releases (`on_intent`).
         Intent::Pick { .. }
         | Intent::RailPick(_)
         | Intent::Text(_)
         | Intent::Erase
         | Intent::PageLeft
-        | Intent::PageRight => {}
+        | Intent::PageRight
+        | Intent::Released(_) => {}
     }
 }
 
@@ -425,7 +442,8 @@ fn compose_common(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         | Intent::Select
         | Intent::View
         | Intent::Pick { .. }
-        | Intent::RailPick(_) => {}
+        | Intent::RailPick(_)
+        | Intent::Released(_) => {}
     }
 }
 
@@ -501,19 +519,39 @@ fn player_menu_intent(
     intent: Intent,
     cmds: &mut Vec<Command>,
 ) {
+    // A live stream's rows, a video's or a clip's.
+    let rows = s.player_menu_rows();
     match intent {
-        Intent::Up => s.player_menu = Some(row.prev()),
-        Intent::Down => s.player_menu = Some(row.next()),
+        Intent::Up => s.player_menu = Some(row.step(rows, -1)),
+        Intent::Down => s.player_menu = Some(row.step(rows, 1)),
         Intent::Select if row == PlayerMenuRow::Subscribe => {
             s.subscribe_card = s.on_screen_features().subscribe;
         }
         // Signed out the row only says to sign in.
         Intent::Select if row == PlayerMenuRow::WriteChat => open_compose(s),
+        // The stream (or video) stops and the page takes the player's place, so nothing below
+        // applies. A video goes back to the page it was opened from.
+        Intent::Select if row == PlayerMenuRow::ChannelVideos => {
+            if s.video.is_some() {
+                video::to_channel_page(s, cmds);
+            } else {
+                channel::open_from_player(s, cmds);
+            }
+            return;
+        }
+        Intent::Select if row == PlayerMenuRow::StartOver => video::start_over(s, cmds),
+        // Chapters: Left and Right pick one, A jumps there.
+        Intent::Select if row == PlayerMenuRow::Chapters => video::menu_jump(s, cmds),
+        Intent::Right | Intent::Left if row == PlayerMenuRow::Chapters => {
+            video::menu_point(s, intent == Intent::Right);
+        }
         // Action rows have no value to step through.
         Intent::Right | Intent::Left if row.is_action() => {}
         Intent::Right | Intent::Select => change_player_option(s, row, true, cmds),
         Intent::Left => change_player_option(s, row, false, cmds),
         Intent::Back | Intent::Menu => s.player_menu = None,
+        // A video has no live chat (chat replay is phase 6).
+        Intent::ToggleChat if s.video.is_some() => {}
         Intent::ToggleChat => s.chat_open = !s.chat_open,
         Intent::Retry
         | Intent::View
@@ -522,7 +560,8 @@ fn player_menu_intent(
         | Intent::Text(_)
         | Intent::Erase
         | Intent::PageLeft
-        | Intent::PageRight => {}
+        | Intent::PageRight
+        | Intent::Released(_) => {}
     }
     pulse_hud(s);
 }
@@ -584,25 +623,34 @@ fn change_player_option(
                 }
             }
         }
-        // Action rows, handled in `player_menu_intent`.
-        PlayerMenuRow::Subscribe | PlayerMenuRow::WriteChat => {}
+        // A video's own speed.
+        PlayerMenuRow::Speed => video::change_speed(s, forward, cmds),
+        // Action rows, and the chapter list, handled in `player_menu_intent`.
+        PlayerMenuRow::Subscribe
+        | PlayerMenuRow::WriteChat
+        | PlayerMenuRow::ChannelVideos
+        | PlayerMenuRow::StartOver
+        | PlayerMenuRow::Chapters => {}
     }
 }
 
-/// Input while the subscribe card is open. A opens the page in a browser where there is one we
-/// can show, B (or Start) closes the card and returns to the menu. The stream keeps playing and
-/// every other button is ignored.
+/// Input while the subscribe card is open, over the stream or over the channel page. A opens the
+/// page in a browser where there is one we can show, B (or Start) closes the card and returns to
+/// the menu (or the page). The stream keeps playing and every other button is ignored.
 fn subscribe_card_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
         Intent::Select if s.can_open_browser => {
-            if let Some(stream) = &s.now_playing {
-                cmds.push(Command::OpenUrl(subscribe_url(&stream.channel.login)));
+            if let Some(channel) = s.subscribe_channel() {
+                cmds.push(Command::OpenUrl(subscribe_url(&channel.login)));
             }
         }
         Intent::Back | Intent::Menu => s.subscribe_card = false,
         _ => {}
     }
-    pulse_hud(s);
+    // The HUD belongs to the stream, not to the channel page under the card.
+    if s.screen == Screen::Player {
+        pulse_hud(s);
+    }
 }
 
 /// Input while the raid card is open. A follows the raid at once, B stays on this channel. Every
@@ -845,6 +893,11 @@ fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
 /// stays `Playing`: the app loads the new one behind it and swaps at its first frame, so the
 /// picture never stops. A stream that does not play starts again as in `start_playback`.
 fn reload_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
+    // A video reloads where it is (`PlayVideo` at its position).
+    if s.video.is_some() {
+        video::reload(s, cmds);
+        return;
+    }
     if s.now_playing.is_none() {
         return;
     }
@@ -921,6 +974,8 @@ fn toggle_pause(s: &mut AppState, cmds: &mut Vec<Command>) {
 fn window_focus(s: &mut AppState, focused: bool, cmds: &mut Vec<Command>) {
     s.in_background = !focused;
     if !focused {
+        // The key-up of a held ◀ or ▶ goes to the app in front now: losing focus lets go.
+        video::let_go(s, cmds);
         pause_in_background(s, cmds);
         return;
     }
@@ -962,7 +1017,7 @@ fn pause_in_background(s: &mut AppState, cmds: &mut Vec<Command>) {
 /// The current feed is separate rows (Home, Following), where each row keeps its own column.
 /// In a grid (Browse, a category) Up and Down keep the column instead.
 fn per_row_cols(s: &AppState) -> bool {
-    s.current_feed_id().is_some_and(|id| !id.is_grid())
+    s.screen == Screen::Channel || s.current_feed_id().is_some_and(|id| !id.is_grid())
 }
 
 fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
@@ -1016,13 +1071,14 @@ fn home_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         }
         return;
     }
-    if intent == Intent::View {
+    if intent == Intent::View && s.screen != Screen::Channel {
         multiview::browse_view(s);
         return;
     }
 
     match s.screen {
         Screen::Settings => settings_intent(s, intent, cmds),
+        Screen::Channel => channel::intent(s, intent, cmds),
         Screen::Search if s.search.in_results => search_results_intent(s, intent, cmds),
         Screen::Search => keyboard_intent(s, intent, cmds),
         _ => feed_intent(s, intent, cmds),
@@ -1069,12 +1125,14 @@ fn keyboard_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Intent::Back | Intent::Erase if s.search.query.is_empty() => s.rail.focused = true,
         Intent::Back | Intent::Erase => edit_search(s, cmds, keyboard::backspace),
         Intent::Text(c) => type_on_search(s, c, cmds),
-        // Search has one page of keys. View is handled before (`home_intent`).
+        // Search has one page of keys. View is handled before (`home_intent`), and releases
+        // never get here (`on_intent`).
         Intent::Pick { .. }
         | Intent::RailPick(_)
         | Intent::PageLeft
         | Intent::PageRight
-        | Intent::View => {}
+        | Intent::View
+        | Intent::Released(_) => {}
     }
 }
 
@@ -1088,7 +1146,7 @@ fn search_results_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Comman
         Intent::Retry if s.search.feed.error.is_some() => resend_search(s, cmds),
         Intent::Text(c) => type_on_search(s, c, cmds),
         Intent::Erase => edit_search(s, cmds, keyboard::backspace),
-        Intent::ToggleChat => {}
+        // Y (feed_intent) opens the channel page of the result.
         _ => feed_intent(s, intent, cmds),
     }
 }
@@ -1192,6 +1250,8 @@ fn feed_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         }
         Intent::Select => select_tile(s, cmds),
         Intent::Retry => retry(s, cmds),
+        // Y: the channel page of a Twitch stream or channel card.
+        Intent::ToggleChat => channel::open_from_card(s, cmds),
         // Category is the only feed screen above another one, so it is the only one Back leaves.
         // On a root screen there is nowhere further back: B opens the sidebar, and B there asks to quit.
         Intent::Back if s.screen == Screen::Category => back(s, cmds),
@@ -1268,7 +1328,23 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::PlaybackError { slot, message } if s.multiview.is_some() => {
             multiview::tile_error(s, slot, message);
         }
+        // A video's player reports to the video. `now_playing` is `None` meanwhile, so the live
+        // arms below (which match their channel against it) can never take a video's events,
+        // and once the video is left its late reports find no video here.
+        Event::PlaybackStarted { slot } if s.video.is_some() => video::started(s, slot, cmds),
+        Event::PlaybackEnded { slot } if s.video.is_some() => video::ended(s, slot),
+        Event::PlaybackError { slot, message } if s.video.is_some() => {
+            video::failed(s, slot, message);
+        }
         Event::QualitySettleDue(id) => multiview::settle_due(s, id, cmds),
+        Event::SeekSettleDue(id) => video::settle_due(s, id, cmds),
+        Event::HoldDue(id) => video::hold_due(s, id, cmds),
+        Event::ScrubTickDue(id) => video::scrub_tick(s, id, cmds),
+        // A video's reports carry its position, and are kept out of the slow-network rule: its
+        // buffer is minutes long and a seek empties it, which says nothing about the network.
+        Event::PlayerHealth { slot, health, .. } if s.video.is_some() => {
+            video::health(s, slot, health);
+        }
         Event::PlayerHealth {
             slot,
             at_ms,
@@ -1492,6 +1568,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.room_mode.apply(change);
             }
         }
+        Event::ChannelPageLoaded { info, rows } => channel::loaded(s, *info, rows, cmds),
+        Event::ChannelPageFailed { channel, message } => channel::failed(s, &channel, message),
+        Event::VideoDetails(details) => video::details(s, details),
         Event::WentLive(streams) => went_live(s, streams, cmds),
         Event::ToastExpired(id) => s.toasts.retain(|t| t.id != id),
         Event::SleepTimerTick { id, left_min } => {
@@ -1728,19 +1807,28 @@ fn retry(s: &mut AppState, cmds: &mut Vec<Command>) {
 
 /// A / Enter on the focused card.
 fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.screen == Screen::Channel {
+        channel::select(s, cmds);
+        return;
+    }
     match s.focused_tile().cloned() {
         Some(Tile::Stream(stream)) => open_player(s, stream, cmds),
-        // A followed channel that is offline. Opening it asks the resolver, which is the
-        // authority (the list can be a minute old), and shows the end screen if it is still off.
-        // Its chat still works, as on Twitch.
-        Some(Tile::Channel(channel)) => {
+        Some(Tile::Channel(card)) => {
+            // An offline Twitch channel opens its channel page: its past broadcasts and clips
+            // are what there is to watch.
+            if channel::open_from_offline_card(s, &card.channel, &card.name, cmds) {
+                return;
+            }
+            // A channel on a platform without a channel page (Kick). Opening it asks the
+            // resolver, which is the authority (the list can be a minute old), and shows the end
+            // screen if it is still off. Its chat still works, as on Twitch.
             let stream = Stream {
-                channel: channel.channel,
+                channel: card.channel,
                 user_id: String::new(),
                 title: String::new(),
                 category: String::new(),
                 viewers: 0,
-                tint: channel.tint,
+                tint: card.tint,
                 thumbnail: None,
             };
             open_player(s, stream, cmds);
@@ -1757,7 +1845,8 @@ fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
             cmds.push(Command::LoadFeed { feed });
         }
         Some(Tile::Resume(card)) => multiview::resume(s, card, cmds),
-        None => {}
+        // Only the channel page shows these (`channel::select`).
+        Some(Tile::Video(_) | Tile::Clip(_)) | None => {}
     }
 }
 
@@ -1832,6 +1921,8 @@ fn activate_rail(s: &mut AppState, entry: RailEntry, cmds: &mut Vec<Command>) {
 fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
     s.back_stack.clear();
     s.category = None;
+    s.channel_page = None;
+    s.subscribe_card = false;
     s.screen = target;
     // The directory loads the first time it is opened. After that, Retry reloads it.
     if target == Screen::Browse && s.browse.rows.is_empty() && !s.browse.loading {
@@ -1845,6 +1936,7 @@ fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
 /// B / Escape on Player, Login or Category. Like the scaffold, it always closes chat.
 fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     match s.screen {
+        Screen::Player if s.video.is_some() => video::leave(s, cmds),
         Screen::Player => {
             cmds.push(Command::StopPlayback { slot: MAIN_SLOT });
             if s.session.stats {
@@ -1857,6 +1949,10 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
         }
         Screen::Login => leave_login(s, cmds),
         Screen::Category => s.category = None,
+        Screen::Channel => {
+            s.channel_page = None;
+            s.subscribe_card = false;
+        }
         _ => {}
     }
     s.chat_open = false;

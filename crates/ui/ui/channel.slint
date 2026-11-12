@@ -1,0 +1,168 @@
+import { Theme } from "theme.slint";
+import { RowData } from "types.slint";
+import { StreamCard } from "components.slint";
+
+// A tab under the channel's name: Videos or Clips. LB and RB switch (the hints bar says so).
+component TabPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+
+    height: 40px;
+    width: tab-text.preferred-width + 44px;
+    border-radius: 20px;
+    background: root.on ? Theme.accent : Theme.surface;
+    animate background { duration: Theme.t-fast; }
+
+    tab-text := Text {
+        text: root.label;
+        color: root.on ? Theme.text : Theme.muted;
+        font-size: Theme.fs-body;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A channel's page: the profile picture, the name and whether it is live, the Videos / Clips tabs,
+// and rows of cards that scroll like Home's. The focused row slides to a fixed anchor under the
+// header, and rows scrolling up pass underneath it. Which card has focus is decided in Rust.
+export component ChannelContent inherits Rectangle {
+    in property <[RowData]> rows;
+    in property <int> sel-row;
+    in property <int> sel-col;
+    // The column each row is scrolled to, so a row keeps its place while another one is focused.
+    in property <[int]> row-cols;
+    in property <bool> active;
+    in property <string> name;
+    in property <image> avatar;
+    // The first letter of the name, shown until the profile picture has arrived.
+    in property <string> initial;
+    in property <bool> live;
+    // "Live now", or "Offline - last live 3 hours ago". Empty until the page has loaded.
+    in property <string> status;
+    // 0 Videos, 1 Clips.
+    in property <int> tab;
+    callback picked(int, int);
+    clip: true;
+
+    property <length> left: Theme.safe-x - 24px;
+    property <length> header-h: 112px;
+
+    Rectangle {
+        y: root.header-h + 12px - root.sel-row * Theme.row-h;
+        animate y { duration: Theme.t-med; easing: ease-out; }
+
+        for r[ri] in root.rows : Rectangle {
+            y: ri * Theme.row-h;
+            height: Theme.row-h;
+            opacity: ri == root.sel-row ? 1.0 : 0.6;
+            animate opacity { duration: Theme.t-med; }
+
+            Text {
+                x: root.left;
+                y: 0px;
+                text: r.title;
+                color: ri == root.sel-row ? Theme.accent-light : Theme.muted;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                y: 44px;
+                x: -max(0, (ri == root.sel-row ? root.sel-col : root.row-cols[ri]) - 1) * Theme.slot-width(r.shape);
+                animate x { duration: Theme.t-med; easing: ease-out; }
+
+                for item[ci] in r.items : StreamCard {
+                    x: root.left + ci * Theme.slot-width(r.shape);
+                    item: item;
+                    shape: r.shape;
+                    focused: root.active && ri == root.sel-row && ci == root.sel-col && !item.loading;
+                    dimmed: ri != root.sel-row;
+                    clicked => { root.picked(ri, ci); }
+                }
+            }
+        }
+    }
+
+    // The header sits on a solid strip so rows scrolling up pass underneath it. `y` is needed:
+    // Slint centres an element that has a height but no position.
+    Rectangle {
+        y: 0px;
+        height: root.header-h;
+        background: Theme.bg;
+
+        // The profile picture over its initial.
+        Rectangle {
+            x: root.left;
+            y: 20px;
+            width: 72px;
+            height: 72px;
+            border-radius: 36px;
+            clip: true;
+            background: Theme.surface-high;
+            Text {
+                text: root.initial;
+                color: Theme.muted;
+                font-size: Theme.fs-display;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.avatar;
+                image-fit: cover;
+                opacity: self.source.width > 0 ? 1.0 : 0.0;
+                animate opacity { duration: Theme.t-med; }
+            }
+        }
+
+        // The name, and under it the dot and words of its state.
+        VerticalLayout {
+            x: root.left + 72px + 20px;
+            y: 20px;
+            width: tabs.x - self.x - 24px;
+            height: 72px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.name;
+                color: Theme.text;
+                font-size: Theme.fs-title;
+                font-weight: 900;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                if root.live : Rectangle {
+                    width: 10px;
+                    y: 6px;
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: Theme.live;
+                    }
+                }
+                Text {
+                    text: root.status;
+                    color: root.live ? Theme.text : Theme.muted;
+                    font-size: Theme.fs-body;
+                    font-weight: root.live ? 700 : 400;
+                    overflow: elide;
+                }
+            }
+        }
+
+        tabs := HorizontalLayout {
+            x: parent.width - self.preferred-width - Theme.safe-x + 24px;
+            y: 36px;
+            height: 40px;
+            spacing: 12px;
+            TabPill { label: "Videos"; on: root.tab == 0; }
+            TabPill { label: "Clips"; on: root.tab == 1; }
+        }
+    }
+}

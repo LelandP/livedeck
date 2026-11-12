@@ -1,14 +1,15 @@
-//! `insta` snapshots of the view-model for each Browse state. The view-model is rendered as plain
+﻿//! `insta` snapshots of the view-model for each Browse state. The view-model is rendered as plain
 //! text (one line per card) so a diff in review shows exactly which card changed.
 //!
 //! Review changes with `cargo insta review`, or accept them with `INSTA_UPDATE=always cargo test`.
 
 use htpc_core::{
-    grid_rows, init, reduce, AppState, Category, ChannelRef, ChatKind, ChatLayout, ChatMessage,
-    ChatSpan, ChatStatus, Event, FeedId, Intent, Moderation, PageOutcome, Paging, PlayerMenuRow,
-    PlayerStats, RailEntry, Rgb, Row, RowId, RowKind, Stream, Tile,
+    grid_rows, init, reduce, AppState, Category, ChannelInfo, ChannelRef, ChatKind, ChatLayout,
+    ChatMessage, ChatSpan, ChatStatus, Clip, Event, FeedId, Intent, Moderation, PageOutcome,
+    Paging, PlayerMenuRow, PlayerStats, Progress, RailEntry, Rgb, Row, RowId, RowKind, Span,
+    Stream, Tile, Video, VideoKind,
 };
-use htpc_ui::{view_model, CardVm, ViewModel};
+use htpc_ui::{format_ago, format_date, view_model, CardVm, ViewModel};
 
 fn stream(channel: &str, viewers: u64, image: bool) -> Tile {
     Tile::Stream(Stream {
@@ -47,6 +48,22 @@ fn card(c: &CardVm) -> String {
     }
     if c.picked {
         out += " | picked";
+    }
+    // Video and clip cards (the channel page).
+    if !c.length.is_empty() {
+        out += &format!(" | {} | {}", c.length, c.meta);
+        if !c.title.is_empty() {
+            out += &format!(" | {}", c.title);
+        }
+        if c.progress > 0 {
+            out += &format!(" | progress {}/1000", c.progress);
+        }
+        if c.muted_audio {
+            out += " | some audio muted";
+        }
+        if c.locked {
+            out += " | locked";
+        }
     }
     if c.resume {
         let images = c.mosaic.iter().filter(|m| !m.thumb_url.is_empty()).count();
@@ -251,9 +268,10 @@ fn player_loading_playing_paused_offline_and_failed() {
 }
 
 fn menu_lines(vm: &ViewModel) -> String {
+    let values: Vec<&String> = vm.player_menu_rows.iter().map(|r| &r.value).collect();
     let mut out = format!(
         "menu_open={} focus={} select={:?} values={:?}\n",
-        vm.player_menu_open, vm.player_menu_focus, vm.select_label, vm.player_menu_values
+        vm.player_menu_open, vm.player_menu_focus, vm.select_label, values
     );
     if !vm.stats_text.is_empty() {
         for line in vm.stats_text.lines() {
@@ -341,9 +359,10 @@ fn sleep_lines(vm: &ViewModel) -> String {
         vm.screen,
         vm.sleep_label,
         vm.sleep_warning,
-        vm.player_menu_values
-            .get(PlayerMenuRow::SleepTimer.index())
-            .map(String::as_str)
+        vm.player_menu_rows
+            .iter()
+            .find(|r| r.title == "Sleep timer")
+            .map(|r| r.value.as_str())
             .unwrap_or("")
     )
 }
@@ -948,6 +967,7 @@ fn multiview_slow_network_lowers_the_muted_tiles() {
     let stall = htpc_core::Health {
         stalled: true,
         buffer_ms: 0,
+        ..Default::default()
     };
     let s = reduce(
         &s,
@@ -1356,4 +1376,583 @@ fn chat_compose_side_overlay_and_a_drop() {
     let s = send(&s, &[Intent::Retry]);
     out += &compose_lines(&view_model(&s));
     insta::assert_snapshot!(out);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The channel page (vod-plan.md, phase 3)
+// ---------------------------------------------------------------------------------------------
+
+/// 2026-11-10 18:28:22 UTC, when the fixture's last broadcast started.
+const STREAMED: u64 = 1_794_335_302;
+/// Three hours later: when the page was fetched.
+const FETCHED: u64 = STREAMED + 3 * 3_600;
+
+fn video(id: &str, title: &str, length_s: u32, created_at: u64) -> Video {
+    Video {
+        id: id.into(),
+        channel: ChannelRef::twitch("sleepy_fox"),
+        channel_name: "Sleepy Fox".into(),
+        kind: VideoKind::Archive,
+        title: title.into(),
+        category: "Hollow Knight".into(),
+        length_s,
+        created_at,
+        views: 0,
+        tint: Rgb::from_hex(0x2d4a6b),
+        thumbnail: Some(format!("https://cdn/{id}.jpg")),
+        muted: Vec::new(),
+        sub_only: false,
+        recording: false,
+    }
+}
+
+fn clip(slug: &str, title: &str, views: u64, created_at: u64) -> Clip {
+    Clip {
+        slug: slug.into(),
+        channel: ChannelRef::twitch("sleepy_fox"),
+        title: title.into(),
+        category: "Hollow Knight".into(),
+        length_s: 28,
+        views,
+        clipped_by: "mossy_k".into(),
+        created_at,
+        tint: Rgb::from_hex(0x6b2d3c),
+        thumbnail: None,
+    }
+}
+
+/// The page of the offline channel `sleepy_fox`, opened from its card on Home and loaded: three
+/// broadcasts (one with a muted part, one subscriber-only, one from last year), a highlight and
+/// four clips in two rows.
+fn channel_page() -> AppState {
+    let offline = Tile::Channel(htpc_core::Channel {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        name: "sleepy_fox".into(),
+        tint: Rgb::default(),
+    });
+    let (s, _) = init();
+    let (s, _) = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows: vec![Row::new(RowKind::TopLive, vec![offline])],
+        },
+    );
+    let s = send(&s, &[Intent::Select]);
+    assert_eq!(s.screen, htpc_core::Screen::Channel);
+    let rows = vec![
+        Row::new(
+            RowKind::PastBroadcasts,
+            vec![
+                Tile::Video(Video {
+                    muted: vec![Span {
+                        start_s: 5_400,
+                        length_s: 360,
+                    }],
+                    ..video("9001", "No-hit run attempts, night 12", 15_128, STREAMED)
+                }),
+                Tile::Video(Video {
+                    sub_only: true,
+                    ..video(
+                        "9002",
+                        "Subathon recap and Q&A",
+                        7_435,
+                        STREAMED - 4 * 86_400,
+                    )
+                }),
+                Tile::Video(video(
+                    "9003",
+                    "Night 11: the boss that will not die",
+                    20_421,
+                    1_740_000_000,
+                )),
+            ],
+        ),
+        Row::new(
+            RowKind::Highlights,
+            vec![Tile::Video(Video {
+                kind: VideoKind::Highlight,
+                ..video("9004", "The 0.4 s dodge", 764, STREAMED)
+            })],
+        ),
+        Row::new(
+            RowKind::ClipsWeek,
+            vec![
+                Tile::Clip(clip("ThePerfectDodge", "the 0.4 s dodge", 41_000, STREAMED)),
+                Tile::Clip(clip(
+                    "CatOnKeys",
+                    "cat on the keyboard",
+                    860,
+                    STREAMED - 86_400,
+                )),
+            ],
+        ),
+        Row::new(
+            RowKind::ClipsAllTime,
+            vec![Tile::Clip(clip(
+                "WorldRecord",
+                "world record, chat goes wild",
+                412_000,
+                1_740_000_000,
+            ))],
+        ),
+    ];
+    let info = ChannelInfo {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        user_id: "77".into(),
+        name: "Sleepy Fox".into(),
+        avatar: Some("https://cdn/avatar.jpg".into()),
+        live: None,
+        last_live_at: Some(STREAMED),
+        loaded_at: FETCHED,
+    };
+    reduce(
+        &s,
+        Event::ChannelPageLoaded {
+            info: Box::new(info),
+            rows,
+        },
+    )
+    .0
+}
+
+fn channel_lines(vm: &ViewModel) -> String {
+    format!(
+        "name={:?} initial={:?} avatar={:?} live={} status={:?} tab={}\n\
+         select={:?} start_over={} retry={} back={} channel_hint={} view={:?} empty={} empty_text={:?} error={:?}\n",
+        vm.channel_name,
+        vm.channel_initial,
+        vm.channel_avatar,
+        vm.channel_live,
+        vm.channel_status,
+        vm.channel_tab,
+        vm.select_label,
+        vm.can_start_over,
+        vm.can_retry,
+        vm.can_back,
+        vm.can_channel,
+        vm.view_label,
+        vm.feed_empty,
+        vm.empty_text,
+        vm.feed_error
+    )
+}
+
+#[test]
+fn channel_page_videos_tab() {
+    let mut out = String::from("-- opened from the offline card, loading\n");
+    let offline = Tile::Channel(htpc_core::Channel {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        name: "Sleepy Fox".into(),
+        tint: Rgb::default(),
+    });
+    let (s, _) = init();
+    let s = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows: vec![Row::new(RowKind::TopLive, vec![offline])],
+        },
+    )
+    .0;
+    // The card's own hints first: Y opens the page, A says so.
+    let vm = view_model(&s);
+    out += &format!(
+        "on the card: select={:?} channel_hint={}\n",
+        vm.select_label, vm.can_channel
+    );
+    let s = send(&s, &[Intent::ToggleChat]);
+    let vm = view_model(&s);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+
+    out += "-- loaded, the first broadcast focused\n";
+    let s = channel_page();
+    let vm = view_model(&s);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+
+    out += "-- the subscriber-only broadcast\n";
+    let on_sub = send(&s, &[Intent::Right]);
+    out += &channel_lines(&view_model(&on_sub));
+    out += "-- the broadcast from last year, then down to the highlight\n";
+    let on_old = send(&on_sub, &[Intent::Right]);
+    out += &channel_lines(&view_model(&on_old));
+    let on_highlight = send(&on_old, &[Intent::Down]);
+    let vm = view_model(&on_highlight);
+    out += &channel_lines(&vm);
+    out += &format!(
+        "focus=({}, {}) row_cols={:?}\n",
+        vm.sel_row, vm.sel_col, vm.row_cols
+    );
+
+    out += "-- the first broadcast was left at 25:00 (Continue watching, phase 5)\n";
+    let mut saved = s.clone();
+    saved.continue_watching = vec![Progress {
+        video: video("9001", "No-hit run attempts, night 12", 15_128, STREAMED),
+        pos_s: 1_500,
+        saved_at: FETCHED,
+    }];
+    let vm = view_model(&saved);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+
+    out += "-- live: the Live now row comes first\n";
+    let live = Stream {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        user_id: "77".into(),
+        title: "No-hit run, night 13".into(),
+        category: "Hollow Knight".into(),
+        viewers: 1_200,
+        tint: Rgb::default(),
+        thumbnail: None,
+    };
+    let mut rows = s.channel_page.as_ref().unwrap().videos.rows.clone();
+    rows.insert(
+        0,
+        Row::new(RowKind::LiveNow, vec![Tile::Stream(live.clone())]),
+    );
+    let info = ChannelInfo {
+        channel: ChannelRef::twitch("sleepy_fox"),
+        user_id: "77".into(),
+        name: "Sleepy Fox".into(),
+        avatar: None,
+        live: Some(live),
+        last_live_at: Some(FETCHED),
+        loaded_at: FETCHED,
+    };
+    let now_live = reduce(
+        &send(&s, &[Intent::Back, Intent::Select]),
+        Event::ChannelPageLoaded {
+            info: Box::new(info),
+            rows,
+        },
+    )
+    .0;
+    let vm = view_model(&now_live);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn channel_page_clips_tab() {
+    let s = send(&channel_page(), &[Intent::PageRight]);
+    let mut out = String::from("-- the Clips tab\n");
+    let vm = view_model(&s);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+
+    out += "-- back on Videos, and a failed load with no rows\n";
+    let back = send(&s, &[Intent::PageLeft]);
+    out += &channel_lines(&view_model(&back));
+    let (home, _) = reduce(&back, Intent::Back);
+    let channel = ChannelRef::twitch("sleepy_fox");
+    let (failed, _) = reduce(
+        &send(&home, &[Intent::Select]),
+        Event::ChannelPageFailed {
+            channel,
+            message: "network error: timed out".into(),
+        },
+    );
+    let vm = view_model(&failed);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+
+    out += "-- a channel with nothing on the Clips tab\n";
+    let mut empty = channel_page();
+    let page = empty.channel_page.as_mut().unwrap();
+    page.clips.rows.clear();
+    let empty = send(&empty, &[Intent::PageRight]);
+    let vm = view_model(&empty);
+    out += &channel_lines(&vm);
+    out += &render(&vm);
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn channel_page_subscribe_card() {
+    let mut s = channel_page();
+    s.can_open_browser = true;
+    let on_sub = send(&s, &[Intent::Right]);
+    let card = send(&on_sub, &[Intent::Select]);
+    let vm = view_model(&card);
+    let mut out = format!(
+        "card={} url={:?} qr={}x{} can_open={} select={:?}\n",
+        vm.subscribe_open,
+        vm.subscribe_url,
+        vm.subscribe_qr_width,
+        vm.subscribe_qr_width,
+        vm.subscribe_can_open,
+        vm.select_label
+    );
+    s.can_open_browser = false;
+    let card = send(&send(&s, &[Intent::Right]), &[Intent::Select]);
+    out += &format!("game mode: select={:?}\n", view_model(&card).select_label);
+    let closed = send(&card, &[Intent::Back]);
+    let vm = view_model(&closed);
+    out += &format!(
+        "closed: card={} screen={:?} select={:?}\n",
+        vm.subscribe_open, vm.screen, vm.select_label
+    );
+    insta::assert_snapshot!(out);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The video player (vod-plan.md, phase 4)
+// ---------------------------------------------------------------------------------------------
+
+fn video_lines(vm: &ViewModel) -> String {
+    let v = &vm.video;
+    let muted: Vec<(i32, i32)> = v.muted.iter().map(|m| (m.start, m.width)).collect();
+    format!(
+        "screen={:?} playback={:?} paused={} select={:?} retry={} hints_menu={}\n\
+         \x20 top: [{}] {:?} | {:?} | {:?}\n\
+         \x20 bar: {} / {:?} head={} chapter={:?} ticks={:?} muted={:?} in_muted={}\n\
+         \x20 seek: chip={:?} side={} seeking={} scrubbing={} speed={:?} chapters={} end_card={} end_focus={}\n\
+         \x20 stream card: {:?} {:?}\n",
+        vm.screen,
+        vm.playback,
+        vm.paused,
+        vm.select_label,
+        vm.can_retry,
+        vm.player_menu_open,
+        v.kind,
+        v.channel,
+        v.title,
+        v.meta,
+        v.pos,
+        v.length,
+        v.head,
+        v.chapter,
+        v.ticks,
+        muted,
+        v.in_muted,
+        v.chip,
+        v.chip_side,
+        v.seeking,
+        v.scrubbing,
+        v.speed,
+        v.chapters,
+        v.end_card,
+        v.end_focus,
+        vm.now_playing.channel,
+        vm.now_playing.title,
+    )
+}
+
+fn video_menu_lines(vm: &ViewModel) -> String {
+    let mut out = format!(
+        "menu_open={} focus={} select={:?}\n",
+        vm.player_menu_open, vm.player_menu_focus, vm.select_label
+    );
+    for (i, row) in vm.player_menu_rows.iter().enumerate() {
+        let mark = if i as i32 == vm.player_menu_focus {
+            ">"
+        } else {
+            " "
+        };
+        let kind = if row.action { " (action)" } else { "" };
+        out += &format!("  {mark} {} = {:?}{kind}\n", row.title, row.value);
+    }
+    if let Some(row) = vm.player_menu_rows.get(vm.player_menu_focus as usize) {
+        out += &format!("  help: {}\n", row.help);
+    }
+    out
+}
+
+/// The id of the last seek timer the commands asked for.
+fn seek_timer(cmds: &[htpc_core::Command]) -> u32 {
+    cmds.iter()
+        .rev()
+        .find_map(|c| match c {
+            htpc_core::Command::HoldCheck { id }
+            | htpc_core::Command::ScrubTick { id }
+            | htpc_core::Command::SettleSeek { id, .. } => Some(*id),
+            _ => None,
+        })
+        .expect("a seek timer")
+}
+
+fn video_health(pos_ms: u64) -> Event {
+    Event::PlayerHealth {
+        slot: 0,
+        at_ms: 0,
+        health: htpc_core::Health {
+            stalled: false,
+            buffer_ms: 60_000,
+            pos_ms: Some(pos_ms),
+            length_ms: Some(15_128_000),
+        },
+    }
+}
+
+/// The first broadcast of the channel page, playing at 1:12:40 with its five chapters.
+fn video_playing() -> AppState {
+    let s = send(&channel_page(), &[Intent::Select]);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    let chapter = |start_ms: u64, name: &str| htpc_core::Chapter {
+        start_ms,
+        length_ms: 0,
+        name: name.into(),
+    };
+    let details = htpc_core::VideoDetails {
+        id: "9001".into(),
+        length_s: 15_128,
+        chapters: vec![
+            chapter(0, "Just Chatting"),
+            chapter(1_260_000, "Hollow Depths"),
+            chapter(7_800_000, "Night Circuit"),
+            chapter(11_400_000, "Hollow Depths"),
+            chapter(13_900_000, "Just Chatting"),
+        ],
+        muted: vec![
+            Span {
+                start_s: 5_400,
+                length_s: 360,
+            },
+            Span {
+                start_s: 11_020,
+                length_s: 360,
+            },
+        ],
+        previews: None,
+    };
+    let s = reduce(&s, Event::VideoDetails(details)).0;
+    reduce(&s, video_health(4_360_000)).0
+}
+
+#[test]
+fn video_player_playing_paused_seeking_and_menu() {
+    let mut out = String::from("-- A on the first broadcast: loading\n");
+    let loading = send(&channel_page(), &[Intent::Select]);
+    out += &video_lines(&view_model(&loading));
+
+    out += "-- playing at 1:12:40, with chapters and muted parts\n";
+    let s = video_playing();
+    out += &video_lines(&view_model(&s));
+
+    out += "-- paused\n";
+    let paused = send(&s, &[Intent::Select]);
+    out += &video_lines(&view_model(&paused));
+
+    out += "-- two taps forward, adding up\n";
+    let (taps, _) = reduce(&s, Intent::Right);
+    let (taps, _) = reduce(&taps, Intent::Released(htpc_core::Dir::Right));
+    let (taps, _) = reduce(&taps, Intent::Right);
+    out += &video_lines(&view_model(&taps));
+    out += "-- one tap back\n";
+    let (back, _) = reduce(&s, Intent::Left);
+    out += &video_lines(&view_model(&back));
+
+    out += "-- held: scrubbing forward, a few steps in\n";
+    let (held, cmds) = reduce(&s, Intent::Right);
+    let (mut held, mut cmds) = reduce(&held, Event::HoldDue(seek_timer(&cmds)));
+    for _ in 0..12 {
+        let (next, more) = reduce(&held, Event::ScrubTickDue(seek_timer(&cmds)));
+        held = next;
+        cmds = more;
+    }
+    out += &video_lines(&view_model(&held));
+    out += "-- let go: the jump\n";
+    let (released, cmds) = reduce(&held, Intent::Released(htpc_core::Dir::Right));
+    let (jumped, _) = reduce(&released, Event::SeekSettleDue(seek_timer(&cmds)));
+    out += &video_lines(&view_model(&jumped));
+
+    out += "-- in a muted part\n";
+    let muted = reduce(&s, video_health(5_460_000)).0;
+    out += &video_lines(&view_model(&muted));
+
+    out += "-- the menu: a video's rows\n";
+    let menu = send(&s, &[Intent::Menu]);
+    out += &video_menu_lines(&view_model(&menu));
+    out += "-- speed 1.5x\n";
+    let fast = send(&menu, &[Intent::Down, Intent::Right, Intent::Right]);
+    out += &video_menu_lines(&view_model(&fast));
+    out += "-- the chapter list, pointing at the next chapter\n";
+    let chapters = send(&fast, &[Intent::Down, Intent::Right]);
+    out += &video_menu_lines(&view_model(&chapters));
+    out += "-- start over, and the HUD with the speed\n";
+    let start_over = send(&chapters, &[Intent::Down]);
+    out += &video_menu_lines(&view_model(&start_over));
+    let closed = send(&fast, &[Intent::Back]);
+    out += &video_lines(&view_model(&closed));
+
+    out += "-- the end card\n";
+    let ended = reduce(&s, Event::PlaybackEnded { slot: 0 }).0;
+    out += &video_lines(&view_model(&ended));
+    let on_back = send(&ended, &[Intent::Down, Intent::Down]);
+    out += &video_lines(&view_model(&on_back));
+
+    out += "-- a video that is gone\n";
+    let gone = reduce(
+        &loading,
+        Event::PlaybackError {
+            slot: 0,
+            message: "This video is no longer available.".into(),
+        },
+    )
+    .0;
+    out += &video_lines(&view_model(&gone));
+    out += &format!("  error={:?}\n", view_model(&gone).playback_error);
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn video_resume_toast_and_a_clip() {
+    let mut s = channel_page();
+    s.continue_watching = vec![Progress {
+        video: video("9001", "No-hit run attempts, night 12", 15_128, STREAMED),
+        pos_s: 4_360,
+        saved_at: FETCHED,
+    }];
+    let resumed = send(&s, &[Intent::Select]);
+    let vm = view_model(&resumed);
+    let mut out = toast_lines(&vm);
+    out += &video_lines(&vm);
+
+    out += "-- a clip\n";
+    let clip = send(&channel_page(), &[Intent::PageRight, Intent::Select]);
+    let clip = reduce(&clip, Event::PlaybackStarted { slot: 0 }).0;
+    let vm = view_model(&clip);
+    out += &video_lines(&vm);
+    let menu = send(&clip, &[Intent::Menu]);
+    let vm = view_model(&menu);
+    out += &video_menu_lines(&vm);
+    assert!(
+        !menu.player_menu_rows().contains(&PlayerMenuRow::Chapters),
+        "a clip has no chapters"
+    );
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn dates_and_ages_read_as_people_say_them() {
+    // 2026-11-10 18:28:22 UTC.
+    let now = STREAMED + 3 * 3_600;
+    assert_eq!(format_date(STREAMED, now), "Nov 10");
+    assert_eq!(format_date(STREAMED - 86_400 * 12, now), "Oct 29");
+    assert_eq!(format_date(1_740_000_000, now), "Feb 19, 2025");
+    assert_eq!(format_date(0, now), "");
+    assert_eq!(format_date(STREAMED, 0), "Nov 10", "no clock: no year");
+    for (secs, text) in [
+        (0, "just now"),
+        (59, "just now"),
+        (60, "1 min ago"),
+        (3_599, "59 min ago"),
+        (3_600, "1 hour ago"),
+        (3 * 3_600, "3 hours ago"),
+        (86_400, "1 day ago"),
+        (29 * 86_400, "29 days ago"),
+        (30 * 86_400, "1 month ago"),
+        (400 * 86_400, "1 year ago"),
+        (800 * 86_400, "2 years ago"),
+    ] {
+        assert_eq!(format_ago(now - secs, now), text, "{secs} s");
+    }
+    assert_eq!(
+        format_ago(now + 500, now),
+        "just now",
+        "a clock that runs behind"
+    );
 }

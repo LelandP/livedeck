@@ -483,6 +483,10 @@ impl Player for SlotPlayer {
         self.existing(|p| p.set_paused(paused));
     }
 
+    fn seek(&self, to_ms: u64) {
+        self.existing(|p| p.seek(to_ms));
+    }
+
     fn stop(&self) {
         self.pool.stop(self.slot);
     }

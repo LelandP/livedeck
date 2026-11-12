@@ -30,6 +30,14 @@ export struct StreamItem {
     // streams") always shown.
     resume: bool,
     mosaic: [MosaicCell],
+    // Video and clip cards (the channel page): the line under the title ("Nov 10 · Just
+    // Chatting"), the length chip at the top right, how far in the viewer is (thousandths, 0 draws
+    // no bar), the "Some audio muted" chip, and the lock of a subscriber-only video.
+    meta: string,
+    length: string,
+    progress: int,
+    muted-audio: bool,
+    locked: bool,
 }
 
 // A "<channel> is live" popup (live notifications), or a note ("2 offline, skipped").
@@ -125,6 +133,63 @@ export struct MvStripItem {
 export struct PopupItem {
     label: string,
     value: string,
+}
+
+// One row of the player menu (view_model.rs `MenuRowVm`): built per mode in Rust, as a live
+// stream, a video and a clip have different rows.
+export struct MenuItem {
+    title: string,
+    value: string,
+    // What the row does, shown under the rows while it has focus.
+    help: string,
+    // A runs it: no value, no arrows ("Press A").
+    action: bool,
+    // Cannot be changed now (Quality while audio only is on): no arrows, dimmed value.
+    locked: bool,
+}
+
+// A stretch of the video seek bar, in ten-thousandths of the video's length.
+export struct SpanItem {
+    start: int,
+    width: int,
+}
+
+// The video player's HUD, seek bar and end card (view_model/video.rs `VideoVm`). `on` is false
+// while a live stream (or nothing) is on the Player screen.
+export struct VideoHud {
+    on: bool,
+    // "PAST BROADCAST", "HIGHLIGHT", "CLIP".
+    kind: string,
+    channel: string,
+    title: string,
+    // "Streamed Nov 10 · 18K views · Chapter 2 of 5: Hollow Depths".
+    meta: string,
+    // The playhead's time and the length ("1:12:40", "4:12:08"), and where the playhead is drawn,
+    // in ten-thousandths.
+    pos: string,
+    length: string,
+    head: int,
+    // The chapter at the playhead, beside the time (empty with fewer than two).
+    chapter: string,
+    // Chapter starts after the first, and the muted parts, in ten-thousandths.
+    ticks: [int],
+    muted: [SpanItem],
+    // The playhead is in a muted part: "Twitch muted the audio here".
+    in-muted: bool,
+    // Taps adding up ("+30 s"), and on which side: -1 left, 1 right.
+    chip: string,
+    chip-side: int,
+    // Taps or a scrub under way: the bar stays up, with the time above the playhead.
+    seeking: bool,
+    scrubbing: bool,
+    // "1.5×", empty at normal speed.
+    speed: string,
+    // LB / RB jump between chapters (videos, not clips).
+    chapters: bool,
+    // The card at the end of the video, and its focused row (0 Watch again, 1 Channel videos,
+    // 2 Back).
+    end-card: bool,
+    end-focus: int,
 }
 
 export struct ChatMsg {

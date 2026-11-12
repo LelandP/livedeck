@@ -1,0 +1,7 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+card=true url="www.twitch.tv/subs/sleepy_fox" qr=29x29 can_open=true select="Open in browser"
+game mode: select=""
+closed: card=false screen=Channel select="Subscribe"

@@ -6,7 +6,10 @@ use std::time::Duration;
 use htpc_chat::{ChatEvent, FakeChat};
 use htpc_core::{ChatKind, ChatMessage, ChatSpan, ChatStatus, Rgb};
 use htpc_kick_api::{fake_live, FakeKick};
-use htpc_twitch_api::{FakeApi, FollowedChannel, Game, HypeTrain, StreamInfo, UserInfo};
+use htpc_twitch_api::{
+    ClipInfo, FakeApi, FollowedChannel, Game, HypeTrain, MutedSegment, StreamInfo, UserInfo,
+    VideoChapter, VideoInfo, VideoType,
+};
 
 /// The device code the store tests' fake Twitch hands out (`--mock` shows `FakeAuth`'s own,
 /// which is the same one as the scaffold's).
@@ -122,8 +125,190 @@ pub fn fake_api() -> FakeApi {
                 all_time_high: 7,
             },
         )],
+        videos: mock_videos(),
+        clips_week: vec![
+            mock_clip(
+                "sleepy_fox",
+                "ThePerfectDodge",
+                "the 0.4 s dodge",
+                28,
+                41_000,
+                "2026-11-10",
+            ),
+            mock_clip(
+                "sleepy_fox",
+                "CatOnTheKeyboard",
+                "the cat walks across the keyboard",
+                33,
+                31_000,
+                "2026-11-07",
+            ),
+        ],
+        clips_all_time: vec![
+            mock_clip(
+                "sleepy_fox",
+                "WorldRecordChatGoesWild",
+                "world record, chat goes wild",
+                52,
+                412_000,
+                "2025-03-02",
+            ),
+            mock_clip(
+                "sleepy_fox",
+                "ThePerfectDodge",
+                "the 0.4 s dodge",
+                28,
+                41_000,
+                "2026-11-10",
+            ),
+            mock_clip(
+                "driftwood",
+                "BoatGoesBrrr",
+                "boat goes brrr",
+                19,
+                2_400,
+                "2026-10-01",
+            ),
+        ],
+        // The first broadcast's game changes, for the chapter list and LB / RB.
+        chapters: vec![(
+            "9000000001".into(),
+            vec![
+                mock_chapter(0, 1_260, "Just Chatting"),
+                mock_chapter(1_260, 6_540, "Hollow Knight"),
+                mock_chapter(7_800, 7_328, "Celeste"),
+            ],
+        )],
         // Messages are "posted" and kept, but nothing echoes them back into the mock chat.
         ..FakeApi::new()
+    }
+}
+
+/// The mock channels' videos (vod-plan.md). Two offline followed channels have past broadcasts;
+/// sleepy_fox also has highlights, a muted part, a subscriber-only broadcast and clips. A live
+/// channel, pixelpilgrim, has its broadcast still recording.
+fn mock_videos() -> Vec<VideoInfo> {
+    let fox = |id: &str, kind, title: &str, length: u32, day: &str, game: &str| VideoInfo {
+        id: id.into(),
+        kind,
+        title: title.into(),
+        length_seconds: length,
+        created_at: format!("{day}T18:00:00Z"),
+        view_count: u64::from(length) * 3,
+        game_name: game.into(),
+        thumbnail_url: String::new(),
+        recording: false,
+        sub_only: false,
+        muted: Vec::new(),
+        owner_login: "sleepy_fox".into(),
+        owner_name: "sleepy_fox".into(),
+    };
+    vec![
+        VideoInfo {
+            muted: vec![MutedSegment {
+                offset: 5_400,
+                duration: 360,
+            }],
+            ..fox(
+                "9000000001",
+                VideoType::Archive,
+                "No-hit run attempts, night 12",
+                15_128,
+                "2026-11-10",
+                "Just Chatting",
+            )
+        },
+        fox(
+            "9000000002",
+            VideoType::Archive,
+            "Night 11: the boss that will not die",
+            20_421,
+            "2026-11-09",
+            "Hollow Knight",
+        ),
+        VideoInfo {
+            sub_only: true,
+            ..fox(
+                "9000000003",
+                VideoType::Archive,
+                "Subathon recap and Q&A",
+                7_435,
+                "2026-11-06",
+                "Just Chatting",
+            )
+        },
+        fox(
+            "9000000004",
+            VideoType::Highlight,
+            "The 0.4 s dodge that saved night 12",
+            764,
+            "2026-11-10",
+            "Hollow Knight",
+        ),
+        fox(
+            "9000000005",
+            VideoType::Highlight,
+            "Best of October",
+            2_910,
+            "2026-11-01",
+            "Hollow Knight",
+        ),
+        VideoInfo {
+            owner_login: "driftwood".into(),
+            owner_name: "driftwood".into(),
+            ..fox(
+                "9000000006",
+                VideoType::Archive,
+                "Sailing the long way round",
+                9_870,
+                "2026-11-08",
+                "Sea of Thieves",
+            )
+        },
+        VideoInfo {
+            recording: true,
+            owner_login: "pixelpilgrim".into(),
+            owner_name: "pixelpilgrim".into(),
+            ..fox(
+                "9000000007",
+                VideoType::Archive,
+                "Blind run, no hit challenge",
+                5_400,
+                "2026-11-11",
+                "Hollow Knight",
+            )
+        },
+    ]
+}
+
+fn mock_clip(
+    login: &str,
+    slug: &str,
+    title: &str,
+    length: u32,
+    views: u64,
+    day: &str,
+) -> (String, ClipInfo) {
+    (
+        login.into(),
+        ClipInfo {
+            slug: slug.into(),
+            title: title.into(),
+            duration_seconds: length,
+            view_count: views,
+            created_at: format!("{day}T20:00:00Z"),
+            thumbnail_url: String::new(),
+            curator_name: "mossy_k".into(),
+            game_name: "Hollow Knight".into(),
+        },
+    )
+}
+
+fn mock_chapter(start_s: u64, length_s: u64, name: &str) -> VideoChapter {
+    VideoChapter {
+        position_ms: start_s * 1000,
+        duration_ms: length_s * 1000,
+        name: name.into(),
     }
 }
 
@@ -230,23 +415,105 @@ const MOCK_PATTERNS: [(&str, &str); 6] = [
 /// picture is as big as the rendition asked for (a 480p tile gets 854x480), so quality changes show
 /// in the stats box, and each channel has its own picture and pitch, so moving the sound can be
 /// heard.
+///
+/// A video or clip plays a generated file of a known length ([`MOCK_VIDEO`], [`MOCK_CLIP`]), so
+/// seeking and the position can be tried. A `lavfi` source cannot be used for them as it is: mpv
+/// cannot seek it backwards and does not know its length (checked 2026-11-12 with
+/// `crates/player/examples/video_probe.rs`). So the first video asked for writes the picture to a
+/// file in the temp folder with libmpv's encoder (about 5 s for the video), and later runs reuse
+/// it.
 pub struct MockResolver;
 
 impl htpc_resolver::StreamResolver for MockResolver {
     async fn resolve(
         &self,
-        _site: htpc_resolver::Site,
-        channel: &str,
+        target: &htpc_resolver::Target,
         quality: &str,
     ) -> Result<htpc_resolver::PlaylistUrl, htpc_resolver::ResolveError> {
+        use htpc_resolver::{PlaylistUrl, ResolveError, Target};
         tokio::time::sleep(MOCK_RESOLVE).await;
-        if MOCK_OFFLINE.contains(&channel) {
-            return Err(htpc_resolver::ResolveError::Offline);
-        }
-        Ok(htpc_resolver::PlaylistUrl(mock_stream_url(
-            channel, quality,
-        )))
+        let file = match target {
+            Target::Channel { login, .. } => {
+                if MOCK_OFFLINE.contains(&login.as_str()) {
+                    return Err(ResolveError::Offline);
+                }
+                return Ok(PlaylistUrl(mock_stream_url(login, quality)));
+            }
+            Target::TwitchVideo(_) => &MOCK_VIDEO,
+            Target::TwitchClip(_) => &MOCK_CLIP,
+        };
+        mock_file(file).await.map(PlaylistUrl)
     }
+}
+
+/// A generated file `--mock` plays for a video or clip.
+pub struct MockFile {
+    /// Its name in the temp folder. A new version of the picture needs a new name.
+    name: &'static str,
+    length_s: u32,
+    /// The tone's pitch, so a clip sounds unlike a video.
+    pitch: u32,
+}
+
+/// What every `--mock` video plays: ten minutes, long enough to scrub through.
+pub const MOCK_VIDEO: MockFile = MockFile {
+    name: "livedeck-mock-video-600s-v1.mkv",
+    length_s: 600,
+    pitch: 330,
+};
+
+/// What every `--mock` clip plays.
+pub const MOCK_CLIP: MockFile = MockFile {
+    name: "livedeck-mock-clip-30s-v1.mkv",
+    length_s: 30,
+    pitch: 550,
+};
+
+impl MockFile {
+    /// The `lavfi` graph the file is made from: a small, moving test picture with a quiet tone.
+    /// The tone's low sample rate keeps the encoding quick (48 kHz took 13 s for the video, 8 kHz
+    /// takes 5 s).
+    fn source(&self) -> String {
+        let (len, pitch) = (self.length_s, self.pitch);
+        format!(
+            "av://lavfi:testsrc2=size=384x216:rate=15:duration={len},format=yuv420p[out0];sine=frequency={pitch}:sample_rate=8000:duration={len},volume=0.12[out1]"
+        )
+    }
+}
+
+/// The path of `file`, written first if this is its first use on this machine. Only one is
+/// written at a time, so two plays at once do not both encode it.
+async fn mock_file(file: &'static MockFile) -> Result<String, htpc_resolver::ResolveError> {
+    static WRITING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let path = std::env::temp_dir().join(file.name);
+    let _writing = WRITING.lock().await;
+    if !path.exists() {
+        tracing::info!(path = %path.display(), "writing a mock video, once");
+        let source = file.source();
+        let target = path.clone();
+        tokio::task::spawn_blocking(move || encode_mock(&source, &target))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|done| done)
+            .map_err(|e| {
+                htpc_resolver::ResolveError::Failed(format!("the mock video failed: {e}"))
+            })?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Encodes `source` to `path` through a file beside it, so a half-written file is never used.
+#[cfg(feature = "mpv")]
+fn encode_mock(source: &str, path: &std::path::Path) -> Result<(), String> {
+    let partial = path.with_extension("partial.mkv");
+    htpc_player::encode_file(source, &partial)?;
+    std::fs::rename(&partial, path).map_err(|e| e.to_string())
+}
+
+/// Without libmpv nothing can play the file anyway, so it is not made.
+#[cfg(not(feature = "mpv"))]
+fn encode_mock(_source: &str, _path: &std::path::Path) -> Result<(), String> {
+    Err("this build has no video support".into())
 }
 
 /// The `lavfi` graph a mock channel plays at `quality` (a Streamlink name or fallback list).
@@ -313,7 +580,7 @@ pub fn fake_kick() -> FakeKick {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use htpc_resolver::{ResolveError, Site, StreamResolver};
+    use htpc_resolver::{ResolveError, Site, StreamResolver, Target};
 
     #[test]
     fn the_picture_is_as_big_as_the_rendition_asked_for() {
@@ -339,10 +606,37 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn offline_mock_channels_stay_offline() {
         let offline = MockResolver
-            .resolve(Site::Twitch, "driftwood", "best")
+            .resolve(&Target::channel(Site::Twitch, "driftwood"), "best")
             .await;
         assert_eq!(offline, Err(ResolveError::Offline));
-        let live = MockResolver.resolve(Site::Kick, "neon_drift", "best").await;
+        let live = MockResolver
+            .resolve(&Target::channel(Site::Kick, "neon_drift"), "best")
+            .await;
         assert!(live.is_ok_and(|url| url.0.contains("1920x1080")));
+    }
+
+    /// Writes the mock clip with libmpv (or reuses it) and checks the answer is that file.
+    #[cfg(feature = "mpv")]
+    #[tokio::test]
+    #[ignore = "needs libmpv; writes a file in the temp folder"]
+    async fn a_mock_clip_is_written_once_and_played_from_its_file() {
+        let clip = Target::TwitchClip("AnyClip".into());
+        let url = MockResolver.resolve(&clip, "best").await.expect("written");
+        assert!(url.0.ends_with(MOCK_CLIP.name), "{}", url.0);
+        assert!(std::fs::metadata(&url.0).is_ok_and(|m| m.len() > 0));
+        let again = MockResolver.resolve(&clip, "best").await;
+        assert_eq!(again, Ok(url));
+    }
+
+    #[test]
+    fn mock_videos_are_made_from_a_picture_of_their_length() {
+        let video = MOCK_VIDEO.source();
+        assert!(video.starts_with("av://lavfi:testsrc2="), "{video}");
+        assert!(
+            video.contains(":duration=600,") && video.ends_with("[out1]"),
+            "{video}"
+        );
+        assert!(MOCK_CLIP.source().contains(":duration=30,"));
+        assert_ne!(MOCK_VIDEO.name, MOCK_CLIP.name);
     }
 }

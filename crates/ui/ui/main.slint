@@ -3,11 +3,12 @@
 import "../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf";
 import "../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf";
 import { Theme, InputDevice } from "theme.slint";
-import { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
-import { Hint, Toast } from "components.slint";
+import { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem, MenuItem, SpanItem, VideoHud } from "types.slint";
+import { Hint, Toast, SubscribeCard } from "components.slint";
 import { ViewIcon } from "icons.slint";
 import { HomeContent } from "home.slint";
 import { GridContent } from "grid.slint";
+import { ChannelContent } from "channel.slint";
 import { SearchContent } from "search.slint";
 import { Rail } from "rail.slint";
 import { PlayerScreen } from "player.slint";
@@ -15,7 +16,7 @@ import { SignInScreen } from "signin.slint";
 import { SettingsScreen } from "settings.slint";
 import { MultiviewScreen, ViewPopup, FullScreenStrip } from "multiview.slint";
 
-export { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem }
+export { StreamItem, MosaicCell, RowData, ChatMsg, ChatPiece, SearchKey, ToastItem, MvTile, MvLayoutChip, MvStripItem, PopupItem, MenuItem, SpanItem, VideoHud }
 
 // Hint-bar actions (mouse fallback). Rust maps them to core Intents.
 export enum UiAction { select, back, toggle-chat, menu, retry, page-right, view }
@@ -61,6 +62,20 @@ export component MainWindow inherits Window {
     in property <string> view-label: "Multiview";
     // The multiview tray on browse screens ("Multiview · 3 picked"). Empty: hidden.
     in property <string> tray-text: "";
+    // A Twitch stream or channel card has focus: Y opens its channel page.
+    in property <bool> can-channel: false;
+
+    // The channel page (screen 7): the header, the tab (0 Videos, 1 Clips), and whether X starts
+    // the focused video over. `channel-avatar-url` is the picture's cache key, so Rust can patch
+    // the image in when it arrives (`htpc_ui::apply_thumbnail`).
+    in property <string> channel-name: "";
+    in property <image> channel-avatar;
+    in property <string> channel-avatar-url: "";
+    in property <string> channel-initial: "";
+    in property <bool> channel-live: false;
+    in property <string> channel-status: "";
+    in property <int> channel-tab: 0;
+    in property <bool> can-start-over: false;
 
     // Settings screen: the focused row, and the current value of each choice.
     in property <int> settings-focus: 0;
@@ -76,7 +91,7 @@ export component MainWindow inherits Window {
     in property <string> version: "";
 
     // 0 = home / following / favorites, 1 = player, 2 = sign in, 3 = grid: browse / category, 4 = settings,
-    // 5 = search, 6 = multiview's grid (ScreenId in view_model.rs)
+    // 5 = search, 6 = multiview's grid, 7 = a channel's page (ScreenId in view_model.rs)
     in property <int> screen: 0;
     in property <int> sel-row: 0;
     in property <int> sel-col: 0;
@@ -176,10 +191,13 @@ export component MainWindow inherits Window {
     // What the player logged before failing (shown small under the error, for bug reports).
     in property <string> playback-details: "";
     in property <bool> paused: false;
-    // The player menu (Start while watching): open, focused row, and each row's value.
+    // The player menu (Start while watching): open, focused row, and its rows (a live stream's,
+    // a video's or a clip's).
     in property <bool> player-menu-open: false;
     in property <int> player-menu-focus: 0;
-    in property <[string]> player-menu-values: [];
+    in property <[MenuItem]> player-menu-items: [];
+    // A video or clip on the Player screen: its HUD, seek bar and end card.
+    in property <VideoHud> video-hud;
     // The stream plays sound only: the black audio-only screen, and a locked Quality row.
     in property <bool> audio-only: false;
     // The stats box over the video, one fact per line. Empty while it is off.
@@ -260,8 +278,11 @@ export component MainWindow inherits Window {
         triggered => { root.hud-visible = false; }
     }
 
-    // Raw key text (Slint key codes). Returns true if Rust handled it.
-    callback key(string) -> bool;
+    // Raw key text (Slint key codes), and whether it is the system's auto-repeat of a held key.
+    // Returns true if Rust handled it.
+    callback key(string, bool) -> bool;
+    // A key let go (Rust reports the left and right arrows: a video tells a tap from a hold).
+    callback key-released(string) -> bool;
     // Mouse fallbacks.
     callback card-clicked(int, int);
     callback rail-clicked(int);
@@ -280,7 +301,13 @@ export component MainWindow inherits Window {
             if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) {
                 return reject;
             }
-            if (root.key(e.text)) {
+            if (root.key(e.text, e.repeat)) {
+                return accept;
+            }
+            return reject;
+        }
+        key-released(e) => {
+            if (root.key-released(e.text)) {
                 return accept;
             }
             return reject;
@@ -316,6 +343,25 @@ export component MainWindow inherits Window {
         picked(r, c) => { root.card-clicked(r, c); }
     }
 
+    if root.screen == 7 : ChannelContent {
+        x: Theme.rail-collapsed;
+        y: 0px;
+        width: parent.width - Theme.rail-collapsed;
+        height: parent.height - Theme.hints-h;
+        rows: root.rows;
+        sel-row: root.sel-row;
+        sel-col: root.sel-col;
+        row-cols: root.row-cols;
+        active: !root.rail-focused && !root.subscribe-open;
+        name: root.channel-name;
+        avatar: root.channel-avatar;
+        initial: root.channel-initial;
+        live: root.channel-live;
+        status: root.channel-status;
+        tab: root.channel-tab;
+        picked(r, c) => { root.card-clicked(r, c); }
+    }
+
     if root.screen == 5 : SearchContent {
         x: Theme.rail-collapsed;
         y: 0px;
@@ -335,7 +381,7 @@ export component MainWindow inherits Window {
     }
 
     // A feed that failed to load, or loaded nothing. Cards already on screen stay visible above it.
-    if (root.screen == 0 || root.screen == 3) && (root.feed-error != "" || root.feed-empty) : Rectangle {
+    if (root.screen == 0 || root.screen == 3 || root.screen == 7) && (root.feed-error != "" || root.feed-empty) : Rectangle {
         x: Theme.rail-collapsed;
         y: parent.height - Theme.hints-h - 96px;
         width: parent.width - Theme.rail-collapsed;
@@ -390,7 +436,7 @@ export component MainWindow inherits Window {
 
     // After every screen it sits beside: Slint paints in declaration order, and the expanded rail
     // must draw over the screen content, not under it.
-    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 || root.screen == 5 : Rail {
+    if root.screen == 0 || root.screen == 2 || root.screen == 3 || root.screen == 4 || root.screen == 5 || root.screen == 7 : Rail {
         x: 0px;
         y: 0px;
         height: parent.height - Theme.hints-h;
@@ -400,6 +446,15 @@ export component MainWindow inherits Window {
         expanded: root.rail-focused;
         user-name: root.user-name;
         activated(i) => { root.rail-clicked(i); }
+    }
+
+    // A subscriber-only video's subscribe card, over the page and its rail.
+    if root.screen == 7 && root.subscribe-open : SubscribeCard {
+        width: parent.width;
+        height: parent.height;
+        channel: root.channel-name;
+        qr: root.subscribe-qr;
+        url: root.subscribe-url;
     }
 
     if root.screen == 1 : PlayerScreen {
@@ -418,7 +473,8 @@ export component MainWindow inherits Window {
         hud-visible: root.hud-visible;
         menu-open: root.player-menu-open;
         menu-focus: root.player-menu-focus;
-        menu-values: root.player-menu-values;
+        menu-items: root.player-menu-items;
+        hud: root.video-hud;
         audio-only: root.audio-only;
         stats-text: root.stats-text;
         sleep-label: root.sleep-label;
@@ -645,7 +701,7 @@ export component MainWindow inherits Window {
         // On a playing stream the bar fades out with the HUD (same rule as in player.slint) and
         // comes back on any button. Loading, paused and error screens keep it. Multiview's grid
         // hides it while idle.
-        opacity: (root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open && !root.compose-open && !root.popup-open && !root.strip-shown) || root.mv-idle ? 0.0 : 1.0;
+        opacity: (root.screen == 1 && root.playback == 1 && !root.paused && !root.hud-visible && !root.exit-prompt && !root.player-menu-open && !root.sleep-warning && !root.raid-open && !root.compose-open && !root.popup-open && !root.strip-shown && !root.video-hud.seeking && !root.video-hud.end-card) || root.mv-idle ? 0.0 : 1.0;
         animate opacity { duration: Theme.t-med; }
 
         // During the sleep warning every button does the same thing.
@@ -733,6 +789,8 @@ export component MainWindow inherits Window {
 
             if root.screen == 0 || root.screen == 3 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if (root.screen == 0 || root.screen == 3) && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            // Y on a Twitch stream or channel card: its channel page, with past broadcasts and clips.
+            if (root.screen == 0 || root.screen == 3) && root.can-channel : Hint { glyph: "Y"; label: "Channel"; clicked => { root.action(UiAction.toggle-chat); } }
             // A live stream card: pick it for multiview, or watch the picked ones (and star it). An
             // offline channel card: star it.
             if (root.screen == 0 || root.screen == 3) && root.can-view : Hint { glyph: "View"; label: root.view-label; clicked => { root.action(UiAction.view); } }
@@ -741,14 +799,18 @@ export component MainWindow inherits Window {
             if root.screen == 1 && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
             // The subscribe card takes only A and B: "A Open in browser · B Close", or only B in
             // Game Mode (`select-label` is empty there).
-            if root.screen == 1 && !root.subscribe-open : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            if root.screen == 1 && !root.subscribe-open && !root.video-hud.on : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            // A video: the D-pad seeks (tap, or hold to scrub) and LB/RB jump between chapters.
+            // While scrubbing only A (jump), the D-pad (reverse) and B (cancel) act.
+            if root.screen == 1 && root.video-hud.on && root.playback == 1 && !root.player-menu-open && !root.video-hud.end-card : Hint { glyph: "◀▶"; label: root.video-hud.scrubbing ? "Scrub" : "Seek"; }
+            if root.screen == 1 && root.video-hud.on && root.video-hud.chapters && root.playback == 1 && !root.player-menu-open && !root.video-hud.end-card && !root.video-hud.scrubbing : Hint { glyph: "RB"; label: "LB/RB Chapter"; clicked => { root.action(UiAction.page-right); } }
             // Start opens the player menu. With it open, B closes it instead of leaving the stream.
-            if root.screen == 1 && !root.player-menu-open : Hint { glyph: "≡"; label: "Options"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 1 && !root.player-menu-open && !root.video-hud.end-card && !root.video-hud.scrubbing : Hint { glyph: "≡"; label: "Options"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 1 && root.player-menu-open : Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
             // Multiview's full screen: LB/RB flip through the streams, View has its options.
             if root.screen == 1 && root.mv-active && root.mv-count > 1 && !root.player-menu-open && !root.subscribe-open : Hint { glyph: "RB"; label: "LB/RB Next stream"; clicked => { root.action(UiAction.page-right); } }
-            if root.screen == 1 && !root.player-menu-open && !root.subscribe-open : Hint { glyph: "View"; label: "Multiview"; clicked => { root.action(UiAction.view); } }
-            if (root.screen == 1 && !root.player-menu-open) || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: root.screen == 1 && root.mv-active ? "Grid" : "Back"; clicked => { root.action(UiAction.back); } }
+            if root.screen == 1 && !root.player-menu-open && !root.subscribe-open && !root.video-hud.on : Hint { glyph: "View"; label: "Multiview"; clicked => { root.action(UiAction.view); } }
+            if (root.screen == 1 && !root.player-menu-open) || root.screen == 2 || (root.screen == 3 && root.can-back) : Hint { glyph: "B"; label: root.video-hud.scrubbing ? "Cancel" : (root.screen == 1 && root.mv-active ? "Grid" : "Back"); clicked => { root.action(UiAction.back); } }
             // Root screens: nowhere further back, so B opens the sidebar, and B on the sidebar asks to quit.
             if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && !root.rail-focused : Hint { glyph: "B"; label: "Sidebar"; clicked => { root.action(UiAction.back); } }
             if (root.screen == 0 || (root.screen == 3 && !root.can-back) || root.screen == 4) && root.rail-focused : Hint { glyph: "B"; label: "Quit"; clicked => { root.action(UiAction.back); } }
@@ -766,9 +828,20 @@ export component MainWindow inherits Window {
             // Search, in the results (or the rail): like Home, and B returns to the keyboard.
             if root.screen == 5 && !root.search-on-keys : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 5 && root.search-in-results && root.can-retry && !root.rail-focused : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 5 && root.can-channel : Hint { glyph: "Y"; label: "Channel"; clicked => { root.action(UiAction.toggle-chat); } }
             if root.screen == 5 && root.can-view : Hint { glyph: "View"; label: root.view-label; clicked => { root.action(UiAction.view); } }
             if root.screen == 5 && !root.search-on-keys : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 5 && root.search-in-results && !root.rail-focused : Hint { glyph: "B"; label: "Keyboard"; clicked => { root.action(UiAction.back); } }
+
+            // A channel's page: A plays (or subscribes, for a subscriber-only video), X starts a
+            // saved video over or retries a failed load, LB and RB switch tab, B goes back. With
+            // the subscribe card open only A and B act.
+            if root.screen == 7 && ((root.rail-focused && !root.subscribe-open) || root.select-label != "") : Hint { glyph: "A"; label: root.rail-focused && !root.subscribe-open ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
+            if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-start-over : Hint { glyph: "X"; label: "Start over"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 7 && !root.subscribe-open && !root.rail-focused : Hint { glyph: "RB"; label: "LB/RB Videos / Clips"; clicked => { root.action(UiAction.page-right); } }
+            if root.screen == 7 && !root.subscribe-open : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
+            if root.screen == 7 : Hint { glyph: "B"; label: root.subscribe-open ? "Close" : (root.rail-focused ? "Quit" : "Back"); clicked => { root.action(UiAction.back); } }
         }
     }
 }

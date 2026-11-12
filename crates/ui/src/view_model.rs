@@ -10,23 +10,25 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
-    grid_cols, subscribe_url, AppState, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus,
-    Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Platform, Playback, PlayerMenuRow,
-    RailEntry, Rgb, RoomMode, Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift,
-    Stream, Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC, TOASTS_SHOWN,
+    grid_cols, subscribe_url, AppState, ChannelPage, ChannelTab, ChatKind, ChatLayout, ChatMessage,
+    ChatSpan, ChatStatus, Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Platform, Playback,
+    PlayerMenuRow, RailEntry, Rgb, RoomMode, Row, RowKind, Screen, SearchState, SendProblem,
+    SettingsRow, Shift, Stream, Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC, TOASTS_SHOWN,
 };
 use slint::{
     Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
 };
 
 use crate::{
-    ChatMsg, ChatPiece, MainWindow, MosaicCell, MvLayoutChip, MvStripItem, MvTile, PopupItem,
-    RowData, SearchKey, StreamItem, ToastItem,
+    ChatMsg, ChatPiece, MainWindow, MenuItem, MosaicCell, MvLayoutChip, MvStripItem, MvTile,
+    PopupItem, RowData, SearchKey, SpanItem, StreamItem, ToastItem, VideoHud,
 };
 
 mod multiview;
+mod video;
 
 pub use multiview::{layout_name, LayoutChipVm, MultiviewVm, MvTileVm, PopupRowVm, StripVm};
+pub use video::{seek_chip, speed_label, video_vm, SpanVm, VideoVm};
 
 /// Players whose frames the window keeps (`tile-videos`): one per multiview stream.
 const VIDEO_SLOTS: usize = htpc_core::layout::MAX_STREAMS;
@@ -71,6 +73,8 @@ pub enum ScreenId {
     Search = 5,
     /// Multiview's grid. Its full screen is `Player`.
     Multiview = 6,
+    /// A Twitch channel's page: header, Videos / Clips tabs and rows of cards.
+    Channel = 7,
 }
 
 /// What the Player screen shows. The values are what `main.slint` switches on.
@@ -118,6 +122,16 @@ pub struct CardVm {
     pub resume: bool,
     /// The resume card's 2×2 mosaic: up to four of its streams.
     pub mosaic: Vec<MosaicVm>,
+    /// A video or clip card's second line: "Nov 10 · Just Chatting". Empty on other cards.
+    pub meta: String,
+    /// A video or clip's length, as a chip at the top right: "4:12:08". Empty on other cards.
+    pub length: String,
+    /// A video that is in *Continue watching*: how far in, in thousandths. 0 draws no bar.
+    pub progress: i32,
+    /// Twitch muted part of the video's sound: a "Some audio muted" chip.
+    pub muted_audio: bool,
+    /// A subscriber-only video: drawn with a lock.
+    pub locked: bool,
 }
 
 /// One stream of the *Resume multiview* card's mosaic.
@@ -235,6 +249,19 @@ pub struct ViewModel {
     /// The tray above the hints bar on browse screens: "Multiview · 3 picked". Empty while
     /// nothing is picked.
     pub tray_text: String,
+    /// A Twitch stream or channel card has focus on a browse screen: Y opens its channel page.
+    pub can_channel: bool,
+    /// The channel page's header: the name, the profile picture's cache key (empty without one),
+    /// the first letter to show instead, whether it is live, the line under the name ("Live
+    /// now", "Offline · last live 3 hours ago") and the tab (0 Videos, 1 Clips).
+    pub channel_name: String,
+    pub channel_avatar: String,
+    pub channel_initial: String,
+    pub channel_live: bool,
+    pub channel_status: String,
+    pub channel_tab: i32,
+    /// On the channel page, the focused video is in *Continue watching*: X starts it over.
+    pub can_start_over: bool,
     /// Focused row of the Settings screen (`SettingsRow` order: account, chat layout, quality).
     pub settings_focus: i32,
     pub chat_layout_label: String,
@@ -258,11 +285,11 @@ pub struct ViewModel {
     pub paused: bool,
     /// The player menu is open (Start on the Player screen).
     pub player_menu_open: bool,
-    /// Its focused row (`PlayerMenuRow` order: quality, hardware decoding, latency, zoom, stats,
-    /// audio only).
+    /// Its focused row, as an index into `player_menu_rows`.
     pub player_menu_focus: i32,
-    /// The current value of each player-menu row, in the same order.
-    pub player_menu_values: Vec<String>,
+    /// The menu's rows for what is on screen, top to bottom: a live stream's
+    /// (`PlayerMenuRow::ALL`), a video's or a clip's (vod-plan.md section 2).
+    pub player_menu_rows: Vec<MenuRowVm>,
     /// The stream on screen plays sound only: the Player screen shows the black audio-only screen,
     /// and the menu's Quality row is locked.
     pub audio_only: bool,
@@ -350,6 +377,20 @@ pub struct ViewModel {
     pub video_slot: i32,
     /// Multiview's grid, picker, strip and the View popup.
     pub mv: MultiviewVm,
+    /// The video player's HUD, seek bar and end card, while a video is on the Player screen.
+    pub video: VideoVm,
+}
+
+/// One row of the player menu: what it changes, its value, what it does (shown under the rows
+/// while it has focus), whether A runs it (an action row, no arrows), and whether it cannot be
+/// changed now (Quality while audio only is on).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MenuRowVm {
+    pub title: String,
+    pub value: String,
+    pub help: String,
+    pub action: bool,
+    pub locked: bool,
 }
 
 /// One key of an on-screen keyboard: its text and where it sits on the 10-column grid.
@@ -477,7 +518,7 @@ fn text_tail(text: &str) -> String {
 
 /// The line under the chat while not composing.
 fn compose_hint(state: &AppState) -> &'static str {
-    if state.screen != Screen::Player || state.composing() {
+    if state.screen != Screen::Player || state.composing() || state.video.is_some() {
         ""
     } else if !state.on_screen_features().chat_send {
         // Kick: chat is read-only in LiveDeck.
@@ -491,41 +532,128 @@ fn compose_hint(state: &AppState) -> &'static str {
     }
 }
 
-/// The values the player menu shows, in `PlayerMenuRow` order.
-fn player_menu_values(state: &AppState) -> Vec<String> {
-    PlayerMenuRow::ALL
+/// The value a player-menu row shows.
+fn player_menu_value(state: &AppState, row: PlayerMenuRow) -> String {
+    match row {
+        PlayerMenuRow::Quality if state.audio_only => "Audio only".into(),
+        PlayerMenuRow::Quality => state.quality().label().into(),
+        PlayerMenuRow::Hwdec => state.session.hwdec.label().into(),
+        PlayerMenuRow::Latency => state.session.latency.label().into(),
+        PlayerMenuRow::Zoom => state.session.zoom.label().into(),
+        PlayerMenuRow::Stats if state.session.stats => "On".into(),
+        PlayerMenuRow::Stats => "Off".into(),
+        PlayerMenuRow::AudioOnly if state.audio_only => "On".into(),
+        PlayerMenuRow::AudioOnly => "Off".into(),
+        PlayerMenuRow::SleepTimer => match state.sleep {
+            None => "Off".into(),
+            Some(t) if t.left_min == 0 => format!("{} min · ending", t.minutes),
+            Some(t) => format!("{} min · {} left", t.minutes, t.left_min),
+        },
+        PlayerMenuRow::Speed => state
+            .video
+            .as_ref()
+            .map(|v| speed_label(v.speed))
+            .unwrap_or_default(),
+        PlayerMenuRow::Chapters => state
+            .video
+            .as_ref()
+            .map(video::chapters_value)
+            .unwrap_or_default(),
+        // Action rows: no value, A opens the card or the keyboard. Signed out, the chat
+        // row says what it needs instead.
+        // Twitch's own features, on a stream of another platform.
+        PlayerMenuRow::Subscribe if !state.on_screen_features().subscribe => "Twitch only".into(),
+        PlayerMenuRow::WriteChat if !state.on_screen_features().chat_send => "Twitch only".into(),
+        PlayerMenuRow::Subscribe | PlayerMenuRow::StartOver => String::new(),
+        PlayerMenuRow::WriteChat if !state.is_signed_in() => "Sign in to Twitch to chat".into(),
+        PlayerMenuRow::WriteChat => String::new(),
+        PlayerMenuRow::ChannelVideos if state.multiview.is_some() => "Not in multiview".into(),
+        PlayerMenuRow::ChannelVideos if !state.on_screen_features().videos => "Twitch only".into(),
+        PlayerMenuRow::ChannelVideos => String::new(),
+    }
+}
+
+/// What a player-menu row is called. The subscribe row names the channel.
+fn player_menu_title(state: &AppState, row: PlayerMenuRow) -> String {
+    match row {
+        PlayerMenuRow::Quality => "Quality".into(),
+        PlayerMenuRow::Hwdec => "Hardware decoding".into(),
+        PlayerMenuRow::Latency => "Latency".into(),
+        PlayerMenuRow::Zoom => "Zoom".into(),
+        PlayerMenuRow::Stats => "Stats".into(),
+        PlayerMenuRow::AudioOnly => "Audio only".into(),
+        PlayerMenuRow::SleepTimer => "Sleep timer".into(),
+        PlayerMenuRow::Subscribe => format!(
+            "Subscribe to {}",
+            state
+                .now_playing
+                .as_ref()
+                .map(|p| p.channel.login.as_str())
+                .unwrap_or_default()
+        ),
+        PlayerMenuRow::WriteChat => "Write in chat".into(),
+        PlayerMenuRow::ChannelVideos => "Channel videos".into(),
+        PlayerMenuRow::Speed => "Speed".into(),
+        PlayerMenuRow::Chapters => "Chapters".into(),
+        PlayerMenuRow::StartOver => "Start over".into(),
+    }
+}
+
+/// What a player-menu row does, shown under the rows while it has focus. A video's rows say
+/// "video" where a stream's say "stream".
+fn player_menu_help(state: &AppState, row: PlayerMenuRow) -> &'static str {
+    let video = state.video.is_some();
+    match row {
+        PlayerMenuRow::Quality if state.audio_only => "Locked while Audio only is on.",
+        PlayerMenuRow::Quality if video => {
+            "Picture quality. Lower uses less data and battery. Reloads the video where it is."
+        }
+        PlayerMenuRow::Quality => {
+            "Picture quality. Lower uses less data and battery. Reloads the stream."
+        }
+        PlayerMenuRow::Hwdec => {
+            "Decode on the graphics chip. Turn off if the picture stutters or shows glitches."
+        }
+        PlayerMenuRow::Latency => "Low stays close to live. Normal buffers more, for fewer stalls on weak Wi-Fi. Reloads the stream.",
+        PlayerMenuRow::Zoom => {
+            "Fit shows the whole picture with black bars. Fill crops it to fill the screen."
+        }
+        PlayerMenuRow::Stats => "A box with resolution, codec, bitrate, buffer and dropped frames.",
+        PlayerMenuRow::AudioOnly if video => {
+            "Sound only, on a dark screen. Saves data and battery. For this video only."
+        }
+        PlayerMenuRow::AudioOnly => {
+            "Sound only, on a dark screen. Saves data and battery. For this stream only."
+        }
+        PlayerMenuRow::SleepTimer if video => "Stops the video and puts the device to sleep after a while. Asks a minute before.",
+        PlayerMenuRow::SleepTimer => "Stops the stream and puts the device to sleep after a while. Asks a minute before.",
+        PlayerMenuRow::Subscribe => {
+            "Shows a QR code of the channel's subscribe page, to finish on your phone."
+        }
+        PlayerMenuRow::WriteChat => "Write in this channel's chat with the on-screen keyboard or quick messages. X does it too while chat is shown.",
+        PlayerMenuRow::ChannelVideos if video => {
+            "Back to this channel's past broadcasts, highlights and clips. Stops the video."
+        }
+        PlayerMenuRow::ChannelVideos => {
+            "Past broadcasts, highlights and clips of this channel. Stops the stream."
+        }
+        PlayerMenuRow::Speed => "Faster or slower, with the pitch kept. For this video only.",
+        PlayerMenuRow::Chapters => "Left and Right pick a chapter, A jumps there. With the menu closed, LB and RB jump to the previous and next one.",
+        PlayerMenuRow::StartOver => "Plays the video again from 0:00.",
+    }
+}
+
+/// The player menu's rows for what is on screen, top to bottom.
+fn player_menu_rows(state: &AppState) -> Vec<MenuRowVm> {
+    state
+        .player_menu_rows()
         .iter()
-        .map(|row| -> String {
-            match row {
-                PlayerMenuRow::Quality if state.audio_only => "Audio only".into(),
-                PlayerMenuRow::Quality => state.quality().label().into(),
-                PlayerMenuRow::Hwdec => state.session.hwdec.label().into(),
-                PlayerMenuRow::Latency => state.session.latency.label().into(),
-                PlayerMenuRow::Zoom => state.session.zoom.label().into(),
-                PlayerMenuRow::Stats if state.session.stats => "On".into(),
-                PlayerMenuRow::Stats => "Off".into(),
-                PlayerMenuRow::AudioOnly if state.audio_only => "On".into(),
-                PlayerMenuRow::AudioOnly => "Off".into(),
-                PlayerMenuRow::SleepTimer => match state.sleep {
-                    None => "Off".into(),
-                    Some(t) if t.left_min == 0 => format!("{} min · ending", t.minutes),
-                    Some(t) => format!("{} min · {} left", t.minutes, t.left_min),
-                },
-                // Action rows: no value, A opens the card or the keyboard. Signed out, the chat
-                // row says what it needs instead.
-                // Twitch's own features, on a stream of another platform.
-                PlayerMenuRow::Subscribe if !state.on_screen_features().subscribe => {
-                    "Twitch only".into()
-                }
-                PlayerMenuRow::WriteChat if !state.on_screen_features().chat_send => {
-                    "Twitch only".into()
-                }
-                PlayerMenuRow::Subscribe => String::new(),
-                PlayerMenuRow::WriteChat if !state.is_signed_in() => {
-                    "Sign in to Twitch to chat".into()
-                }
-                PlayerMenuRow::WriteChat => String::new(),
-            }
+        .map(|row| MenuRowVm {
+            title: player_menu_title(state, *row),
+            value: player_menu_value(state, *row),
+            help: player_menu_help(state, *row).to_owned(),
+            action: row.is_action(),
+            locked: *row == PlayerMenuRow::Quality && state.audio_only,
         })
         .collect()
 }
@@ -638,6 +766,55 @@ pub fn format_viewers(viewers: u64) -> String {
     format!("{}.{}M", tenths_m / 10, tenths_m % 10)
 }
 
+/// A video's length or position: `0:28`, `12:44`, `4:12:08`.
+pub fn format_duration(seconds: u32) -> String {
+    let (h, m, s) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// A date as a card shows it: `Nov 10`, or `Nov 10, 2025` when it is not this year. `now` is the
+/// page's own clock (`ChannelInfo::loaded_at`). Empty for 0, which means unknown.
+pub fn format_date(unix: u64, now: u64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    if unix == 0 {
+        return String::new();
+    }
+    let (year, month, day) = htpc_core::date_from_unix(unix);
+    let name = MONTHS[(month as usize).clamp(1, 12) - 1];
+    if now == 0 || htpc_core::date_from_unix(now).0 == year {
+        format!("{name} {day}")
+    } else {
+        format!("{name} {day}, {year}")
+    }
+}
+
+/// How long before `now` something was, in the largest whole unit: `just now`, `12 min ago`,
+/// `3 hours ago`, `1 day ago`, `2 months ago`, `1 year ago`.
+pub fn format_ago(then: u64, now: u64) -> String {
+    let plural = |n: u64, unit: &str| {
+        if n == 1 {
+            format!("1 {unit} ago")
+        } else {
+            format!("{n} {unit}s ago")
+        }
+    };
+    let secs = now.saturating_sub(then);
+    match secs {
+        0..=59 => "just now".to_owned(),
+        60..=3_599 => format!("{} min ago", secs / 60),
+        3_600..=86_399 => plural(secs / 3_600, "hour"),
+        86_400..=2_591_999 => plural(secs / 86_400, "day"),
+        2_592_000..=31_535_999 => plural(secs / 2_592_000, "month"),
+        _ => plural(secs / 31_536_000, "year"),
+    }
+}
+
 /// A count with thousands separators: `1,234`, `48,100`.
 pub fn format_count(n: u64) -> String {
     let digits = n.to_string();
@@ -684,6 +861,12 @@ fn row_title(kind: RowKind, platform: Platform, feed: &FeedId) -> &'static str {
         RowKind::SearchOffline => "Offline channels",
         // Only drawn when it holds the resume card alone (Home has no other row of streams).
         RowKind::Resume => "Multiview",
+        // A channel page's rows (vod-plan.md section 2). The page itself is phase 3.
+        RowKind::LiveNow => "Live now",
+        RowKind::PastBroadcasts => "Past broadcasts",
+        RowKind::Highlights => "Highlights",
+        RowKind::ClipsWeek => "Top clips · last 7 days",
+        RowKind::ClipsAllTime => "Top clips · all time",
     }
 }
 
@@ -699,7 +882,12 @@ fn shape_of(kind: RowKind) -> Shape {
         | RowKind::SearchOffline
         | RowKind::FavoritesLive
         | RowKind::FavoritesOffline
-        | RowKind::Resume => Shape::Landscape,
+        | RowKind::Resume
+        | RowKind::LiveNow
+        | RowKind::PastBroadcasts
+        | RowKind::Highlights
+        | RowKind::ClipsWeek
+        | RowKind::ClipsAllTime => Shape::Landscape,
     }
 }
 
@@ -750,7 +938,54 @@ fn tile_card(state: &AppState, tile: &Tile) -> CardVm {
                 .collect(),
             ..CardVm::default()
         },
+        // The channel page's cards (vod-plan.md section 2): the title as the big line, then the
+        // date and the category, the length as a chip, and a bar for a video left part-way.
+        Tile::Video(v) => CardVm {
+            channel: v.title.clone(),
+            meta: meta_line(&[format_date(v.created_at, now_of(state)), v.category.clone()]),
+            length: format_duration(v.length_s),
+            progress: state
+                .progress_of(&v.id)
+                .map_or(0, |p| to_i32(p.permille() as usize)),
+            muted_audio: !v.muted.is_empty(),
+            locked: v.sub_only,
+            tint: v.tint,
+            thumb_url: v.thumbnail.clone().unwrap_or_default(),
+            ..CardVm::default()
+        },
+        Tile::Clip(c) => CardVm {
+            channel: c.title.clone(),
+            // Who clipped it shows with the card focused, in the second line of text.
+            title: if c.clipped_by.is_empty() {
+                String::new()
+            } else {
+                format!("Clipped by {}", c.clipped_by)
+            },
+            meta: meta_line(&[
+                format!("{} views", format_viewers(c.views)),
+                format_date(c.created_at, now_of(state)),
+            ]),
+            length: format_duration(c.length_s),
+            tint: c.tint,
+            thumb_url: c.thumbnail.clone().unwrap_or_default(),
+            ..CardVm::default()
+        },
     }
+}
+
+/// The page's clock for dates (0 before it has loaded, which leaves the year out).
+fn now_of(state: &AppState) -> u64 {
+    state.channel_page.as_ref().map_or(0, |p| p.now)
+}
+
+/// The parts that are not empty, joined: "Nov 10 · Just Chatting".
+fn meta_line(parts: &[String]) -> String {
+    let parts: Vec<&str> = parts
+        .iter()
+        .map(String::as_str)
+        .filter(|p| !p.is_empty())
+        .collect();
+    parts.join(" · ")
 }
 
 fn skeleton() -> CardVm {
@@ -858,6 +1093,51 @@ fn feed_rows(state: &AppState, id: &FeedId, feed: &Feed) -> Vec<RowVm> {
     rows
 }
 
+/// The channel page's rows for one tab: its tiles, or skeleton cards while it loads. The rows
+/// have no further pages.
+fn channel_rows(state: &AppState, feed: &Feed) -> Vec<RowVm> {
+    if feed.rows.is_empty() {
+        return if feed.loading {
+            vec![RowVm {
+                title: String::new(),
+                shape: Shape::Landscape,
+                cards: vec![skeleton(); SKELETON_HOME_COLS],
+            }]
+        } else {
+            Vec::new()
+        };
+    }
+    feed.rows
+        .iter()
+        .map(|r| RowVm {
+            title: row_title(r.kind, r.platform, &FeedId::Home).to_owned(),
+            shape: shape_of(r.kind),
+            cards: r.tiles.iter().map(|t| tile_card(state, t)).collect(),
+        })
+        .collect()
+}
+
+/// The line under the channel's name: "Live now", or "Offline · last live 3 hours ago". Empty
+/// until the page has said which.
+fn channel_status(page: &ChannelPage) -> String {
+    if page.live.is_some() {
+        return "Live now".to_owned();
+    }
+    match page.last_live_at {
+        Some(at) if page.now > 0 => format!("Offline · last live {}", format_ago(at, page.now)),
+        _ if page.now == 0 => String::new(),
+        _ => "Offline".to_owned(),
+    }
+}
+
+/// What an empty channel tab says.
+fn channel_empty_text(tab: ChannelTab) -> &'static str {
+    match tab {
+        ChannelTab::Videos => "No past broadcasts or highlights yet",
+        ChannelTab::Clips => "No clips yet",
+    }
+}
+
 /// Lightens a colour that would be hard to read on the dark background, keeping its hue.
 pub fn readable_name_colour(c: Rgb) -> Rgb {
     let brightness =
@@ -932,7 +1212,8 @@ fn rail_slot(screen: Screen) -> Option<i32> {
         Screen::Browse | Screen::Category => RailEntry::Browse,
         Screen::Search => RailEntry::Search,
         Screen::Settings => RailEntry::Settings,
-        Screen::Player | Screen::Login | Screen::Multiview => return None,
+        // The channel page sits above the screen it was opened from, which stays highlighted.
+        Screen::Player | Screen::Login | Screen::Multiview | Screen::Channel => return None,
     };
     Some(to_i32(entry.index()))
 }
@@ -987,6 +1268,12 @@ fn toast(t: &Toast) -> ToastVm {
         }
         ToastKind::SlowNetwork { muted: false } => {
             return note("Slow network: lowered the quality".to_owned())
+        }
+        ToastKind::Resumed { pos_s } => {
+            return note(format!(
+                "Resumed at {} · Start over in the menu",
+                format_duration(*pos_s)
+            ))
         }
     };
     let line = match (s.title.is_empty(), s.category.is_empty()) {
@@ -1078,6 +1365,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         Screen::Browse | Screen::Category => ScreenId::Grid,
         Screen::Settings => ScreenId::Settings,
         Screen::Search => ScreenId::Search,
+        Screen::Channel => ScreenId::Channel,
         // Following and Favorites draw like Home: horizontal rows.
         Screen::Home | Screen::Following | Screen::Favorites => ScreenId::Home,
     };
@@ -1099,8 +1387,17 @@ pub fn view_model(state: &AppState) -> ViewModel {
         _ if !browsing || state.rail.focused || search_on_keys => "",
         Some(Tile::Stream(_)) => "Multiview",
         Some(Tile::Channel(_)) => "Favorites",
-        Some(Tile::Category(_) | Tile::Resume(_)) | None => "",
+        Some(Tile::Category(_) | Tile::Resume(_) | Tile::Video(_) | Tile::Clip(_)) | None => "",
     };
+    // Y opens the channel page of a Twitch stream or channel card (Kick has none).
+    let can_channel = browsing
+        && !state.rail.focused
+        && !search_on_keys
+        && match state.focused_tile() {
+            Some(Tile::Stream(s)) => s.channel.features().videos,
+            Some(Tile::Channel(c)) => c.channel.features().videos,
+            _ => false,
+        };
     // Overlays highlight the root screen underneath them.
     let rail_current = rail_slot(state.screen)
         .or_else(|| state.back_stack.iter().rev().find_map(|s| rail_slot(*s)))
@@ -1121,11 +1418,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
     let on_player = state.screen == Screen::Player;
     // Built only while the card is open, so the diff flags a new code when it opens or the
     // channel changes, and never otherwise.
+    let on_channel = state.screen == Screen::Channel;
     let subscribe_page = state
-        .now_playing
-        .as_ref()
-        .filter(|_| on_player && state.subscribe_card)
-        .map(|p| subscribe_url(&p.channel.login));
+        .subscribe_channel()
+        .filter(|_| (on_player || on_channel) && state.subscribe_card)
+        .map(|c| subscribe_url(&c.login));
     let (subscribe_url_text, subscribe_qr, subscribe_qr_width) = match &subscribe_page {
         Some(url) => {
             let (qr, width) = qr_modules(url);
@@ -1140,6 +1437,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         .as_ref()
         .filter(|_| on_player || state.screen == Screen::Multiview);
     let mv = multiview::multiview_vm(state);
+    let video = video_vm(state);
     let hype = state.hype_train.as_ref().filter(|_| on_player);
     let composing = state.composing();
     let (compose_status, compose_problem) = compose_status(state);
@@ -1152,8 +1450,16 @@ pub fn view_model(state: &AppState) -> ViewModel {
 
     // The feed drawn is the current screen's, or the one under an overlay.
     let id = state.visible_feed_id();
-    let feed = state.feed(&id);
+    // The channel page's tab on screen is not a `FeedId`.
+    let channel_page = state.channel_page.as_ref().filter(|_| on_channel);
+    let feed = match channel_page {
+        Some(page) => Some(page.feed()),
+        None => state.feed(&id),
+    };
     let (rows, focus, error, loading) = match feed {
+        Some(f) if channel_page.is_some() => {
+            (channel_rows(state, f), f.focus, f.error.clone(), f.loading)
+        }
         Some(f) => (
             feed_rows(state, &id, f),
             f.focus,
@@ -1163,8 +1469,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
         None => (Vec::new(), Default::default(), None, false),
     };
     // Separate rows keep their own scroll position (see `Feed::row_cols`).
+    let separate_rows = channel_page.is_some() || !id.is_grid();
     let row_cols: Vec<i32> = match feed {
-        Some(f) if !id.is_grid() => (0..rows.len())
+        Some(f) if separate_rows => (0..rows.len())
             .map(|r| {
                 to_i32(if r == focus.row {
                     focus.col
@@ -1180,6 +1487,20 @@ pub fn view_model(state: &AppState) -> ViewModel {
     let focused_card = feed.and_then(Feed::focused_tile);
     let selects_category = focused_card.is_some_and(|t| matches!(t, Tile::Category(_)));
     let selects_resume = focused_card.is_some_and(|t| matches!(t, Tile::Resume(_)));
+    // A on an offline Twitch channel opens its channel page instead of the end screen.
+    let selects_channel_page =
+        focused_card.is_some_and(|t| matches!(t, Tile::Channel(c) if c.channel.features().videos));
+    // What A does on the channel page's focused card.
+    let channel_select: Option<String> = channel_page.map(|_| match focused_card {
+        Some(Tile::Stream(_) | Tile::Clip(_)) => "Watch".to_owned(),
+        // The subscribe card (a QR code), as the player menu's Subscribe row.
+        Some(Tile::Video(v)) if v.sub_only => "Subscribe".to_owned(),
+        Some(Tile::Video(v)) => match state.progress_of(&v.id) {
+            Some(p) => format!("Resume at {}", format_duration(p.pos_s)),
+            None => "Watch".to_owned(),
+        },
+        _ => String::new(),
+    });
     let (playback, playback_error) = match &state.playback {
         Playback::Idle | Playback::Loading => (PlaybackId::Loading, String::new()),
         Playback::Playing => (PlaybackId::Playing, String::new()),
@@ -1231,11 +1552,20 @@ pub fn view_model(state: &AppState) -> ViewModel {
             None => compose_key_label(state.compose.keys.key()),
         };
         (label, false)
+    } else if on_player && state.player_menu == Some(PlayerMenuRow::StartOver) {
+        ("Start over", false)
+    } else if on_player && state.player_menu == Some(PlayerMenuRow::Chapters) {
+        ("Jump there", false)
     } else if on_player && state.player_menu.is_some_and(PlayerMenuRow::is_action) {
         ("Open", false)
     } else if on_player && state.player_menu.is_some() {
         // The menu has the buttons: A changes the focused value.
         ("Change", false)
+    } else if video.end_card {
+        ("Select", false)
+    } else if video.scrubbing {
+        // A jumps to the playhead at once.
+        ("Jump here", false)
     } else if on_player {
         match playback {
             PlaybackId::Loading => ("", false),
@@ -1245,12 +1575,16 @@ pub fn view_model(state: &AppState) -> ViewModel {
             PlaybackId::Playing => ("Pause", false),
             PlaybackId::Offline | PlaybackId::Failed => ("Retry", true),
         }
+    } else if let Some(label) = &channel_select {
+        (label.as_str(), error.is_some())
     } else {
         (
             if selects_category {
                 "Open"
             } else if selects_resume {
                 "Resume"
+            } else if selects_channel_page {
+                "Channel videos"
             } else {
                 "Watch"
             },
@@ -1280,9 +1614,15 @@ pub fn view_model(state: &AppState) -> ViewModel {
         login_failed: state.login_problem.is_some(),
         qr,
         qr_width,
-        heading: heading(state, &id),
+        heading: match channel_page {
+            Some(page) => page.name.clone(),
+            None => heading(state, &id),
+        },
         feed_empty: rows.is_empty() && error.is_none() && !loading,
-        empty_text: empty_text(&id).to_owned(),
+        empty_text: match channel_page {
+            Some(page) => channel_empty_text(page.tab).to_owned(),
+            None => empty_text(&id).to_owned(),
+        },
         can_retry,
         feed_error: error.unwrap_or_default(),
         select_label: select_label.to_owned(),
@@ -1294,6 +1634,19 @@ pub fn view_model(state: &AppState) -> ViewModel {
         } else {
             String::new()
         },
+        can_channel,
+        channel_name: channel_page.map(|p| p.name.clone()).unwrap_or_default(),
+        channel_avatar: channel_page
+            .and_then(|p| p.avatar.clone())
+            .unwrap_or_default(),
+        channel_initial: channel_page
+            .and_then(|p| p.name.chars().next())
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default(),
+        channel_live: channel_page.is_some_and(|p| p.live.is_some()),
+        channel_status: channel_page.map(channel_status).unwrap_or_default(),
+        channel_tab: channel_page.map_or(0, |p| p.tab as i32),
+        can_start_over: channel_page.is_some() && state.focused_progress().is_some(),
         settings_focus: to_i32(state.settings_focus.index()),
         chat_layout_label: state.settings.chat_layout.label().to_owned(),
         quality_label: state.settings.quality.label().to_owned(),
@@ -1307,8 +1660,13 @@ pub fn view_model(state: &AppState) -> ViewModel {
         playback_details,
         paused: state.paused,
         player_menu_open: on_player && state.player_menu.is_some(),
-        player_menu_focus: to_i32(state.player_menu.unwrap_or_default().index()),
-        player_menu_values: player_menu_values(state),
+        player_menu_focus: to_i32(
+            state
+                .player_menu
+                .and_then(|row| state.player_menu_rows().iter().position(|r| *r == row))
+                .unwrap_or(0),
+        ),
+        player_menu_rows: player_menu_rows(state),
         audio_only: on_player && state.audio_only,
         stats_text: stats_text(state),
         hud_pulse: state.hud_pulse as i32,
@@ -1379,13 +1737,15 @@ pub fn view_model(state: &AppState) -> ViewModel {
             .skip(state.chat.len().saturating_sub(CHAT_LINES_SHOWN))
             .map(chat_line)
             .collect(),
-        now_playing: state
-            .now_playing
-            .as_ref()
-            .map(stream_card)
-            .unwrap_or_default(),
+        // A video shows as its channel and title (the loading tint, the audio-only watermark).
+        now_playing: match (&state.now_playing, &state.video) {
+            (Some(stream), _) => stream_card(stream),
+            (None, Some(v)) => video::now_playing_card(v),
+            (None, None) => CardVm::default(),
+        },
         video_slot: i32::from(state.sound_slot()),
         mv,
+        video,
     }
 }
 
@@ -1531,6 +1891,8 @@ impl Update {
                 ui.set_picker_starred(ModelRc::new(VecModel::from(vm.mv.picker_starred.clone())));
             }
             ui.set_now_playing(to_stream_item(&vm.now_playing, images));
+            // The profile picture, like a card's image: shown at once if it was fetched before.
+            ui.set_channel_avatar(images.get(&vm.channel_avatar).unwrap_or_default());
         });
         apply_multiview(ui, &vm.mv, self.mv_lists_changed);
         ui.set_video_slot(vm.video_slot);
@@ -1566,6 +1928,15 @@ impl Update {
         ui.set_can_view(vm.can_view);
         ui.set_view_label(vm.view_label.into());
         ui.set_tray_text(vm.tray_text.into());
+        ui.set_can_channel(vm.can_channel);
+        ui.set_channel_name(vm.channel_name.into());
+        // Rust patches the image in when it arrives, by this key (`apply_thumbnail`).
+        ui.set_channel_avatar_url(vm.channel_avatar.into());
+        ui.set_channel_initial(vm.channel_initial.into());
+        ui.set_channel_live(vm.channel_live);
+        ui.set_channel_status(vm.channel_status.into());
+        ui.set_channel_tab(vm.channel_tab);
+        ui.set_can_start_over(vm.can_start_over);
         ui.set_settings_focus(vm.settings_focus);
         ui.set_chat_layout_label(vm.chat_layout_label.into());
         ui.set_quality_label(vm.quality_label.into());
@@ -1578,12 +1949,19 @@ impl Update {
         ui.set_paused(vm.paused);
         ui.set_player_menu_open(vm.player_menu_open);
         ui.set_player_menu_focus(vm.player_menu_focus);
-        let values: Vec<slint::SharedString> = vm
-            .player_menu_values
+        let items: Vec<MenuItem> = vm
+            .player_menu_rows
             .iter()
-            .map(|v| v.as_str().into())
+            .map(|r| MenuItem {
+                title: r.title.as_str().into(),
+                value: r.value.as_str().into(),
+                help: r.help.as_str().into(),
+                action: r.action,
+                locked: r.locked,
+            })
             .collect();
-        ui.set_player_menu_values(ModelRc::new(VecModel::from(values)));
+        ui.set_player_menu_items(ModelRc::new(VecModel::from(items)));
+        ui.set_video_hud(to_video_hud(&vm.video));
         ui.set_audio_only(vm.audio_only);
         ui.set_stats_text(vm.stats_text.into());
         ui.set_hud_pulse(vm.hud_pulse);
@@ -1635,6 +2013,39 @@ impl Update {
         ui.set_compose_problem(vm.compose_problem);
         ui.set_room_mode(vm.room_mode.into());
         ui.set_compose_hint(vm.compose_hint.into());
+    }
+}
+
+fn to_video_hud(v: &VideoVm) -> VideoHud {
+    let muted: Vec<SpanItem> = v
+        .muted
+        .iter()
+        .map(|m| SpanItem {
+            start: m.start,
+            width: m.width,
+        })
+        .collect();
+    VideoHud {
+        on: v.on,
+        kind: v.kind.as_str().into(),
+        channel: v.channel.as_str().into(),
+        title: v.title.as_str().into(),
+        meta: v.meta.as_str().into(),
+        pos: v.pos.as_str().into(),
+        length: v.length.as_str().into(),
+        head: v.head,
+        chapter: v.chapter.as_str().into(),
+        ticks: ModelRc::new(VecModel::from(v.ticks.clone())),
+        muted: ModelRc::new(VecModel::from(muted)),
+        in_muted: v.in_muted,
+        chip: v.chip.as_str().into(),
+        chip_side: v.chip_side,
+        seeking: v.seeking,
+        scrubbing: v.scrubbing,
+        speed: v.speed.as_str().into(),
+        chapters: v.chapters,
+        end_card: v.end_card,
+        end_focus: v.end_focus,
     }
 }
 
@@ -1872,6 +2283,10 @@ pub fn apply_thumbnail(ui: &MainWindow, url: &str, thumb: &Thumbnail) {
             }
         }
     }
+    // The channel page's profile picture.
+    if ui.get_channel_avatar_url().as_str() == url {
+        ui.set_channel_avatar(image.clone());
+    }
     // A toast's preview comes the same way as a card's.
     let toasts = ui.get_toasts();
     if let Some(model) = vec_model(&toasts) {
@@ -1957,6 +2372,11 @@ fn to_stream_item(c: &CardVm, images: &ImageMemory) -> StreamItem {
         kick: c.kick,
         picked: c.picked,
         resume: c.resume,
+        meta: c.meta.as_str().into(),
+        length: c.length.as_str().into(),
+        progress: c.progress,
+        muted_audio: c.muted_audio,
+        locked: c.locked,
         mosaic: ModelRc::new(VecModel::from(
             c.mosaic
                 .iter()
@@ -1990,6 +2410,11 @@ fn same_card(old: &StreamItem, new: &CardVm) -> bool {
         && old.kick == new.kick
         && old.picked == new.picked
         && old.resume == new.resume
+        && old.meta.as_str() == new.meta
+        && old.length.as_str() == new.length
+        && old.progress == new.progress
+        && old.muted_audio == new.muted_audio
+        && old.locked == new.locked
         && old.mosaic.row_count() == new.mosaic.len()
         && old
             .mosaic
@@ -2914,7 +3339,15 @@ mod tests {
         let s = on_subscribe_row(true);
         let vm = view_model(&s);
         assert_eq!(vm.player_menu_focus, 7);
-        assert_eq!(vm.player_menu_values[7], "");
+        assert_eq!(vm.player_menu_rows[7].value, "");
+        assert!(vm.player_menu_rows[7].action);
+        assert_eq!(
+            vm.player_menu_rows[7].title,
+            format!(
+                "Subscribe to {}",
+                s.now_playing.as_ref().unwrap().channel.login
+            )
+        );
         assert_eq!(vm.select_label, "Open");
         assert!(!vm.subscribe_open && vm.subscribe_qr.is_empty());
     }

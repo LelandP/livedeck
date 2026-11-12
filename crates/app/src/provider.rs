@@ -9,12 +9,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use htpc_core::{
-    grid_rows, Category, Channel, ChannelRef, Command, Event, FeedId, HypeTrain, PageOutcome,
-    Paging, Platform, Rgb, Row, RowId, RowKind, SendProblem, Stream, Tile, RESUME_MIN_LIVE,
+    grid_rows, unix_from_rfc3339, Category, Channel, ChannelInfo, ChannelRef, Chapter, Clip,
+    Command, Event, FeedId, HypeTrain, PageOutcome, Paging, Platform, Rgb, Row, RowId, RowKind,
+    SendProblem, Span, Stream, Tile, Video, VideoDetails, VideoKind, RESUME_MIN_LIVE,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
-    ChannelResult, DropReason, FollowedChannel, Game, Page, PageRequest, StreamInfo, TwitchApi,
+    ChannelResult, ChannelVideos, ClipInfo, DropReason, FollowedChannel, Game, MutedSegment, Page,
+    PageRequest, StreamInfo, TwitchApi, VideoInfo, VideoType,
 };
 use htpc_ui::Thumbnail;
 use tokio::sync::OnceCell;
@@ -846,6 +848,63 @@ impl<A: TwitchApi> ApiProvider<A> {
     }
 }
 
+impl<A: TwitchApi> ApiProvider<A> {
+    /// A channel page (vod-plan.md section 2): one GQL request for the whole page.
+    async fn load_channel_page(&self, channel: ChannelRef) -> Event {
+        let failed = |channel, message: String| Event::ChannelPageFailed { channel, message };
+        if !channel.features().videos {
+            return failed(channel, "Videos are not available for this channel".into());
+        }
+        match self.api.channel_videos(&channel.login).await {
+            Ok(Some(page)) => {
+                let (info, rows) = channel_page(page, refresh_bucket(), unix_now());
+                Event::ChannelPageLoaded {
+                    info: Box::new(info),
+                    rows,
+                }
+            }
+            Ok(None) => {
+                let message = format!("There is no channel called {}", channel.login);
+                failed(channel, message)
+            }
+            Err(err) => {
+                tracing::warn!(channel = %channel.login, %err, "could not load the channel page");
+                failed(channel, err.to_string())
+            }
+        }
+    }
+
+    /// A video's chapters, muted parts and seek previews. A failure is only logged: the player
+    /// does without them.
+    async fn video_details(&self, id: &str) -> Option<Event> {
+        match self.api.video_details(id).await {
+            Ok(Some(d)) => Some(Event::VideoDetails(VideoDetails {
+                id: d.id,
+                length_s: d.length_seconds,
+                chapters: d
+                    .chapters
+                    .into_iter()
+                    .map(|c| Chapter {
+                        start_ms: c.position_ms,
+                        length_ms: c.duration_ms,
+                        name: c.name,
+                    })
+                    .collect(),
+                muted: spans(&d.muted),
+                previews: (!d.seek_previews_url.is_empty()).then_some(d.seek_previews_url),
+            })),
+            Ok(None) => {
+                tracing::debug!(id, "no such video");
+                None
+            }
+            Err(err) => {
+                tracing::debug!(id, %err, "could not load the video's details");
+                None
+            }
+        }
+    }
+}
+
 impl<A: TwitchApi> Provider for ApiProvider<A> {
     async fn execute(&self, cmd: Command) -> Vec<Event> {
         match cmd {
@@ -866,6 +925,8 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
                     Err(message) => vec![Event::SearchFailed { id, message }],
                 }
             }
+            Command::LoadChannelPage { channel } => vec![self.load_channel_page(channel).await],
+            Command::LoadVideoDetails { id } => self.video_details(&id).await.into_iter().collect(),
             Command::FetchStreamInfo { channel } if !channel.is_twitch() => Vec::new(),
             Command::FetchStreamInfo { channel } => {
                 self.stream_info(&channel.login).await.into_iter().collect()
@@ -892,12 +953,18 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::DisconnectRaids
             | Command::StartRaidCountdown { .. }
             | Command::Play { .. }
+            | Command::PlayVideo { .. }
+            | Command::Seek { .. }
+            | Command::SetSpeed { .. }
             | Command::SetPaused { .. }
             | Command::SetMuted { .. }
             | Command::StopPlayback { .. }
             | Command::SetPlayerOption(_)
             | Command::SetStats { .. }
             | Command::SettleQuality { .. }
+            | Command::SettleSeek { .. }
+            | Command::HoldCheck { .. }
+            | Command::ScrubTick { .. }
             | Command::FetchThumbnails { .. }
             | Command::FetchChatImages { .. }
             | Command::JoinChat { .. }
@@ -980,10 +1047,14 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
 
 /// The current refresh bucket, see [`PREVIEW_REFRESH_SECS`].
 fn refresh_bucket() -> u64 {
-    let secs = SystemTime::now()
+    unix_now() / PREVIEW_REFRESH_SECS
+}
+
+/// The wall clock in Unix seconds (0 if it is before 1970).
+fn unix_now() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    secs / PREVIEW_REFRESH_SECS
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Fills in a Helix thumbnail template (`...-{width}x{height}.jpg`). GQL URLs are already sized
@@ -1074,6 +1145,108 @@ fn category(g: &Game) -> Tile {
     })
 }
 
+/// A channel page's header and rows, in the order `Event::ChannelPageLoaded` documents. `now` is
+/// the wall clock (`ChannelInfo::loaded_at`). Empty rows are left out. Every video and clip belongs to the page's channel (the query is per
+/// channel), whatever a video's own owner field says.
+fn channel_page(page: ChannelVideos, bucket: u64, now: u64) -> (ChannelInfo, Vec<Row>) {
+    let channel = ChannelRef::twitch(page.user.login.clone());
+    let name = page.user.display_name.clone();
+    let live = page.live.as_ref().map(|s| stream_of(s, bucket));
+    let info = ChannelInfo {
+        channel: channel.clone(),
+        user_id: page.user.id.clone(),
+        name: name.clone(),
+        avatar: (!page.user.profile_image_url.is_empty())
+            .then(|| page.user.profile_image_url.clone()),
+        live: live.clone(),
+        last_live_at: page
+            .last_broadcast_at
+            .as_deref()
+            .and_then(unix_from_rfc3339),
+        loaded_at: now,
+    };
+    let videos = |list: &[VideoInfo]| -> Vec<Tile> {
+        list.iter()
+            .map(|v| Tile::Video(video_of(v, &channel, &name, bucket)))
+            .collect()
+    };
+    let clips = |list: &[ClipInfo]| -> Vec<Tile> {
+        list.iter()
+            .map(|c| Tile::Clip(clip_of(c, &channel)))
+            .collect()
+    };
+    let rows = [
+        (
+            RowKind::LiveNow,
+            live.map(Tile::Stream).into_iter().collect(),
+        ),
+        (RowKind::PastBroadcasts, videos(&page.archives)),
+        (RowKind::Highlights, videos(&page.highlights)),
+        (RowKind::ClipsWeek, clips(&page.clips_week)),
+        (RowKind::ClipsAllTime, clips(&page.clips_all_time)),
+    ]
+    .into_iter()
+    .filter(|(_, tiles)| !tiles.is_empty())
+    .map(|(kind, tiles)| Row::new(kind, tiles))
+    .collect();
+    (info, rows)
+}
+
+fn video_of(v: &VideoInfo, channel: &ChannelRef, channel_name: &str, bucket: u64) -> Video {
+    Video {
+        id: v.id.clone(),
+        channel: channel.clone(),
+        channel_name: channel_name.to_owned(),
+        kind: match v.kind {
+            VideoType::Archive => VideoKind::Archive,
+            VideoType::Highlight => VideoKind::Highlight,
+        },
+        title: v.title.clone(),
+        category: v.game_name.clone(),
+        length_s: v.length_seconds,
+        created_at: unix_from_rfc3339(&v.created_at).unwrap_or(0),
+        views: v.view_count,
+        tint: tint_for(&v.id),
+        // A recording broadcast's preview changes like a live stream's, so it gets the same
+        // refresh bucket. A finished video's never changes.
+        thumbnail: sized_url(&v.thumbnail_url, PREVIEW_SIZE).map(|u| {
+            if v.recording {
+                format!("{u}?t={bucket}")
+            } else {
+                u
+            }
+        }),
+        muted: spans(&v.muted),
+        sub_only: v.sub_only,
+        recording: v.recording,
+    }
+}
+
+fn clip_of(c: &ClipInfo, channel: &ChannelRef) -> Clip {
+    Clip {
+        slug: c.slug.clone(),
+        channel: channel.clone(),
+        title: c.title.clone(),
+        category: c.game_name.clone(),
+        length_s: c.duration_seconds,
+        views: c.view_count,
+        clipped_by: c.curator_name.clone(),
+        created_at: unix_from_rfc3339(&c.created_at).unwrap_or(0),
+        tint: tint_for(&c.slug),
+        thumbnail: sized_url(&c.thumbnail_url, PREVIEW_SIZE),
+    }
+}
+
+fn spans(muted: &[MutedSegment]) -> Vec<Span> {
+    muted
+        .iter()
+        .map(|m| Span {
+            start_s: m.offset,
+            length_s: m.duration,
+        })
+        .collect()
+}
+
 /// Muted placeholder tints in the scaffold's palette, shown until a thumbnail has loaded.
 const PALETTE: [u32; 10] = [
     0x3a5a40, 0x6b2d3c, 0x2d4a6b, 0x5a4a2d, 0x4a2d6b, 0x7a2e2e, 0x2e5a7a, 0x4f6b2d, 0x6b4f2d,
@@ -1115,6 +1288,8 @@ mod tests {
             Tile::Category(c) => &c.name,
             Tile::Channel(c) => &c.channel.login,
             Tile::Resume(_) => "resume",
+            Tile::Video(v) => &v.id,
+            Tile::Clip(c) => &c.slug,
         }
     }
 
@@ -1842,6 +2017,8 @@ mod tests {
             Tile::Channel(c) => &c.channel.login,
             Tile::Category(c) => &c.id,
             Tile::Resume(_) => "resume",
+            Tile::Video(v) => &v.id,
+            Tile::Clip(c) => &c.slug,
         }
     }
 
@@ -2214,5 +2391,222 @@ mod tests {
             "{events:?}"
         );
         assert!(sent.lock().unwrap().is_empty());
+    }
+
+    async fn channel_page_of(provider: &ApiProvider<FakeApi>, login: &str) -> Event {
+        let events = provider
+            .execute(Command::LoadChannelPage {
+                channel: ChannelRef::twitch(login),
+            })
+            .await;
+        let [event] = <[Event; 1]>::try_from(events).expect("one event");
+        event
+    }
+
+    fn page_rows(event: Event) -> (ChannelInfo, Vec<Row>) {
+        match event {
+            Event::ChannelPageLoaded { info, rows } => (*info, rows),
+            other => panic!("expected a channel page, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_offline_channel_page_has_its_videos_and_clips() {
+        let provider = ApiProvider::new(fake_api());
+        let (info, rows) = page_rows(channel_page_of(&provider, "sleepy_fox").await);
+        assert_eq!(info.channel, ChannelRef::twitch("sleepy_fox"));
+        assert_eq!(info.live, None);
+        assert_eq!(
+            info.last_live_at,
+            unix_from_rfc3339("2026-11-10T18:00:00Z"),
+            "the newest broadcast"
+        );
+        assert_eq!(
+            kinds(&rows),
+            [
+                RowKind::PastBroadcasts,
+                RowKind::Highlights,
+                RowKind::ClipsWeek,
+                RowKind::ClipsAllTime
+            ]
+        );
+        assert!(rows.iter().all(|r| r.paging == Paging::End));
+
+        let Tile::Video(v) = &rows[0].tiles[0] else {
+            panic!("{:?}", rows[0].tiles[0])
+        };
+        assert_eq!(v.id, "9000000001");
+        assert_eq!(v.kind, VideoKind::Archive);
+        assert_eq!(v.channel, ChannelRef::twitch("sleepy_fox"));
+        assert_eq!(v.length_s, 15_128);
+        assert_eq!(v.created_at, 1_794_333_600);
+        assert_eq!(
+            v.muted,
+            [Span {
+                start_s: 5_400,
+                length_s: 360
+            }]
+        );
+        assert!(!v.sub_only && !v.recording);
+        assert_eq!(v.thumbnail, None, "the mock has no images");
+        let locked = rows[0]
+            .tiles
+            .iter()
+            .filter(|t| matches!(t, Tile::Video(v) if v.sub_only))
+            .count();
+        assert_eq!(locked, 1);
+        assert!(rows[1]
+            .tiles
+            .iter()
+            .all(|t| matches!(t, Tile::Video(v) if v.kind == VideoKind::Highlight)));
+
+        let Tile::Clip(c) = &rows[3].tiles[0] else {
+            panic!("{:?}", rows[3].tiles[0])
+        };
+        assert_eq!(c.slug, "WorldRecordChatGoesWild");
+        assert_eq!(c.channel, ChannelRef::twitch("sleepy_fox"));
+        assert_eq!((c.length_s, c.views), (52, 412_000));
+        assert_eq!(c.clipped_by, "mossy_k");
+        assert_eq!(
+            rows[3].tiles.len(),
+            2,
+            "driftwood's clip is not on sleepy_fox's page"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_channel_page_leads_with_its_stream() {
+        let provider = ApiProvider::new(fake_api());
+        let (info, rows) = page_rows(channel_page_of(&provider, "pixelpilgrim").await);
+        let live = info.live.expect("live");
+        assert_eq!(live.channel, ChannelRef::twitch("pixelpilgrim"));
+        assert_eq!(kinds(&rows), [RowKind::LiveNow, RowKind::PastBroadcasts]);
+        assert_eq!(rows[0].tiles, [Tile::Stream(live)]);
+        assert!(matches!(&rows[1].tiles[0], Tile::Video(v) if v.recording));
+    }
+
+    #[tokio::test]
+    async fn a_channel_page_without_videos_has_only_what_it_has() {
+        // Live, but no videos or clips at all: just the live card.
+        let provider = ApiProvider::new(fake_api());
+        let (info, rows) = page_rows(channel_page_of(&provider, "marrow").await);
+        assert!(info.live.is_some());
+        assert_eq!(kinds(&rows), [RowKind::LiveNow]);
+        assert_eq!(info.last_live_at, None);
+    }
+
+    #[tokio::test]
+    async fn unknown_and_kick_channel_pages_fail() {
+        let provider = ApiProvider::new(fake_api());
+        let event = channel_page_of(&provider, "nobody_here").await;
+        assert!(
+            matches!(&event, Event::ChannelPageFailed { channel, message }
+                if channel.login == "nobody_here" && message.contains("no channel")),
+            "{event:?}"
+        );
+
+        let kick = ChannelRef::kick("neon_drift");
+        let events = provider
+            .execute(Command::LoadChannelPage {
+                channel: kick.clone(),
+            })
+            .await;
+        assert!(
+            matches!(events.as_slice(), [Event::ChannelPageFailed { channel, .. }] if *channel == kick),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn video_details_map_chapters_and_fall_back_to_one() {
+        let provider = ApiProvider::new(fake_api());
+        let details = |id: &str| {
+            let provider = &provider;
+            let id = id.to_owned();
+            async move { provider.execute(Command::LoadVideoDetails { id }).await }
+        };
+        let events = details("9000000001").await;
+        let [Event::VideoDetails(d)] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        let chapters: Vec<_> = d
+            .chapters
+            .iter()
+            .map(|c| (c.start_ms, c.length_ms, c.name.as_str()))
+            .collect();
+        assert_eq!(
+            chapters,
+            [
+                (0, 1_260_000, "Just Chatting"),
+                (1_260_000, 6_540_000, "Hollow Knight"),
+                (7_800_000, 7_328_000, "Celeste")
+            ]
+        );
+        assert_eq!(d.muted.len(), 1);
+        assert_eq!(d.previews, None);
+
+        let events = details("9000000002").await;
+        let [Event::VideoDetails(d)] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            d.chapters,
+            [Chapter {
+                start_ms: 0,
+                length_ms: 20_421_000,
+                name: "Hollow Knight".into()
+            }]
+        );
+
+        assert!(details("1").await.is_empty(), "no such video: no event");
+    }
+
+    /// The recorded GQL page through the real client: sizes, times and thumbnails as Twitch sends
+    /// them.
+    #[tokio::test]
+    async fn a_gql_channel_page_through_the_provider() {
+        let server = MockServer::start().await;
+        let body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../twitch/tests/fixtures/gql_channel_videos.json"
+        ))
+        .unwrap();
+        Mock::given(path("/gql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let gql = htpc_twitch_api::GqlClient::with_endpoint(
+            format!("{}/gql", server.uri()),
+            "web-id",
+            RetryPolicy::default(),
+        )
+        .unwrap();
+        let provider = ApiProvider::new(gql);
+        let events = provider
+            .execute(Command::LoadChannelPage {
+                channel: ChannelRef::twitch("chatterbox"),
+            })
+            .await;
+        let [Event::ChannelPageLoaded { info, rows }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(info.name, "Chatterbox");
+        assert_eq!(info.user_id, "56990029");
+        assert!(info
+            .avatar
+            .as_deref()
+            .is_some_and(|a| a.contains("150x150")));
+        assert!(info.last_live_at.is_some());
+        let Tile::Video(v) = &rows[0].tiles[0] else {
+            panic!("{:?}", rows[0])
+        };
+        assert_eq!(
+            v.created_at,
+            unix_from_rfc3339("2026-11-10T18:28:22Z").unwrap()
+        );
+        assert_eq!(v.channel_name, "Chatterbox");
+        assert!(v
+            .thumbnail
+            .as_deref()
+            .is_some_and(|t| t.ends_with("-440x248.jpg")));
     }
 }

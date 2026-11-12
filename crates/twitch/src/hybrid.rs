@@ -8,8 +8,9 @@
 use std::sync::Arc;
 
 use crate::{
-    ChannelResult, Credentials, FollowedChannel, Game, GqlClient, HelixClient, HypeTrain, Page,
-    PageRequest, Result, SendOutcome, StreamInfo, TwitchApi, UserInfo,
+    ChannelResult, ChannelVideos, Credentials, FollowedChannel, Game, GqlClient, HelixClient,
+    HypeTrain, LiveArchive, Page, PageRequest, Result, SendOutcome, StreamInfo, TwitchApi,
+    UserInfo, VideoDetails,
 };
 
 #[derive(Debug)]
@@ -153,5 +154,20 @@ impl TwitchApi for HybridApi {
     /// Always GQL: Helix shows hype trains to the broadcaster only.
     async fn hype_train(&self, login: &str) -> Result<Option<HypeTrain>> {
         self.parts.gql.hype_train(login).await
+    }
+
+    /// Always GQL: Helix has no chapters or mute info, and would need a request per row.
+    async fn channel_videos(&self, login: &str) -> Result<Option<ChannelVideos>> {
+        self.parts.gql.channel_videos(login).await
+    }
+
+    /// Always GQL, like [`HybridApi::channel_videos`].
+    async fn video_details(&self, id: &str) -> Result<Option<VideoDetails>> {
+        self.parts.gql.video_details(id).await
+    }
+
+    /// Always GQL, like [`HybridApi::channel_videos`].
+    async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
+        self.parts.gql.live_archive(login).await
     }
 }

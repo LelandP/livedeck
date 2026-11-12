@@ -39,8 +39,9 @@ pub use gql::{GqlClient, GQL_MAX_PAGE_SIZE, GQL_URL, WEB_CLIENT_ID};
 pub use helix::{Credentials, HelixClient, DEFAULT_BASE_URL};
 pub use hybrid::HybridApi;
 pub use model::{
-    ChannelResult, DropReason, FollowedChannel, Game, HypeTrain, Page, PageRequest, SendOutcome,
-    StreamInfo, UserInfo, MAX_PAGE_SIZE,
+    ChannelResult, ChannelVideos, ClipInfo, DropReason, FollowedChannel, Game, HypeTrain,
+    LiveArchive, MutedSegment, Page, PageRequest, SendOutcome, StreamInfo, UserInfo, VideoChapter,
+    VideoDetails, VideoInfo, VideoType, MAX_PAGE_SIZE,
 };
 pub use ratelimit::{Bucket, RateLimiter, RetryPolicy};
 pub use refreshing::{Refresher, RefreshingApi};
@@ -126,6 +127,35 @@ pub trait TwitchApi: Send + Sync + 'static {
     /// the broadcaster's own token, so the default answers `Ok(None)` without a request, and
     /// [`HybridApi`] always asks GQL, signed in or not.
     fn hype_train(&self, login: &str) -> impl Future<Output = Result<Option<HypeTrain>>> + Send {
+        let _ = login;
+        async { Ok(None) }
+    }
+
+    /// The channel `login`'s page: who it is, whether it is live, its past broadcasts,
+    /// highlights and top clips, or `Ok(None)` when there is no such channel. Helix has no
+    /// chapters or mute info and needs several requests, so the default answers `Ok(None)`
+    /// without a request, and [`HybridApi`] always asks GQL, signed in or not.
+    fn channel_videos(
+        &self,
+        login: &str,
+    ) -> impl Future<Output = Result<Option<ChannelVideos>>> + Send {
+        let _ = login;
+        async { Ok(None) }
+    }
+
+    /// Chapters, muted parts and seek previews of the video `id`, or `Ok(None)` when there is no
+    /// such video. GQL only, like [`TwitchApi::channel_videos`].
+    fn video_details(&self, id: &str) -> impl Future<Output = Result<Option<VideoDetails>>> + Send {
+        let _ = id;
+        async { Ok(None) }
+    }
+
+    /// The past broadcast being recorded from `login`'s live stream, or `Ok(None)` when it is not
+    /// live or keeps no past broadcasts. GQL only, like [`TwitchApi::channel_videos`].
+    fn live_archive(
+        &self,
+        login: &str,
+    ) -> impl Future<Output = Result<Option<LiveArchive>>> + Send {
         let _ = login;
         async { Ok(None) }
     }

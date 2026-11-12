@@ -1,0 +1,200 @@
+{
+    "data":  {
+                 "user":  {
+                              "id":  "56990029",
+                              "login":  "chatterbox",
+                              "displayName":  "Chatterbox",
+                              "profileImageURL":  "https://static-cdn.jtvnw.net/jtv_user_pictures/b4b91a9a-1b95-4b27-8837-61dd20d9f033-profile_image-150x150.png",
+                              "lastBroadcast":  {
+                                                    "startedAt":  "2026-11-11T13:14:46.344941Z"
+                                                },
+                              "stream":  null,
+                              "archives":  {
+                                               "edges":  [
+                                                             {
+                                                                 "node":  {
+                                                                              "id":  "2925092481",
+                                                                              "title":  "Chatterbox | HOW IS THIS STILL GOING | NOPIXELV| !SUBATHON DAY 59 | !clowncil",
+                                                                              "lengthSeconds":  67565,
+                                                                              "createdAt":  "2026-11-10T18:28:22Z",
+                                                                              "viewCount":  265452,
+                                                                              "status":  "RECORDED",
+                                                                              "previewThumbnailURL":  "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/2d3426d2648fa7285f48_chatterbox_321032093150_1794335293//thumb/thumb0-440x248.jpg",
+                                                                              "game":  {
+                                                                                           "name":  "Grand Theft Auto V"
+                                                                                       },
+                                                                              "resourceRestriction":  null,
+                                                                              "muteInfo":  {
+                                                                                               "mutedSegmentConnection":  null
+                                                                                           },
+                                                                              "owner":  {
+                                                                                            "login":  "chatterbox",
+                                                                                            "displayName":  "Chatterbox"
+                                                                                        }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "id":  "2923341186",
+                                                                              "title":  "Chatterbox | Scam Line --\u003e Nopixel V | !SUBATHON DAY 58 | !clowncil",
+                                                                              "lengthSeconds":  68034,
+                                                                              "createdAt":  "2026-11-08T18:15:15Z",
+                                                                              "viewCount":  133739,
+                                                                              "status":  "RECORDED",
+                                                                              "previewThumbnailURL":  "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/b3cf2cf528b27303a364_chatterbox_321080904540_1794161706//thumb/thumb0-440x248.jpg",
+                                                                              "game":  {
+                                                                                           "name":  "Grand Theft Auto V"
+                                                                                       },
+                                                                              "resourceRestriction":  null,
+                                                                              "muteInfo":  {
+                                                                                               "mutedSegmentConnection":  {
+                                                                                                                              "nodes":  [
+                                                                                                                                            {
+                                                                                                                                                "offset":  5400,
+                                                                                                                                                "duration":  200
+                                                                                                                                            }
+                                                                                                                                        ]
+                                                                                                                          }
+                                                                                           },
+                                                                              "owner":  {
+                                                                                            "login":  "chatterbox",
+                                                                                            "displayName":  "Chatterbox"
+                                                                                        }
+                                                                          }
+                                                             }
+                                                         ]
+                                           },
+                              "highlights":  {
+                                                 "edges":  [
+                                                               {
+                                                                   "node":  {
+                                                                                "id":  "2449361511",
+                                                                                "title":  "Highlight: Roleplay Podcast Season 3 /w @blau",
+                                                                                "lengthSeconds":  26511,
+                                                                                "createdAt":  "2025-05-03T17:09:44Z",
+                                                                                "viewCount":  2160,
+                                                                                "status":  "RECORDED",
+                                                                                "previewThumbnailURL":  "https://static-cdn.jtvnw.net/cf_vods/d2nvs31859zcd8/0f9ee61000f8dda5b4df_chatterbox_84235837270_6948975119//thumb/thumb2449361511-440x248.jpg",
+                                                                                "game":  {
+                                                                                             "name":  "Just Chatting"
+                                                                                         },
+                                                                                "resourceRestriction":  null,
+                                                                                "muteInfo":  {
+                                                                                                 "mutedSegmentConnection":  null
+                                                                                             },
+                                                                                "owner":  {
+                                                                                              "login":  "chatterbox",
+                                                                                              "displayName":  "Chatterbox"
+                                                                                          }
+                                                                            }
+                                                               },
+                                                               {
+                                                                   "node":  {
+                                                                                "id":  "2347375124",
+                                                                                "title":  "Chatterbox Twitch VOD | Dec 28, 2024 (Part 2/2)",
+                                                                                "lengthSeconds":  22256,
+                                                                                "createdAt":  "2025-01-08T03:07:32Z",
+                                                                                "viewCount":  1596,
+                                                                                "status":  "RECORDED",
+                                                                                "previewThumbnailURL":  "https://static-cdn.jtvnw.net/cf_vods/d1m7jfoe9zdc1j/af5113576c96b509314a_chatterbox_18578102495_6632529607//thumb/thumb2347375124-440x248.jpg",
+                                                                                "game":  {
+                                                                                             "name":  "Grand Theft Auto V"
+                                                                                         },
+                                                                                "resourceRestriction":  null,
+                                                                                "muteInfo":  {
+                                                                                                 "mutedSegmentConnection":  {
+                                                                                                                                "nodes":  [
+                                                                                                                                              {
+                                                                                                                                                  "offset":  19266,
+                                                                                                                                                  "duration":  180
+                                                                                                                                              },
+                                                                                                                                              {
+                                                                                                                                                  "offset":  19986,
+                                                                                                                                                  "duration":  180
+                                                                                                                                              }
+                                                                                                                                          ]
+                                                                                                                            }
+                                                                                             },
+                                                                                "owner":  {
+                                                                                              "login":  "chatterbox",
+                                                                                              "displayName":  "Chatterbox"
+                                                                                          }
+                                                                            }
+                                                               }
+                                                           ]
+                                             },
+                              "clipsWeek":  {
+                                                "edges":  [
+                                                              {
+                                                                  "node":  {
+                                                                               "slug":  "BlitheCrispyPorcupineMcaT-ELWO56xgw1quqJM8",
+                                                                               "title":  "\"Dont talk to wendy like that!\"",
+                                                                               "durationSeconds":  12,
+                                                                               "viewCount":  1766,
+                                                                               "createdAt":  "2026-11-06T01:05:50Z",
+                                                                               "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/dc905b31-ea28-4d8a-9f11-88e65cbf5b15/landscape/thumb/thumb-0000000000-1920x1080.jpg",
+                                                                               "curator":  {
+                                                                                               "displayName":  "Moonlightalf_"
+                                                                                           },
+                                                                               "game":  {
+                                                                                            "name":  "Grand Theft Auto V"
+                                                                                        }
+                                                                           }
+                                                              },
+                                                              {
+                                                                  "node":  {
+                                                                               "slug":  "CharmingImpartialOstrichPJSalt-5hB4B_qCL88lN1Bu",
+                                                                               "title":  "The Italians Grab Ray Mond",
+                                                                               "durationSeconds":  60,
+                                                                               "viewCount":  1236,
+                                                                               "createdAt":  "2026-11-11T00:40:59Z",
+                                                                               "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/0e235962-fc89-4053-9094-52a5ab8df3db/landscape/thumb/thumb-0000000000-1920x1080.jpg",
+                                                                               "curator":  {
+                                                                                               "displayName":  "Fya85"
+                                                                                           },
+                                                                               "game":  {
+                                                                                            "name":  "Grand Theft Auto V"
+                                                                                        }
+                                                                           }
+                                                              }
+                                                          ]
+                                            },
+                              "clipsAll":  {
+                                               "edges":  [
+                                                             {
+                                                                 "node":  {
+                                                                              "slug":  "AuspiciousCuteYogurtGivePLZ-1Fh5zuQtKtUYo2wQ",
+                                                                              "title":  "Ripley Was ALWAYS A Clown",
+                                                                              "durationSeconds":  47,
+                                                                              "viewCount":  53920,
+                                                                              "createdAt":  "2024-01-17T05:22:30Z",
+                                                                              "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/1e823750-1eca-40d6-b02a-2462da9659f2/landscape/thumb/thumb-0000000000-1280x720.jpg",
+                                                                              "curator":  {
+                                                                                              "displayName":  "Brandi1337"
+                                                                                          },
+                                                                              "game":  {
+                                                                                           "name":  "Grand Theft Auto V"
+                                                                                       }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "slug":  "FriendlyFaintRuffVoteYea-ihv8cDk8CsI0WKt3",
+                                                                              "title":  "The doctor gets it",
+                                                                              "durationSeconds":  14,
+                                                                              "viewCount":  32380,
+                                                                              "createdAt":  "2024-06-20T02:04:06Z",
+                                                                              "thumbnailURL":  "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/65d44e19-1cc1-4159-847d-bdf32cb855bf/landscape/thumb/thumb-0000000000-1280x720.jpg",
+                                                                              "curator":  {
+                                                                                              "displayName":  "Aeramay"
+                                                                                          },
+                                                                              "game":  {
+                                                                                           "name":  "Grand Theft Auto V"
+                                                                                       }
+                                                                          }
+                                                             }
+                                                         ]
+                                           }
+                          }
+             }
+}

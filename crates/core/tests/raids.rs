@@ -22,21 +22,17 @@ fn user() -> User {
     }
 }
 
-/// Home with one stream and one offline followed channel, signed in or not.
+/// Home with one stream and one more whose card has no user id (as a search result's can), signed
+/// in or not.
 fn home(signed_in: bool) -> AppState {
     let (s, _) = init();
-    let offline = Tile::Channel(Channel {
-        channel: ChannelRef::twitch("sleepy"),
-        name: "Sleepy".into(),
-        tint: Rgb::default(),
-    });
     let mut s = reduce(
         &s,
         Event::FeedLoaded {
             feed: FeedId::Home,
             rows: vec![Row::new(
                 RowKind::TopLive,
-                vec![stream("ender", "100"), offline],
+                vec![stream("ender", "100"), stream("sleepy", "")],
             )],
         },
     )
@@ -110,7 +106,7 @@ fn signed_out_never_subscribes_and_ignores_raids() {
 
 #[test]
 fn a_card_without_a_user_id_looks_it_up_first() {
-    // The offline followed channel has no user id.
+    // The second card has no user id.
     let (s, cmds) = run(
         &home(true),
         vec![Intent::Right.into(), Intent::Select.into()],

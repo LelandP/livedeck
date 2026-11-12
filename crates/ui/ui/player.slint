@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
-import { StreamItem, ChatMsg, SearchKey } from "types.slint";
-import { ChatLine } from "components.slint";
+import { StreamItem, ChatMsg, SearchKey, MenuItem, VideoHud } from "types.slint";
+import { ChatLine, SubscribeCard } from "components.slint";
 
 // The bottom of the chat: the room's rules, why the last message did not go, the message being
 // written (with a caret and a counter) and, while not writing, how to start.
@@ -511,6 +511,307 @@ component HypeBar inherits Rectangle {
     }
 }
 
+// A video's seek bar: the played part, the muted parts striped, the chapter starts as ticks, and
+// the playhead. Positions are in ten-thousandths of the video's length (view_model/video.rs).
+component SeekBar inherits Rectangle {
+    in property <VideoHud> hud;
+    // Taller while seeking, so the playhead is easy to follow from the couch.
+    property <length> track-h: root.hud.seeking ? 10px : 6px;
+    animate track-h { duration: Theme.t-fast; }
+
+    height: 28px;
+
+    track := Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: root.track-h;
+        border-radius: self.height / 2;
+        background: #ffffff38;
+        clip: true;
+
+        // Played.
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.hud.head / 10000;
+            background: Theme.accent;
+        }
+        // Muted parts: dark with light stripes, over the played part too.
+        for span in root.hud.muted : Rectangle {
+            x: parent.width * span.start / 10000;
+            width: max(3px, parent.width * span.width / 10000);
+            background: #0e0e10d9;
+            clip: true;
+            for i in ceil(self.width / 6px) : Rectangle {
+                x: i * 6px;
+                width: 3px;
+                background: #adadb88c;
+            }
+        }
+        // Chapter starts.
+        for tick in root.hud.ticks : Rectangle {
+            x: parent.width * tick / 10000 - 1.5px;
+            width: 3px;
+            background: #000000;
+        }
+    }
+    // The playhead.
+    Rectangle {
+        property <length> size: root.hud.seeking ? 22px : 16px;
+        animate size { duration: Theme.t-fast; }
+        x: root.width * root.hud.head / 10000 - self.width / 2;
+        y: (parent.height - self.height) / 2;
+        width: self.size;
+        height: self.size;
+        border-radius: self.size / 2;
+        background: #ffffff;
+        border-width: 3px;
+        border-color: Theme.accent-light;
+    }
+}
+
+// A video's HUD (Theme-sized like the live one): the channel, a kind chip and the title along the
+// top, and the seek bar with the time along the bottom, just above the hints bar. While seeking
+// the time and chapter show above the playhead (the storyboard preview comes in phase 8 of
+// vod-plan.md).
+component VideoHudView inherits Rectangle {
+    in property <VideoHud> hud;
+    in property <bool> shown;
+    // The top half too (not while the menu covers it).
+    in property <bool> top-shown: true;
+    in property <string> sleep-label;
+    // The bottom band's height, the same as the live HUD's, so the player menu sits above it.
+    in property <length> band-h;
+
+    // Top: who and what.
+    Rectangle {
+        y: 0px;
+        height: top-layout.preferred-height + 48px;
+        opacity: root.shown && root.top-shown ? 1.0 : 0.0;
+        animate opacity { duration: Theme.t-med; }
+        background: @linear-gradient(180deg, #000000c8, #00000000);
+        top-layout := VerticalLayout {
+            y: 24px;
+            height: self.preferred-height;
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 4px;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 12px;
+                Text {
+                    text: root.hud.channel;
+                    color: Theme.text;
+                    font-size: Theme.fs-body;
+                    font-weight: 800;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    width: kind-text.preferred-width + 14px;
+                    height: kind-text.preferred-height + 4px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 4px;
+                    background: Theme.surface-high;
+                    kind-text := Text {
+                        text: root.hud.kind;
+                        color: Theme.muted;
+                        font-size: 13px;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.sleep-label != "" : Rectangle {
+                    width: sleep-text.preferred-width + 20px;
+                    height: sleep-text.preferred-height + 8px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.height / 2;
+                    background: #ffffff1f;
+                    sleep-text := Text {
+                        text: root.sleep-label;
+                        color: Theme.text;
+                        font-size: Theme.fs-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+            Text {
+                text: root.hud.title;
+                color: Theme.text;
+                font-size: Theme.fs-title;
+                font-weight: 800;
+                overflow: elide;
+            }
+            Text {
+                text: root.hud.meta;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                overflow: elide;
+            }
+        }
+    }
+
+    // Bottom: the seek bar and the time.
+    Rectangle {
+        y: root.height - root.band-h;
+        height: root.band-h;
+        opacity: root.shown ? 1.0 : 0.0;
+        animate opacity { duration: Theme.t-med; }
+        background: @linear-gradient(180deg, #00000000, #000000d0);
+
+        bar := SeekBar {
+            x: Theme.safe-x;
+            y: parent.height - Theme.hints-h - 16px - 24px - self.height;
+            width: parent.width - 2 * Theme.safe-x;
+            hud: root.hud;
+        }
+        // The time and chapter above the playhead while seeking, kept inside the bar's ends.
+        if root.hud.seeking : Rectangle {
+            property <length> centre: bar.x + bar.width * root.hud.head / 10000;
+            width: bubble-text.preferred-width + 20px;
+            height: bubble-text.preferred-height + 8px;
+            x: max(bar.x, min(bar.x + bar.width - self.width, self.centre - self.width / 2));
+            y: bar.y - self.height - 6px;
+            border-radius: 6px;
+            background: #0e0e10e6;
+            bubble-text := Text {
+                text: root.hud.chapter != "" ? root.hud.pos + "  ·  " + root.hud.chapter : root.hud.pos;
+                color: Theme.text;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            x: Theme.safe-x;
+            y: bar.y + bar.height + 2px;
+            width: parent.width - 2 * Theme.safe-x;
+            height: 24px;
+            spacing: 16px;
+            Text {
+                text: root.hud.length != "" ? root.hud.pos + " / " + root.hud.length : root.hud.pos;
+                color: Theme.text;
+                font-size: Theme.fs-small;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.hud.chapter;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            if root.hud.speed != "" : Rectangle {
+                width: speed-text.preferred-width + 16px;
+                border-radius: 6px;
+                background: Theme.accent;
+                speed-text := Text {
+                    text: root.hud.speed;
+                    color: Theme.text;
+                    font-size: Theme.fs-small;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // In a muted part: a chip at the bottom right, above the bar, with the HUD.
+    if root.hud.in-muted : Rectangle {
+        width: muted-text.preferred-width + 28px;
+        height: muted-text.preferred-height + 14px;
+        x: root.width - Theme.safe-x - self.width;
+        y: root.height - root.band-h - self.height - 8px;
+        opacity: root.shown ? 1.0 : 0.0;
+        animate opacity { duration: Theme.t-med; }
+        border-radius: 10px;
+        background: #0e0e10d1;
+        muted-text := Text {
+            text: "Twitch muted the audio here";
+            color: Theme.text;
+            font-size: Theme.fs-small;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // Taps adding up: a chip on the side they go ("-10 s" left, "+30 s" right), until the run ends.
+    if root.hud.chip != "" : Rectangle {
+        width: chip-text.preferred-width + 36px;
+        height: 56px;
+        x: root.hud.chip-side < 0 ? root.width * 0.2 - self.width / 2 : root.width * 0.8 - self.width / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.height / 2;
+        background: #000000a0;
+        chip-text := Text {
+            text: root.hud.chip;
+            color: Theme.text;
+            font-size: Theme.fs-title;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The card at the end of a video: no autoplay, the last frame stays under it. Up and Down pick a
+// row, A runs it (the hints bar has the buttons).
+component VideoEndCard inherits Rectangle {
+    in property <VideoHud> hud;
+    property <[string]> rows: ["Watch again", "Channel videos", "Back"];
+
+    background: #000000a0;
+    TouchArea { }
+
+    Rectangle {
+        width: 560px;
+        height: card-layout.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - Theme.hints-h - self.height) / 2;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.surface-high;
+        background: #18181bf2;
+        card-layout := VerticalLayout {
+            padding: 24px;
+            spacing: 6px;
+            Text {
+                text: root.hud.title;
+                color: Theme.text;
+                font-size: Theme.fs-title;
+                font-weight: 800;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.hud.length != "" ? root.hud.channel + "  ·  " + root.hud.length : root.hud.channel;
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+            }
+            Rectangle { height: 10px; }
+            for row[i] in root.rows : Rectangle {
+                height: 50px;
+                border-radius: 8px;
+                background: i == root.hud.end-focus ? Theme.surface-high : transparent;
+                border-width: 2px;
+                border-color: i == root.hud.end-focus ? Theme.accent-light : transparent;
+                animate border-color, background { duration: Theme.t-fast; }
+                Text {
+                    x: 16px;
+                    text: row;
+                    color: Theme.text;
+                    font-size: Theme.fs-body;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
 // Chat is a side panel (the video shrinks to make room) or an overlay (lines over the video).
 export component PlayerScreen inherits Rectangle {
     in property <StreamItem> stream;
@@ -529,11 +830,13 @@ export component PlayerScreen inherits Rectangle {
     in property <string> playback-details: "";
     in property <bool> paused: false;
     in property <bool> hud-visible: true;
-    // The player menu (Start): open, its focused row and the value of each row (PlayerMenuRow
-    // order in htpc-core: quality, hardware decoding, latency, zoom, stats, audio only, sleep).
+    // The player menu (Start): open, its focused row and its rows (built per mode in Rust: a live
+    // stream's, a video's or a clip's).
     in property <bool> menu-open: false;
     in property <int> menu-focus: 0;
-    in property <[string]> menu-values: [];
+    in property <[MenuItem]> menu-items: [];
+    // A video or clip instead of a live stream: its HUD, seek bar and end card.
+    in property <VideoHud> hud;
     // Sound only: a black screen with a drifting watermark instead of the video.
     in property <bool> audio-only: false;
     // The stats box, one fact per line. Empty hides it.
@@ -584,24 +887,11 @@ export component PlayerScreen inherits Rectangle {
     in property <bool> compose-problem: false;
     in property <string> room-mode: "";
     in property <string> compose-hint: "";
-    // The index of the first action row (PlayerMenuRow::Subscribe). The ones after it (Write in
-    // chat) are action rows too.
-    property <int> subscribe-row: 7;
     // The side layout gives the keyboard the bottom of the video's strip.
     property <length> compose-cut: root.compose-open && !root.chat-overlay ? Theme.compose-h + Theme.hints-h : 0px;
-    property <[string]> menu-titles: ["Quality", "Hardware decoding", "Latency", "Zoom", "Stats", "Audio only", "Sleep timer", "Subscribe to " + root.stream.channel, "Write in chat"];
-    // What each row does, shown under the rows for the focused one. Same order as the titles.
-    property <[string]> menu-help: [
-        "Picture quality. Lower uses less data and battery. Reloads the stream.",
-        "Decode on the graphics chip. Turn off if the picture stutters or shows glitches.",
-        "Low stays close to live. Normal buffers more, for fewer stalls on weak Wi-Fi. Reloads the stream.",
-        "Fit shows the whole picture with black bars. Fill crops it to fill the screen.",
-        "A box with resolution, codec, bitrate, buffer and dropped frames.",
-        "Sound only, on a dark screen. Saves data and battery. For this stream only.",
-        "Stops the stream and puts the device to sleep after a while. Asks a minute before.",
-        "Shows a QR code of the channel's subscribe page, to finish on your phone.",
-        "Write in this channel's chat with the on-screen keyboard or quick messages. X does it too while chat is shown.",
-    ];
+    // The HUD (live or video) is up: it fades on its own while playing, never while the menu is
+    // open, paused, seeking or on another screen than the picture.
+    property <bool> hud-shown: root.hud-visible || root.menu-open || root.playback != 1 || root.paused || root.hud.seeking;
 
     // Skeleton pulse, 0..1 (only ticks while a skeleton is shown).
     property <float> pulse: 0.5 + 0.5 * Math.sin(mod(animation-tick() / Theme.t-pulse, 1) * 360deg);
@@ -644,7 +934,7 @@ export component PlayerScreen inherits Rectangle {
         }
         Text {
             visible: root.playback == 0;
-            text: root.audio-only ? "Starting audio…" : "Starting stream…";
+            text: root.audio-only ? "Starting audio…" : (root.hud.on ? "Starting video…" : "Starting stream…");
             color: Theme.text;
             font-size: Theme.fs-body;
             horizontal-alignment: center;
@@ -660,7 +950,7 @@ export component PlayerScreen inherits Rectangle {
                 spacing: 12px;
                 padding: 48px;
                 Text {
-                    text: root.playback == 2 ? root.stream.channel + " is offline" : "Could not start the stream";
+                    text: root.playback == 2 ? root.stream.channel + " is offline" : (root.hud.on ? "Could not play the video" : "Could not start the stream");
                     color: Theme.text;
                     font-size: Theme.fs-display;
                     font-weight: 800;
@@ -727,12 +1017,33 @@ export component PlayerScreen inherits Rectangle {
             }
         }
 
+        // A video's HUD: who and what at the top, the seek bar at the bottom. Also while it loads
+        // (the bar shows where it will start). Under the stats box and the menu; the menu hides
+        // its top half, which it would cover.
+        if root.hud.on && (root.playback == 0 || root.playback == 1) : VideoHudView {
+            width: parent.width;
+            height: parent.height;
+            hud: root.hud;
+            shown: root.hud-shown || root.hud.end-card;
+            top-shown: !root.menu-open;
+            sleep-label: root.sleep-label;
+            band-h: 190px;
+        }
+
+        // The end of a video: the card over its last frame.
+        if root.hud.end-card : VideoEndCard {
+            width: parent.width;
+            height: parent.height;
+            hud: root.hud;
+        }
+
         // Stats box ("nerds view"): top left, over the video, on every stream until turned off.
         // While the menu is open it moves to the menu's right, as the menu is tall enough to
         // cover it, and narrows if the chat panel leaves less room.
         if root.stats-text != "" : Rectangle {
             x: Theme.safe-x / 2 + (root.menu-open ? Theme.menu-w + 16px : 0px);
-            y: 24px;
+            // Below a video's title.
+            y: root.hud.on ? 150px : 24px;
             width: min(Theme.stats-w, parent.width - self.x - 16px);
             height: stats-layout.preferred-height;
             background: #000000b8;
@@ -786,15 +1097,15 @@ export component PlayerScreen inherits Rectangle {
                     font-weight: 800;
                     letter-spacing: 3px;
                 }
-                for title[i] in root.menu-titles : MenuRow {
-                    title: title;
-                    value: root.menu-values[i];
+                for item[i] in root.menu-items : MenuRow {
+                    title: item.title;
+                    value: item.value;
                     focused: root.menu-focus == i;
-                    locked: i == 0 && root.audio-only;
-                    action: i >= root.subscribe-row;
+                    locked: item.locked;
+                    action: item.action;
                 }
                 Text {
-                    text: root.menu-focus == 0 && root.audio-only ? "Locked while Audio only is on." : root.menu-help[root.menu-focus];
+                    text: root.menu-items[root.menu-focus].help;
                     color: Theme.text;
                     font-size: Theme.fs-small;
                     wrap: word-wrap;
@@ -808,11 +1119,12 @@ export component PlayerScreen inherits Rectangle {
         }
 
         // HUD: channel, title and viewers. Fades out on its own while playing, never while the
-        // menu is open. The keyboard takes its place while writing in chat.
+        // menu is open. The keyboard takes its place while writing in chat. A video has its own.
         Rectangle {
+            visible: !root.hud.on;
             y: parent.height - 190px;
             height: 190px;
-            opacity: root.compose-open ? 0.0 : (root.hud-visible || root.menu-open || root.playback != 1 || root.paused) ? 1.0 : 0.0;
+            opacity: root.compose-open ? 0.0 : root.hud-shown ? 1.0 : 0.0;
             animate opacity { duration: Theme.t-med; }
             background: @linear-gradient(180deg, #00000000, #000000d0);
 
@@ -873,65 +1185,10 @@ export component PlayerScreen inherits Rectangle {
         // Subscribe card: over the video (and the menu) on a dark scrim, while the stream plays
         // on. Chat is left as it is. The QR code is drawn like the sign-in screen's. The scrim
         // swallows clicks; the hints bar has the buttons.
-        if root.subscribe-open : Rectangle {
-            background: #000000b8;
-            TouchArea { }
-
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - Theme.hints-h - self.height) / 2;
-                width: 440px;
-                height: card-layout.preferred-height;
-                border-radius: 12px;
-                border-width: 2px;
-                border-color: Theme.surface-high;
-                background: Theme.surface;
-
-                card-layout := VerticalLayout {
-                    padding: 32px;
-                    spacing: 14px;
-                    alignment: center;
-                    Text {
-                        text: "Subscribe to " + root.stream.channel;
-                        color: Theme.text;
-                        font-size: Theme.fs-title;
-                        font-weight: 800;
-                        horizontal-alignment: center;
-                        overflow: elide;
-                    }
-                    Text {
-                        text: "Scan to subscribe on your phone";
-                        color: Theme.muted;
-                        font-size: Theme.fs-body;
-                        horizontal-alignment: center;
-                    }
-                    HorizontalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 240px;
-                            height: 240px;
-                            background: #ffffff;
-                            border-radius: 8px;
-                            clip: true;
-                            Image {
-                                width: parent.width;
-                                height: parent.height;
-                                source: root.subscribe-qr;
-                                image-fit: contain;
-                                image-rendering: pixelated;
-                            }
-                        }
-                    }
-                    Text {
-                        text: root.subscribe-url;
-                        color: Theme.accent-light;
-                        font-size: Theme.fs-body;
-                        font-weight: 700;
-                        horizontal-alignment: center;
-                        overflow: elide;
-                    }
-                }
-            }
+        if root.subscribe-open : SubscribeCard {
+            channel: root.stream.channel;
+            qr: root.subscribe-qr;
+            url: root.subscribe-url;
         }
     }
 

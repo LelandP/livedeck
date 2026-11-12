@@ -16,14 +16,20 @@ use Tier::{MutedBig, MutedSmall, Sound};
 const OK: Health = Health {
     stalled: false,
     buffer_ms: 4_000,
+    pos_ms: None,
+    length_ms: None,
 };
 const LOW: Health = Health {
     stalled: false,
     buffer_ms: 600,
+    pos_ms: None,
+    length_ms: None,
 };
 const STALL: Health = Health {
     stalled: true,
     buffer_ms: 0,
+    pos_ms: None,
+    length_ms: None,
 };
 
 /// One report: when (ms), from which slot, and how it was.

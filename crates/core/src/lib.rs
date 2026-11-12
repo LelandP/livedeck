@@ -13,8 +13,10 @@ pub mod multiview;
 pub mod netlimit;
 pub mod quality;
 pub mod reduce;
+pub mod seek;
 pub mod settings;
 pub mod state;
+pub mod video;
 
 pub use chat::{ChatBuffer, CHAT_CAPACITY};
 pub use domain::{
@@ -26,7 +28,7 @@ pub use domain::{
 pub use keyboard::{Board, Key, KeySlot, KeyboardState, Shift, CHAT_MAX};
 pub use layout::{Layout, Rect};
 pub use msg::{
-    Command, Event, Intent, Msg, PageOutcome, PlayerOption, Slot, StreamKind, MAIN_SLOT,
+    Command, Dir, Event, Intent, Msg, PageOutcome, PlayerOption, Slot, StreamKind, MAIN_SLOT,
 };
 pub use multiview::{
     Multiview, MvTile, Picker, PickerTab, PopupRow, SavedSet, TileQuality, ViewPopup,
@@ -34,10 +36,15 @@ pub use multiview::{
 pub use netlimit::{Health, NetLimit, Tier};
 pub use quality::{FrameRate, Rendition};
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
+pub use seek::{Scrub, Seeking, TapRun};
 pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{
-    default_quick_messages, subscribe_url, AppState, CategoryFeed, Compose, Feed, Focus, Playback,
-    PlayerMenuRow, RaidOffer, RailEntry, RailState, Screen, SearchState, Sending, SessionOptions,
-    SettingsRow, SleepTimer, Toast, ToastKind, DEFAULT_QUICK_MESSAGES, RAID_SECONDS,
-    SEARCH_MIN_CHARS, SLEEP_STEPS, TOASTS_KEPT, TOASTS_SHOWN,
+    default_quick_messages, subscribe_url, AppState, CategoryFeed, ChannelPage, ChannelTab,
+    Compose, Feed, Focus, Playback, PlayerMenuRow, RaidOffer, RailEntry, RailState, Screen,
+    SearchState, Sending, SessionOptions, SettingsRow, SleepTimer, Toast, ToastKind,
+    DEFAULT_QUICK_MESSAGES, RAID_SECONDS, SEARCH_MIN_CHARS, SLEEP_STEPS, TOASTS_KEPT, TOASTS_SHOWN,
+};
+pub use video::{
+    date_from_unix, unix_from_rfc3339, ChannelInfo, Chapter, Clip, EndRow, Landing, Progress, Span,
+    Video, VideoDetails, VideoItem, VideoKind, VideoLoad, VideoSession, VideoTarget,
 };

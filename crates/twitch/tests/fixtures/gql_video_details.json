@@ -1,0 +1,74 @@
+{
+    "data":  {
+                 "video":  {
+                               "id":  "2923341186",
+                               "lengthSeconds":  68034,
+                               "seekPreviewsURL":  "https://d2vi6trrdongqn.cloudfront.net/b3cf2cf528b27303a364_chatterbox_321080904540_1794161706/storyboards/2923341186-info.json",
+                               "game":  {
+                                            "name":  "Grand Theft Auto V"
+                                        },
+                               "muteInfo":  {
+                                                "mutedSegmentConnection":  {
+                                                                               "nodes":  [
+                                                                                             {
+                                                                                                 "offset":  5400,
+                                                                                                 "duration":  200
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                            },
+                               "moments":  {
+                                               "edges":  [
+                                                             {
+                                                                 "node":  {
+                                                                              "positionMilliseconds":  0,
+                                                                              "durationMilliseconds":  638000,
+                                                                              "description":  "Grand Theft Auto V",
+                                                                              "details":  {
+                                                                                              "game":  {
+                                                                                                           "name":  "Grand Theft Auto V"
+                                                                                                       }
+                                                                                          }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "positionMilliseconds":  638000,
+                                                                              "durationMilliseconds":  6952000,
+                                                                              "description":  "Scam Line",
+                                                                              "details":  {
+                                                                                              "game":  {
+                                                                                                           "name":  "Scam Line"
+                                                                                                       }
+                                                                                          }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "positionMilliseconds":  7590000,
+                                                                              "durationMilliseconds":  59521000,
+                                                                              "description":  "Counter-Strike",
+                                                                              "details":  {
+                                                                                              "game":  {
+                                                                                                           "name":  "Counter-Strike"
+                                                                                                       }
+                                                                                          }
+                                                                          }
+                                                             },
+                                                             {
+                                                                 "node":  {
+                                                                              "positionMilliseconds":  67111000,
+                                                                              "durationMilliseconds":  923000,
+                                                                              "description":  "Just Chatting",
+                                                                              "details":  {
+                                                                                              "game":  {
+                                                                                                           "name":  "Just Chatting"
+                                                                                                       }
+                                                                                          }
+                                                                          }
+                                                             }
+                                                         ]
+                                           }
+                           }
+             }
+}

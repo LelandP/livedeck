@@ -132,6 +132,19 @@ impl<T: Send + 'static> LatestWriter<T> {
     }
 }
 
+/// A video's seek timer command: how long to wait, and the event to send then. `None` for any
+/// other command.
+fn seek_timer(cmd: &Command) -> Option<(u64, htpc_core::Event)> {
+    use htpc_core::seek::{HOLD_AFTER_MS, SCRUB_TICK_MS};
+    use htpc_core::Event;
+    match *cmd {
+        Command::SettleSeek { id, ms } => Some((ms, Event::SeekSettleDue(id))),
+        Command::HoldCheck { id } => Some((HOLD_AFTER_MS, Event::HoldDue(id))),
+        Command::ScrubTick { id } => Some((SCRUB_TICK_MS, Event::ScrubTickDue(id))),
+        _ => None,
+    }
+}
+
 /// True while a stream is on screen and starting or playing: the time to keep the screen on. In
 /// multiview, `playback` is the stream with sound's.
 fn watching(state: &AppState) -> bool {
@@ -390,6 +403,15 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 tokio::spawn(async move {
                     tokio::time::sleep(crate::playback::QUALITY_SETTLE).await;
                     let _ = tx.send(htpc_core::Event::QualitySettleDue(id).into());
+                });
+                continue;
+            }
+            // A video's seek timers (htpc_core::seek): the waits are core's, the clock is here.
+            if let Some((ms, due)) = seek_timer(&cmd) {
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                    let _ = tx.send(due.into());
                 });
                 continue;
             }
@@ -687,6 +709,24 @@ mod tests {
         tx.send(Intent::Back.into()).unwrap();
         rec.wait_for("home", |vm| vm.screen == ScreenId::Home).await;
         assert_eq!(*rec.3.lock().unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn seek_timers_wait_as_long_as_core_says() {
+        use htpc_core::seek::{HOLD_AFTER_MS, SCRUB_TICK_MS};
+        assert_eq!(
+            seek_timer(&Command::SettleSeek { id: 3, ms: 300 }),
+            Some((300, Event::SeekSettleDue(3)))
+        );
+        assert_eq!(
+            seek_timer(&Command::HoldCheck { id: 4 }),
+            Some((HOLD_AFTER_MS, Event::HoldDue(4)))
+        );
+        assert_eq!(
+            seek_timer(&Command::ScrubTick { id: 5 }),
+            Some((SCRUB_TICK_MS, Event::ScrubTickDue(5)))
+        );
+        assert_eq!(seek_timer(&Command::LeaveChat), None);
     }
 
     #[test]
@@ -1026,9 +1066,10 @@ mod tests {
         let (tx, rec) = start();
         rec.wait_for("rows", |vm| vm.rows.len() == 4).await;
         let before = rec.count();
-        // Up on the first row and Y (chat) on Home change nothing. (B would open the quit prompt.)
+        // Up on the first row and X (retry, with nothing failed) on Home change nothing. (B would
+        // open the quit prompt, Y the hero's channel page.)
         tx.send(Intent::Up.into()).unwrap();
-        tx.send(Intent::ToggleChat.into()).unwrap();
+        tx.send(Intent::Retry.into()).unwrap();
         // A visible change afterwards proves both no-ops were processed in order.
         tx.send(Intent::Down.into()).unwrap();
         rec.wait_for("moved", |vm| vm.sel_row == 1).await;

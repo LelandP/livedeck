@@ -1,0 +1,23 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- the Clips tab
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=1
+select="Watch" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No clips yet" error=""
+screen=Channel heading="Sleepy Fox" focus=(0, 0) rail_current=0
+select="Watch" retry=false back=false empty=false error=""
+row 0 Landscape "Top clips · last 7 days": [the 0.4 s dodge | 0:28 | 41.0K views · Nov 10 | Clipped by mossy_k] [cat on the keyboard | 0:28 | 860 views · Nov 9 | Clipped by mossy_k]
+row 1 Landscape "Top clips · all time": [world record, chat goes wild | 0:28 | 412.0K views · Feb 19, 2025 | Clipped by mossy_k]
+-- back on Videos, and a failed load with no rows
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0
+select="Watch" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="sleepy_fox" initial="S" avatar="" live=false status="" tab=0
+select="" start_over=false retry=true back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error="network error: timed out"
+screen=Channel heading="sleepy_fox" focus=(0, 0) rail_current=0
+select="" retry=true back=false empty=false error="network error: timed out"
+-- a channel with nothing on the Clips tab
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=1
+select="" start_over=false retry=false back=false channel_hint=false view="" empty=true empty_text="No clips yet" error=""
+screen=Channel heading="Sleepy Fox" focus=(0, 0) rail_current=0
+select="" retry=false back=false empty=true error=""
