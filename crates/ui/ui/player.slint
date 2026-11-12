@@ -375,13 +375,20 @@ component AudioWatermark inherits Rectangle {
 // The hype train bar: level, points toward the next level, and the time left. The app checks every
 // 10 s; in between, the time left counts down here with a 1 s Timer (not `animation-tick()`, which
 // would redraw at full frame rate). Each check sets it again. A level up glows once.
+// Compact: a round badge instead (a train over the level), its border a ring that fills up as the
+// level does. The player shows it while its HUD is hidden, so the bar does not sit over the video.
 component HypeBar inherits Rectangle {
     in property <int> level;
     in property <int> permille;
     in property <string> points;
     in property <int> seconds;
+    in property <bool> compact: false;
     property <int> left: root.seconds;
     property <bool> glow: false;
+    // The ring's fill, eased like the bar's. Short of 1000 so a full ring still has two ends.
+    property <float> ring: min(root.permille, 999) / 1000;
+    animate ring { duration: Theme.t-med; easing: ease-out; }
+    property <angle> ring-end: root.ring * 360deg;
 
     changed seconds => { root.left = root.seconds; }
     changed level => { root.glow = true; }
@@ -397,14 +404,63 @@ component HypeBar inherits Rectangle {
         triggered => { root.glow = false; }
     }
 
-    height: bar-layout.preferred-height;
-    border-radius: 10px;
-    border-width: 2px;
+    height: root.compact ? Theme.hype-badge : bar-layout.preferred-height;
+    border-radius: root.compact ? self.height / 2 : 10px;
+    // The compact badge's ring is its border.
+    border-width: root.compact ? 0px : 2px;
     border-color: root.glow ? Theme.accent-light : Theme.surface-high;
     background: root.glow ? #2a1f3df0 : #18181be0;
     animate border-color, background { duration: Theme.t-med; }
 
+    if root.compact : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        // The ring's track.
+        Rectangle {
+            border-radius: self.height / 2;
+            border-width: 4px;
+            border-color: root.glow ? Theme.accent-light : #ffffff1f;
+            animate border-color { duration: Theme.t-med; }
+        }
+        // How far the level has come, clockwise from the top. The viewbox matches the badge, so
+        // the arc's radius (30) runs down the middle of the 4px track.
+        if root.ring > 0 : Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 64;
+            viewbox-height: 64;
+            commands: "M 32 2 A 30 30 0 " + (root.ring > 0.5 ? "1" : "0") + " 1 " + (32 + 30 * Math.sin(root.ring-end)) + " " + (32 - 30 * Math.cos(root.ring-end));
+            stroke: Theme.accent-light;
+            stroke-width: 4px;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 0px;
+            HorizontalLayout {
+                alignment: center;
+                // A locomotive seen from the front: body, windscreen, lamps and rails.
+                Path {
+                    width: 20px;
+                    height: 20px;
+                    viewbox-width: 24;
+                    viewbox-height: 24;
+                    commands: "M7 3h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z M4 10h16 M7 13.5h2 M15 13.5h2 M8 17l-2 4 M16 17l2 4";
+                    stroke: Theme.accent-light;
+                    stroke-width: 2px;
+                }
+            }
+            Text {
+                text: root.level;
+                color: Theme.text;
+                font-size: Theme.fs-body;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
     bar-layout := VerticalLayout {
+        visible: !root.compact;
         padding: 12px;
         padding-top: 10px;
         spacing: 8px;
@@ -502,6 +558,17 @@ export component PlayerScreen inherits Rectangle {
     in property <int> hype-permille: 0;
     in property <string> hype-points: "";
     in property <int> hype-seconds: 0;
+    // A train started or levelled up a moment ago: the full bar shows even while the HUD is hidden.
+    property <bool> hype-peek: false;
+    changed hype-level => {
+        root.hype-peek = root.hype-level > 0;
+        hype-peek-timer.restart();
+    }
+    hype-peek-timer := Timer {
+        interval: 5s;
+        running: root.hype-peek;
+        triggered => { root.hype-peek = false; }
+    }
     // Writing in chat (view_model.rs `compose_*`): the panel, its keys and quick messages, the
     // message so far, its state, the room's rules, and the line shown under the chat otherwise.
     in property <bool> compose-open: false;
@@ -682,12 +749,15 @@ export component PlayerScreen inherits Rectangle {
         }
 
         // Hype train: top centre, but right of the stats box when it is on and left of an open
-        // chat overlay. It stays up while the train runs, whatever the HUD does.
+        // chat overlay. It stays up while the train runs. Once the HUD hides it shrinks to a badge
+        // in the top right corner, and any button that brings the HUD back opens it again, as does
+        // a new level (for a few seconds).
         if root.hype-open && root.playback == 1 : HypeBar {
             property <length> left-edge: root.stats-text != "" ? Theme.safe-x / 2 + (root.menu-open ? Theme.menu-w + 16px : 0px) + Theme.stats-w + 16px : 16px;
             property <length> right-edge: parent.width - (root.chat-open && root.chat-overlay ? Theme.chat-overlay-w : 0px) - 16px;
-            width: max(0px, min(420px, self.right-edge - self.left-edge));
-            x: max(self.left-edge, (16px + self.right-edge - self.width) / 2);
+            compact: !(root.hud-visible || root.menu-open || root.paused || root.hype-peek);
+            width: self.compact ? Theme.hype-badge : max(0px, min(420px, self.right-edge - self.left-edge));
+            x: self.compact ? self.right-edge - self.width : max(self.left-edge, (16px + self.right-edge - self.width) / 2);
             y: 24px;
             level: root.hype-level;
             permille: root.hype-permille;

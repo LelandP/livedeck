@@ -478,6 +478,33 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         0,
         "the hype train bar is not at the top"
     );
+    // Once the HUD hides (and the new train's 5 s peek is over) the bar shrinks to a badge in the
+    // top right corner, ringed in `Theme.accent-light`. A button brings the full bar back.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5_500));
+    render(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    assert_eq!(
+        count(&image, top.0.clone(), top.1.clone(), bar),
+        0,
+        "the hype train bar does not shrink once the HUD hides"
+    );
+    let corner = (WIDTH - 120..WIDTH, 0..120);
+    let ring = count(&image, corner.0.clone(), corner.1.clone(), accent);
+    assert!(
+        ring > 100,
+        "the hype train badge is not in the corner: {ring}"
+    );
+    hyped.hud_pulse += 1;
+    Update::full(view_model(&hyped)).apply(&ui);
+    render(&ui);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+    let image = render(&ui);
+    let filled = count(&image, top.0.clone(), top.1.clone(), bar);
+    assert!(
+        filled > 500,
+        "a button does not bring the bar back: {filled}"
+    );
     hyped.hype_train = None;
     Update::full(view_model(&hyped)).apply(&ui);
     let image = render(&ui);
