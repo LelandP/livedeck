@@ -392,7 +392,7 @@ fn the_next_window_is_asked_for_when_less_than_30_s_of_lines_are_left() {
     assert!(requests(&cmds).is_empty(), "{cmds:?}");
     // Less than 30 s left: the next window, from the newest line.
     let (s, cmds) = reduce(&s, health(11 * MIN + 11_000));
-    assert_eq!(requests(&cmds), [700]);
+    assert_eq!(requests(&cmds), [735]);
     assert!(replay(&s).loading());
 }
 
@@ -400,25 +400,25 @@ fn the_next_window_is_asked_for_when_less_than_30_s_of_lines_are_left() {
 fn one_request_at_a_time() {
     let s = open_at_10_min();
     let (s, cmds) = reduce(&s, health(11 * MIN + 15_000));
-    assert_eq!(requests(&cmds), [700]);
+    assert_eq!(requests(&cmds), [735]);
     let (_, cmds) = reduce(&s, health(11 * MIN + 16_000));
     assert!(requests(&cmds).is_empty(), "the answer is still on its way");
 }
 
 #[test]
 fn a_window_that_overlaps_adds_only_what_is_new() {
-    // The window asked at 700 starts 40 s earlier and repeats the lines up to 700. Two lines
+    // The window asked at 735 starts 35 s earlier and repeats the lines up to 700. Two lines
     // share the second 700, and only one of them was in the first window.
     let (s, _) = asked_at(10 * MIN);
     let mut first = window(560, 695);
     first.push(said(700, "a"));
     let s = reduce(&s, answer(600, first)).0;
     let (s, cmds) = reduce(&s, health(11 * MIN + 15_000));
-    assert_eq!(requests(&cmds), [700]);
+    assert_eq!(requests(&cmds), [735]);
 
     let mut second = window(660, 695);
     second.extend([said(700, "a"), said(700, "b"), at(705), at(710)]);
-    let (s, _) = reduce(&s, answer(700, second));
+    let (s, _) = reduce(&s, answer(735, second));
     let (s, _) = reduce(&s, health(11 * MIN + 50_000));
     let all = shown(&s);
     assert_eq!(all.iter().filter(|t| *t == "line a").count(), 1);
@@ -446,12 +446,70 @@ fn a_quiet_chat_fetches_rarely_and_a_busy_one_one_request_per_tick() {
         .collect();
     let s = reduce(&s, answer(600, busy)).0;
     let (s, cmds) = reduce(&s, health(10 * MIN + 2_000));
-    assert_eq!(requests(&cmds), [604]);
-    let (_, cmds) = reduce(&s, answer(604, vec![said(604, "b58"), said(606, "x")]));
+    assert_eq!(requests(&cmds), [639]);
+    let (_, cmds) = reduce(&s, answer(639, vec![said(604, "b58"), said(606, "x")]));
     assert!(
         requests(&cmds).is_empty(),
         "an answer does not chain another request"
     );
+}
+
+/// Twitch's answer for `offset_s`: the first 59 lines from 40 s before it, out of `per_s` lines
+/// every second of the first `chat_end_s` seconds.
+fn twitch(per_s: u32, chat_end_s: u32, offset_s: u32) -> Vec<ReplayLine> {
+    let from = offset_s.saturating_sub(40);
+    (from..chat_end_s)
+        .flat_map(|sec| (0..per_s).map(move |n| said(sec, &format!("d{sec}-{n}"))))
+        .take(59)
+        .collect()
+}
+
+/// Plays `ticks` seconds from the panel open at 10:00, answering every request like Twitch.
+fn play_dense(per_s: u32, chat_end_s: u32, ticks: u64) -> (AppState, Vec<Vec<u32>>) {
+    let (mut s, cmds) = asked_at(10 * MIN);
+    let mut asked = requests(&cmds);
+    let mut per_tick = Vec::new();
+    for tick in 0..=ticks {
+        for offset in asked.drain(..) {
+            s = reduce(&s, answer(offset, twitch(per_s, chat_end_s, offset))).0;
+        }
+        let (next, cmds) = reduce(&s, health(10 * MIN + tick * 1_000));
+        s = next;
+        asked = requests(&cmds);
+        per_tick.push(asked.clone());
+    }
+    (s, per_tick)
+}
+
+#[test]
+fn a_busy_chat_keeps_up_with_the_playhead() {
+    // 3 lines a second: a window of 59 lines ends 20 s after it starts, before the offset asked.
+    let (s, _) = play_dense(3, 100_000, 120);
+    let last = s.chat.iter().last().expect("lines shown").id.clone();
+    assert!(last.starts_with("d720-"), "up to the playhead: {last}");
+}
+
+#[test]
+fn a_full_window_with_nothing_new_asks_a_little_further_on_not_the_end() {
+    let full: Vec<ReplayLine> = (0..59).map(|i| said(600, &format!("f{i}"))).collect();
+    let (s, _) = asked_at(10 * MIN);
+    let s = reduce(&s, answer(600, full.clone())).0;
+    let (s, cmds) = reduce(&s, health(10 * MIN + 1_000));
+    assert_eq!(requests(&cmds), [635]);
+    let (s, _) = reduce(&s, answer(635, full));
+    let (s, cmds) = reduce(&s, health(10 * MIN + 2_000));
+    assert_eq!(requests(&cmds), [640], "not the end of the chat");
+    let new = vec![said(641, "n")];
+    let (s, _) = reduce(&s, answer(640, new));
+    let (_, cmds) = reduce(&s, health(10 * MIN + 15_000));
+    assert_eq!(requests(&cmds), [676], "back to the newest line");
+}
+
+#[test]
+fn a_busy_chat_that_ends_stops_asking() {
+    let (s, per_tick) = play_dense(3, 640, 120);
+    assert!(per_tick[60..].iter().all(Vec::is_empty), "{per_tick:?}");
+    assert_eq!(s.chat.iter().last().map(|m| m.id.as_str()), Some("d639-2"));
 }
 
 #[test]
@@ -459,7 +517,7 @@ fn the_end_of_the_chat_stops_the_requests_until_the_next_jump() {
     let s = open_at_10_min();
     let (s, _) = reduce(&s, health(11 * MIN + 15_000));
     // Nothing after 700: the same lines again.
-    let (s, cmds) = reduce(&s, answer(700, window(660, 700)));
+    let (s, cmds) = reduce(&s, answer(735, window(660, 700)));
     assert!(requests(&cmds).is_empty());
     let (s, cmds) = reduce(&s, health(11 * MIN + 40_000));
     assert!(
@@ -649,10 +707,10 @@ fn a_quality_change_keeps_the_lines() {
 #[test]
 fn an_answer_for_an_old_offset_is_dropped() {
     let (s, old) = open_with_a_request_out();
-    assert_eq!(old, 700);
+    assert_eq!(old, 735);
     let (s, _) = press(&s, &[Intent::PageRight]);
     // The answer to the request from before the jump.
-    let (late, cmds) = reduce(&s, answer(700, window(660, 760)));
+    let (late, cmds) = reduce(&s, answer(735, window(660, 760)));
     assert_eq!(late, s, "nothing changes");
     assert!(cmds.is_empty());
     // The one for the new spot counts.
@@ -729,7 +787,7 @@ fn a_first_window_with_no_lines_says_the_same() {
 fn a_failure_after_lines_came_keeps_the_panel_and_a_jump_tries_again() {
     let s = open_at_10_min();
     let (s, _) = reduce(&s, health(11 * MIN + 15_000));
-    let (s, cmds) = reduce(&s, failure(700));
+    let (s, cmds) = reduce(&s, failure(735));
     assert!(s.chat_open);
     assert!(s.toasts.is_empty(), "no notice once the replay has worked");
     assert!(!replay(&s).loading());

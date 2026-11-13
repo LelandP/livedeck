@@ -18,6 +18,18 @@ use crate::domain::ChatMessage;
 /// playhead.
 pub const LOOKAHEAD_MS: u64 = 30_000;
 
+/// How far before its offset the window of Twitch starts: 35 to 45 s, so the next window is asked
+/// for this far past the newest line, which makes it start at or before that line.
+pub const LOOK_BACK_S: u32 = 35;
+
+/// Lines in a full window of Twitch (59). A window with this many all at or before the newest
+/// line held may have more lines behind it, so it is not the end of the chat.
+pub const WINDOW_LINES: usize = 59;
+
+/// How much further each try goes when a full window held nothing new, and the most it goes.
+pub const NUDGE_STEP_S: u32 = 5;
+pub const NUDGE_MAX_S: u32 = 60;
+
 /// One line of a chat replay and when it was said.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayLine {
@@ -46,6 +58,9 @@ pub struct ReplayChat {
     /// this are known, apart from others in the same second that did not fit the last window.
     pub(crate) last_s: Option<u32>,
     pub(crate) last_ids: Vec<String>,
+    /// Added to the offset of the next window after a full window with nothing new in it (a chat
+    /// so busy that it fills before reaching past the newest line). Back to 0 with new lines.
+    pub(crate) nudge_s: u32,
     /// Nothing more to fetch until the next jump: the end of the chat, or a request that failed
     /// after lines had come.
     pub(crate) exhausted: bool,

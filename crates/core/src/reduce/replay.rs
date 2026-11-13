@@ -3,7 +3,7 @@
 //! | When                         | What happens |
 //! |------------------------------|--------------|
 //! | Y, panel closed              | The panel opens and a window is fetched at the playhead |
-//! | A health tick                | Lines whose second has passed are shown, and the next window is fetched while less than `LOOKAHEAD_MS` of lines are left |
+//! | A health tick                | Lines whose second has passed are shown, and the next window is fetched while less than `LOOKAHEAD_MS` of lines are left, asked `LOOK_BACK_S` past the newest line |
 //! | Any jump (`video::seek_to`)  | The shown lines go, and a window is fetched at the new spot |
 //! | Y, panel open                | The panel closes and everything is forgotten |
 //! | An answer                    | Dropped unless it is for this video and for the request still on its way |
@@ -14,7 +14,9 @@
 //! other's lines.
 
 use crate::msg::Command;
-use crate::replay::{ReplayLine, LOOKAHEAD_MS};
+use crate::replay::{
+    ReplayLine, LOOKAHEAD_MS, LOOK_BACK_S, NUDGE_MAX_S, NUDGE_STEP_S, WINDOW_LINES,
+};
 use crate::state::{AppState, ToastKind};
 use crate::video::VideoItem;
 
@@ -118,14 +120,16 @@ fn top_up(s: &mut AppState, cmds: &mut Vec<Command>) {
     if r.in_flight.is_some() || r.exhausted || r.unavailable {
         return;
     }
-    // The window starts before its offset, so asking at the newest line repeats a few lines
-    // (told apart by id) and reaches the ones after it.
-    let from = r
-        .last_s
-        .unwrap_or_else(|| u32::try_from(v.pos_ms / 1_000).unwrap_or(u32::MAX));
-    let ahead = u64::from(from) * 1_000;
-    if r.last_s.is_none() || ahead < v.pos_ms.saturating_add(LOOKAHEAD_MS) {
-        fetch(s, from, cmds);
+    // The window starts `LOOK_BACK_S` before its offset. Asked at the newest line, a busy chat
+    // would fill all of it with lines already held, so it is asked that far past the newest line:
+    // the window then starts at it, repeats a few lines (told apart by id) and goes on from there.
+    let Some(last_s) = r.last_s else {
+        fetch(s, u32::try_from(v.pos_ms / 1_000).unwrap_or(u32::MAX), cmds);
+        return;
+    };
+    if u64::from(last_s) * 1_000 < v.pos_ms.saturating_add(LOOKAHEAD_MS) {
+        let offset = last_s.saturating_add(LOOK_BACK_S).saturating_add(r.nudge_s);
+        fetch(s, offset, cmds);
     }
 }
 
@@ -163,12 +167,19 @@ pub(super) fn loaded(
         return;
     }
     lines.sort_by_key(|l| l.offset_s);
+    let full = lines.len() >= WINDOW_LINES;
     let fresh: Vec<ReplayLine> = lines.into_iter().filter(|l| is_new(s, l)).collect();
     let Some(v) = s.video.as_mut() else {
         return;
     };
     v.replay.in_flight = None;
     if fresh.is_empty() {
+        if full && v.replay.nudge_s < NUDGE_MAX_S {
+            // A full window, and all of it at or before the newest line: not the end, just a very
+            // busy chat. The next tick asks a little further on.
+            v.replay.nudge_s += NUDGE_STEP_S;
+            return;
+        }
         // The end of the chat, as far as Twitch tells: nothing more until the next jump.
         v.replay.exhausted = true;
         if !v.replay.had_lines {
@@ -177,6 +188,7 @@ pub(super) fn loaded(
         return;
     }
     v.replay.had_lines = true;
+    v.replay.nudge_s = 0;
     for line in fresh {
         match v.replay.last_s {
             Some(last) if line.offset_s == last => v.replay.last_ids.push(line.message.id.clone()),
