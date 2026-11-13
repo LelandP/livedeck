@@ -779,6 +779,24 @@ fn leaving_the_video_leaves_no_lines_behind() {
 }
 
 #[test]
+fn leaving_a_video_with_the_panel_open_still_saves_continue_watching() {
+    let s = open_at_10_min();
+    let (s, cmds) = reduce(&s, Intent::Back);
+    assert!(s.chat.is_empty());
+    assert!(!s.chat_open);
+    let saved: Vec<_> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            Command::SaveContinue(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].len(), 1);
+    assert!(cmds.contains(&Command::StopPlayback { slot: MAIN_SLOT }));
+}
+
+#[test]
 fn a_video_opened_next_starts_with_the_panel_closed_and_empty() {
     let s = open_at_10_min();
     let (s, _) = reduce(&s, Intent::Back);
