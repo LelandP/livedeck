@@ -569,6 +569,32 @@ fn a_quality_change_reloads_the_same_video_where_it_is_behind_the_picture() {
 }
 
 #[test]
+fn the_new_quality_catches_up_to_where_the_old_one_got_to_when_it_takes_over() {
+    let s = playing_at(70 * MIN);
+    let (s, _) = press(&s, &[Intent::Menu, Intent::Right]);
+    // The old quality plays on for 4 s while the new one resolves and loads.
+    let s = reduce(&s, health(70 * MIN + 2_000)).0;
+    let s = reduce(&s, health(70 * MIN + 4_000)).0;
+    let (s, cmds) = reduce(&s, Event::PlaybackStarted { slot: MAIN_SLOT });
+    assert_eq!(seeks(&cmds), [70 * MIN + 4_000]);
+    assert_eq!(v(&s).load, VideoLoad::Shown);
+    // Its first reports still say where it started: the playhead does not flick back.
+    let s = reduce(&s, health(70 * MIN)).0;
+    assert_eq!(v(&s).pos_ms, 70 * MIN + 4_000);
+    let s = reduce(&s, health(70 * MIN + 4_300)).0;
+    assert_eq!(v(&s).pos_ms, 70 * MIN + 4_300);
+}
+
+#[test]
+fn a_new_quality_that_started_where_the_old_one_is_does_not_seek() {
+    let s = playing_at(70 * MIN);
+    let (s, _) = press(&s, &[Intent::Menu, Intent::Right]);
+    let s = reduce(&s, health(70 * MIN + 1_000)).0;
+    let (_, cmds) = reduce(&s, Event::PlaybackStarted { slot: MAIN_SLOT });
+    assert!(seeks(&cmds).is_empty(), "{cmds:?}");
+}
+
+#[test]
 fn audio_only_reloads_the_video_as_sound() {
     let s = playing_at(5 * MIN);
     let rows = &[Intent::Menu, Intent::Down, Intent::Down, Intent::Down];

@@ -69,6 +69,9 @@ pub const SEEK_LAND_AFTER_MS: u64 = 8_000;
 /// reports, the new quality failed quietly (the pool drops it and the old one plays on), and
 /// seeks go to the player again.
 pub const RELOAD_GIVE_UP_REPORTS: u32 = 20;
+/// A new quality that takes over seeks to where the old one got to if that is further than this
+/// from where it was asked to start (a smaller gap is not worth the hiccup of a seek).
+pub const RELOAD_CATCH_UP_MS: u64 = 1_500;
 /// The speeds the player menu offers, in thousandths. Every video starts at 1×.
 pub const SPEEDS: [u32; 5] = [750, 1_000, 1_250, 1_500, 2_000];
 /// Normal speed, in thousandths.

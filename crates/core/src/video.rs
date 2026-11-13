@@ -254,6 +254,9 @@ pub struct VideoSession {
     /// press, dropped when its window ends (`seek::SCRUB_CARRY_MS`).
     pub carry: Option<crate::seek::Carry>,
     pub load: VideoLoad,
+    /// Where the load that is `Reloading` was asked to start. The old player plays on while it
+    /// loads, so the new one starts behind `pos_ms` and catches up when it takes over.
+    pub reload_from_ms: u64,
     pub landing: Option<Landing>,
     /// The card at the end of the video, on this row.
     pub end_card: Option<EndRow>,
@@ -285,6 +288,7 @@ impl VideoSession {
             timer: 0,
             carry: None,
             load: VideoLoad::Starting,
+            reload_from_ms: 0,
             landing: None,
             end_card: None,
             menu_chapter: 0,

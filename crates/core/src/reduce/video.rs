@@ -128,6 +128,7 @@ pub(super) fn reload(s: &mut AppState, cmds: &mut Vec<Command>) {
         return;
     }
     v.load = VideoLoad::Reloading { reports: 0 };
+    v.reload_from_ms = v.pos_ms;
     // The new player starts playing.
     s.paused = false;
     s.background_paused = false;
@@ -259,6 +260,7 @@ fn seek_to(s: &mut AppState, to_ms: u64, cmds: &mut Vec<Command>) {
             });
             v.landing = Some(landing);
             v.load = VideoLoad::Reloading { reports: 0 };
+            v.reload_from_ms = to;
             cmds.push(play);
         }
     }
@@ -761,6 +763,19 @@ pub(super) fn started(s: &mut AppState, slot: u8, cmds: &mut Vec<Command>) {
         }
         VideoLoad::Reloading { .. } => {
             v.load = VideoLoad::Shown;
+            // The old player played on while this one loaded: catch up to where it got to, or
+            // the last seconds would play twice.
+            if v.pos_ms > v.reload_from_ms.saturating_add(seek::RELOAD_CATCH_UP_MS) {
+                let to = v.clamp(v.pos_ms);
+                cmds.push(Command::Seek {
+                    slot: MAIN_SLOT,
+                    to_ms: to,
+                });
+                v.landing = Some(Landing {
+                    to_ms: to,
+                    reports: seek::SEEK_LAND_REPORTS,
+                });
+            }
             // The new player starts playing: a scrub still holds the picture.
             if v.seeking.scrub().is_some() {
                 cmds.push(Command::SetPaused {
