@@ -7,6 +7,7 @@ use crate::domain::{
 use crate::multiview::SavedSet;
 use crate::netlimit::Health;
 use crate::quality::{FrameRate, Rendition};
+use crate::replay::ReplayLine;
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
 use crate::video::{ChannelInfo, VideoDetails, VideoTarget};
@@ -248,6 +249,10 @@ pub enum Command {
     /// Fetch the chapters, muted parts and seek previews of the Twitch video `id`. Answered with
     /// `Event::VideoDetails`, or nothing if the lookup fails: the player then has no chapters.
     LoadVideoDetails { id: String },
+    /// Fetch a window of the chat replay of the Twitch video `id`: about 60 lines around
+    /// `offset_s` seconds into it, starting a little before. Answered with `Event::ChatReplay`,
+    /// or `Event::ChatReplayFailed` when Twitch gives none or refuses.
+    LoadChatReplay { id: String, offset_s: u32 },
     /// Kick on or off ("Show Kick"). Off, the app asks Kick nothing: no Kick row, no Kick search
     /// results. The store applies it before the commands after it, so a `LoadFeed` that follows
     /// already sees it. Sent at startup with the saved setting. There is no `Event`.
@@ -482,6 +487,18 @@ pub enum Event {
     },
     /// The answer to `LoadVideoDetails`.
     VideoDetails(VideoDetails),
+    /// The answer to `LoadChatReplay`: the window asked for, oldest line first. Dropped unless it
+    /// is for the video on screen and the request still on its way (a jump since asks again).
+    ChatReplay {
+        id: String,
+        offset_s: u32,
+        lines: Vec<ReplayLine>,
+    },
+    /// `LoadChatReplay` failed: the video has no replay to give, or Twitch refused.
+    ChatReplayFailed {
+        id: String,
+        offset_s: u32,
+    },
 }
 
 /// Anything the reducer accepts.

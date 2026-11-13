@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use crate::{
     ChannelResult, ChannelVideos, Credentials, FollowedChannel, Game, GqlClient, HelixClient,
-    HypeTrain, LiveArchive, Page, PageRequest, Result, SendOutcome, StreamInfo, TwitchApi,
-    UserInfo, VideoDetails,
+    HypeTrain, LiveArchive, Page, PageRequest, ReplayComment, Result, SendOutcome, StreamInfo,
+    TwitchApi, UserInfo, VideoDetails,
 };
 
 #[derive(Debug)]
@@ -169,5 +169,10 @@ impl TwitchApi for HybridApi {
     /// Always GQL, like [`HybridApi::channel_videos`].
     async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
         self.parts.gql.live_archive(login).await
+    }
+
+    /// Always GQL: Helix has no chat replay.
+    async fn chat_replay(&self, id: &str, offset_s: u32) -> Result<Option<Vec<ReplayComment>>> {
+        self.parts.gql.chat_replay(id, offset_s).await
     }
 }

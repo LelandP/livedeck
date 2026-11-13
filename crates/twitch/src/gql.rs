@@ -20,8 +20,8 @@ use serde_json::{json, Value};
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
     ChannelResult, ChannelVideos, ClipInfo, Error, FollowedChannel, Game, HypeTrain, LiveArchive,
-    MutedSegment, Page, PageRequest, RateLimiter, Result, RetryPolicy, StreamInfo, TwitchApi,
-    UserInfo, VideoChapter, VideoDetails, VideoInfo, VideoType,
+    MutedSegment, Page, PageRequest, RateLimiter, ReplayComment, ReplayFragment, Result,
+    RetryPolicy, StreamInfo, TwitchApi, UserInfo, VideoChapter, VideoDetails, VideoInfo, VideoType,
 };
 
 pub const GQL_URL: &str = "https://gql.twitch.tv/gql";
@@ -104,6 +104,15 @@ const VIDEO_DETAILS_QUERY: &str = "query($id: ID!) { video(id: $id) { id lengthS
 const LIVE_ARCHIVE_QUERY: &str = "query($login: String!) { user(login: $login) { \
     stream { createdAt } \
     videos(first: 1, type: ARCHIVE, sort: TIME) { edges { node { id status } } } } }";
+
+/// About 60 lines of a video's chat around `$offset`, oldest first (checked live 2026-11-12,
+/// signed out: 59 lines starting 35 to 45 s before the offset, so 2 to 4 minutes of a quiet chat).
+/// `first` is ignored and the `after` cursor fails the integrity check, so a viewer can only ask
+/// by offset. An offset past the end, or a video without chat, gives `comments: null`.
+const CHAT_REPLAY_QUERY: &str = "query($id: ID!, $offset: Int!) { video(id: $id) { \
+    comments(contentOffsetSeconds: $offset) { edges { node { id contentOffsetSeconds \
+    commenter { login displayName } \
+    message { userColor fragments { text emote { emoteID } } } } } } } }";
 
 #[derive(Deserialize, Default)]
 struct NameNode {
@@ -461,6 +470,85 @@ impl LiveArchiveNode {
         (newest.status.as_deref() == Some("RECORDING")).then_some(LiveArchive {
             video_id: newest.id,
             stream_started_at: started,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentNode {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    content_offset_seconds: u32,
+    #[serde(default)]
+    commenter: Option<CommenterNode>,
+    #[serde(default)]
+    message: Option<CommentMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommenterNode {
+    #[serde(default)]
+    login: String,
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CommentMessage {
+    #[serde(default)]
+    user_color: Option<String>,
+    #[serde(default)]
+    fragments: Vec<FragmentNode>,
+}
+
+#[derive(Deserialize)]
+struct FragmentNode {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    emote: Option<EmoteNode>,
+}
+
+#[derive(Deserialize)]
+struct EmoteNode {
+    #[serde(rename = "emoteID", default)]
+    emote_id: Option<String>,
+}
+
+impl CommentNode {
+    /// `None` for a line with nothing to show.
+    fn into_comment(self) -> Option<ReplayComment> {
+        let message = self.message.unwrap_or_default();
+        let fragments: Vec<ReplayFragment> = message
+            .fragments
+            .into_iter()
+            .filter(|f| !f.text.is_empty())
+            .map(|f| ReplayFragment {
+                text: f.text,
+                emote_id: f.emote.and_then(|e| e.emote_id).filter(|id| !id.is_empty()),
+            })
+            .collect();
+        if self.id.is_empty() || fragments.is_empty() {
+            return None;
+        }
+        let (login, name) = self
+            .commenter
+            .map(|c| {
+                let name = c.display_name.unwrap_or_else(|| c.login.clone());
+                (c.login, name)
+            })
+            .unwrap_or_default();
+        Some(ReplayComment {
+            id: self.id,
+            offset_seconds: self.content_offset_seconds,
+            login,
+            name,
+            color: message.user_color.unwrap_or_default(),
+            fragments,
         })
     }
 }
@@ -890,6 +978,22 @@ impl TwitchApi for GqlClient {
             .query(LIVE_ARCHIVE_QUERY, json!({ "login": login }))
             .await?;
         Ok(at::<LiveArchiveNode>(&data, &["user"])?.and_then(LiveArchiveNode::into_archive))
+    }
+
+    async fn chat_replay(&self, id: &str, offset_s: u32) -> Result<Option<Vec<ReplayComment>>> {
+        let vars = json!({ "id": id, "offset": offset_s });
+        let data = self.query(CHAT_REPLAY_QUERY, vars).await?;
+        let nodes: Option<Nodes<CommentNode>> = at(&data, &["video", "comments"])?;
+        Ok(nodes.map(|n| {
+            let mut lines: Vec<ReplayComment> = n
+                .into_items(CommentNode::into_comment)
+                .into_iter()
+                .flatten()
+                .collect();
+            // Twitch sends them in order, but nothing below relies on it.
+            lines.sort_by_key(|l| l.offset_seconds);
+            lines
+        }))
     }
 }
 

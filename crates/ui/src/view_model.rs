@@ -215,6 +215,9 @@ pub struct ViewModel {
     /// The chat connection, when it is not simply working: "Connecting…", "Reconnecting…", or
     /// that no message has come yet. Empty otherwise.
     pub chat_status: String,
+    /// The chat panel's header. Empty for live chat (the panel says "CHAT"), "CHAT REPLAY" for a
+    /// video's: read only, with no compose box.
+    pub chat_title: String,
     pub user_name: String,
     pub device_code: String,
     /// The address to type, without the scheme and the code in the query.
@@ -1194,6 +1197,14 @@ fn on_off(on: bool) -> &'static str {
 
 /// What the chat header says about the connection. Empty when everything is fine.
 fn chat_status_text(state: &AppState) -> &'static str {
+    // A video's replay has no connection: it says when it is fetching, or that nothing was said.
+    if let Some(v) = &state.video {
+        return match (state.chat.is_empty(), v.replay.loading()) {
+            (true, true) => "Loading…",
+            (true, false) => "No messages yet",
+            (false, _) => "",
+        };
+    }
     match state.chat_status {
         ChatStatus::Connecting => "Connecting…",
         ChatStatus::Reconnecting => "Reconnecting…",
@@ -1269,6 +1280,7 @@ fn toast(t: &Toast) -> ToastVm {
         ToastKind::SlowNetwork { muted: false } => {
             return note("Slow network: lowered the quality".to_owned())
         }
+        ToastKind::NoChatReplay => return note("No chat replay for this video".to_owned()),
         ToastKind::Resumed { pos_s } => {
             return note(format!(
                 "Resumed at {} · Start over in the menu",
@@ -1603,6 +1615,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
         chat_open: state.chat_open,
         chat_overlay: state.settings.chat_layout == ChatLayout::Overlay,
         chat_status: chat_status_text(state).to_owned(),
+        chat_title: if state.video.is_some() {
+            "CHAT REPLAY".to_owned()
+        } else {
+            String::new()
+        },
         user_name: state
             .user
             .as_ref()
@@ -1910,6 +1927,7 @@ impl Update {
         ui.set_chat_open(vm.chat_open);
         ui.set_chat_overlay(vm.chat_overlay);
         ui.set_chat_status(vm.chat_status.into());
+        ui.set_chat_title(vm.chat_title.into());
         ui.set_user_name(vm.user_name.into());
         ui.set_device_code(vm.device_code.into());
         ui.set_verification_url(vm.verification_url.into());
@@ -2044,6 +2062,7 @@ fn to_video_hud(v: &VideoVm) -> VideoHud {
         scrubbing: v.scrubbing,
         speed: v.speed.as_str().into(),
         chapters: v.chapters,
+        replay: v.replay,
         end_card: v.end_card,
         end_focus: v.end_focus,
     }

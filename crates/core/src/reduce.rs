@@ -7,6 +7,7 @@ mod channel;
 mod favorites;
 mod multiview;
 mod network;
+mod replay;
 mod resume;
 mod video;
 
@@ -550,8 +551,12 @@ fn player_menu_intent(
         Intent::Right | Intent::Select => change_player_option(s, row, true, cmds),
         Intent::Left => change_player_option(s, row, false, cmds),
         Intent::Back | Intent::Menu => s.player_menu = None,
-        // A video has no live chat (chat replay is phase 6).
-        Intent::ToggleChat if s.video.is_some() => {}
+        // A video has the chat replay instead of live chat (a failed one has none to show).
+        Intent::ToggleChat if s.video.is_some() => {
+            if !matches!(s.playback, Playback::Failed(_)) {
+                replay::toggle(s, cmds);
+            }
+        }
         Intent::ToggleChat => s.chat_open = !s.chat_open,
         Intent::Retry
         | Intent::View
@@ -1343,7 +1348,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         // A video's reports carry its position, and are kept out of the slow-network rule: its
         // buffer is minutes long and a seek empties it, which says nothing about the network.
         Event::PlayerHealth { slot, health, .. } if s.video.is_some() => {
-            video::health(s, slot, health);
+            video::health(s, slot, health, cmds);
         }
         Event::PlayerHealth {
             slot,
@@ -1571,6 +1576,12 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::ChannelPageLoaded { info, rows } => channel::loaded(s, *info, rows, cmds),
         Event::ChannelPageFailed { channel, message } => channel::failed(s, &channel, message),
         Event::VideoDetails(details) => video::details(s, details),
+        Event::ChatReplay {
+            id,
+            offset_s,
+            lines,
+        } => replay::loaded(s, &id, offset_s, lines, cmds),
+        Event::ChatReplayFailed { id, offset_s } => replay::failed(s, &id, offset_s, cmds),
         Event::WentLive(streams) => went_live(s, streams, cmds),
         Event::ToastExpired(id) => s.toasts.retain(|t| t.id != id),
         Event::SleepTimerTick { id, left_min } => {

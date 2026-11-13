@@ -7,8 +7,8 @@ use htpc_chat::{ChatEvent, FakeChat};
 use htpc_core::{ChatKind, ChatMessage, ChatSpan, ChatStatus, Rgb};
 use htpc_kick_api::{fake_live, FakeKick};
 use htpc_twitch_api::{
-    ClipInfo, FakeApi, FollowedChannel, Game, HypeTrain, MutedSegment, StreamInfo, UserInfo,
-    VideoChapter, VideoInfo, VideoType,
+    ClipInfo, FakeApi, FollowedChannel, Game, HypeTrain, MutedSegment, ReplayComment,
+    ReplayFragment, StreamInfo, UserInfo, VideoChapter, VideoInfo, VideoType,
 };
 
 /// The device code the store tests' fake Twitch hands out (`--mock` shows `FakeAuth`'s own,
@@ -179,9 +179,68 @@ pub fn fake_api() -> FakeApi {
                 mock_chapter(7_800, 7_328, "Celeste"),
             ],
         )],
+        // Every mock video plays the same ten minutes, so each has a quarter of an hour of chat.
+        replays: mock_videos()
+            .iter()
+            .filter(|v| !v.sub_only)
+            .map(|v| (v.id.clone(), mock_replay()))
+            .collect(),
         // Messages are "posted" and kept, but nothing echoes them back into the mock chat.
         ..FakeApi::new()
     }
+}
+
+/// A made-up chat replay: a line every few seconds for 15 minutes, some with emotes.
+fn mock_replay() -> Vec<ReplayComment> {
+    const USERS: [(&str, &str); 6] = [
+        ("mossy_k", "#3FA34D"),
+        ("nightowl_dev", "#8A2BE2"),
+        ("ember_rae", "#FF7F50"),
+        ("tin_whistle", ""),
+        ("cat_on_keys", "#1E90FF"),
+        ("fox_fan_99", "#DAA520"),
+    ];
+    // Text, and an emote id to put after it (`25` is Kappa, `41` Kreygasm, `86` BibleThump).
+    const SAYS: [(&str, Option<(&str, &str)>); 8] = [
+        ("that dodge was clean", None),
+        ("", Some(("Kappa", "25"))),
+        ("here we go", Some(("Kreygasm", "41"))),
+        ("no way he survives this", None),
+        ("how many attempts is this", None),
+        ("", Some(("BibleThump", "86"))),
+        ("the music slaps tonight", None),
+        ("chat is so back", Some(("Kappa", "25"))),
+    ];
+    let mut at = 2;
+    (0..)
+        .map_while(|i: usize| {
+            let (login, color) = USERS[(i * 5 + i / 3) % USERS.len()];
+            let (text, emote) = SAYS[(i * 3 + i / 7) % SAYS.len()];
+            let mut fragments = Vec::new();
+            if !text.is_empty() {
+                fragments.push(ReplayFragment {
+                    text: format!("{text} "),
+                    emote_id: None,
+                });
+            }
+            if let Some((name, id)) = emote {
+                fragments.push(ReplayFragment {
+                    text: name.into(),
+                    emote_id: Some(id.into()),
+                });
+            }
+            let line = ReplayComment {
+                id: format!("mock-{i}"),
+                offset_seconds: at,
+                login: login.into(),
+                name: login.into(),
+                color: color.into(),
+                fragments,
+            };
+            at += 2 + (i as u32 * 7) % 5;
+            (line.offset_seconds <= 900).then_some(line)
+        })
+        .collect()
 }
 
 /// The mock channels' videos (vod-plan.md). Two offline followed channels have past broadcasts;

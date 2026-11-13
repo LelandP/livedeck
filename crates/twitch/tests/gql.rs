@@ -529,6 +529,180 @@ async fn live_archive_needs_a_live_recording() {
     }
 }
 
+/// Recorded 2026-11-12 from a past broadcast of summit1g at offset 3600 (59 lines starting at
+/// 3555), trimmed to six, with the chatters renamed.
+#[tokio::test]
+async fn chat_replay_maps_lines_and_emotes() {
+    let server = MockServer::start().await;
+    Mock::given(body_partial_json(
+        json!({ "variables": { "id": "2926143952", "offset": 3600 } }),
+    ))
+    .and(body_string_contains("contentOffsetSeconds: $offset"))
+    .respond_with(ok("gql_chat_replay.json"))
+    .expect(1)
+    .mount(&server)
+    .await;
+    let lines = client(&server)
+        .chat_replay("2926143952", 3600)
+        .await
+        .unwrap()
+        .expect("a replay");
+    assert_eq!(lines.len(), 6);
+    // The window starts before the offset, and two lines share a second.
+    let offsets: Vec<u32> = lines.iter().map(|l| l.offset_seconds).collect();
+    assert_eq!(offsets, [3555, 3555, 3578, 3582, 3623, 3696]);
+
+    let first = &lines[0];
+    assert_eq!(first.id, "e7218915-b79e-43fb-ad0e-fac9288c4ccf");
+    assert_eq!(
+        (first.login.as_str(), first.name.as_str()),
+        ("chatter_one", "Chatter_one")
+    );
+    assert_eq!(first.color, "#008000");
+    assert_eq!(first.fragments.len(), 1);
+    assert_eq!(first.fragments[0].text, "Kreygasm");
+    assert_eq!(first.fragments[0].emote_id.as_deref(), Some("41"));
+
+    // Text and an emote in one line.
+    let mixed = &lines[2].fragments;
+    assert_eq!(mixed[0].text, "oh nice ");
+    assert_eq!(mixed[0].emote_id, None);
+    assert_eq!(
+        mixed[1].emote_id.as_deref(),
+        Some("emotesv2_bd95ea08beb4412db4e5cc0f605b4a72")
+    );
+    // A chatter who never picked a colour.
+    assert_eq!(lines[3].color, "");
+    // Emotes and text alternate.
+    let pieces: Vec<bool> = lines[5]
+        .fragments
+        .iter()
+        .map(|f| f.emote_id.is_some())
+        .collect();
+    assert_eq!(
+        pieces,
+        [true, false, true, false, true, false, true, false, true]
+    );
+}
+
+/// An offset past the end, or a video without chat, answers `comments: null` next to a "service
+/// error" (checked live 2026-11-12): no replay, not a failure. No such video is the same.
+#[tokio::test]
+async fn chat_replay_without_chat_is_none() {
+    let server = MockServer::start().await;
+    let api = client(&server);
+    for (body, why) in [
+        (
+            json!({ "data": { "video": { "comments": null } },
+                    "errors": [{ "message": "service error", "path": ["video", "comments"] }] }),
+            "past the end",
+        ),
+        (json!({ "data": { "video": null } }), "no such video"),
+        (
+            json!({ "data": { "video": { "comments": { "edges": [] } } } }),
+            "no lines",
+        ),
+    ] {
+        server.reset().await;
+        Mock::given(path("/gql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let got = api.chat_replay("1", 99_999).await.unwrap();
+        assert!(got.is_none_or(|lines| lines.is_empty()), "{why}");
+    }
+}
+
+/// The cursor and the page size are not asked for, and the integrity check is what Twitch
+/// answers if it starts refusing viewers: a failure, so the player can say there is no replay.
+#[tokio::test]
+async fn chat_replay_refused_by_the_integrity_check_fails() {
+    let server = MockServer::start().await;
+    Mock::given(path("/gql"))
+        .respond_with(ok("gql_integrity.json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let err = client(&server).chat_replay("1", 0).await.unwrap_err();
+    assert!(matches!(err, Error::IntegrityRequired), "got {err:?}");
+}
+
+#[tokio::test]
+async fn chat_replay_skips_empty_lines_and_tolerates_nulls() {
+    let server = MockServer::start().await;
+    let node = |id: &str, at: u32, commenter: serde_json::Value, message: serde_json::Value| {
+        json!({ "node": { "id": id, "contentOffsetSeconds": at,
+                          "commenter": commenter, "message": message } })
+    };
+    let said =
+        |text: &str| json!({ "userColor": null, "fragments": [{ "text": text, "emote": null }] });
+    let body = json!({ "data": { "video": { "comments": { "edges": [
+        node("late", 30, json!(null), said("from a deleted account")),
+        node("early", 10, json!({ "login": "a", "displayName": null }), said("hi")),
+        node("blank", 11, json!({ "login": "b" }), json!({ "fragments": [] })),
+        node("nomessage", 12, json!({ "login": "c" }), json!(null)),
+        node("", 13, json!({ "login": "d" }), said("no id")),
+        json!({ "node": null }),
+    ] } } } });
+    Mock::given(path("/gql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+    let lines = client(&server).chat_replay("1", 0).await.unwrap().unwrap();
+    // Sorted by time, and only the lines that say something.
+    let ids: Vec<&str> = lines.iter().map(|l| l.id.as_str()).collect();
+    assert_eq!(ids, ["early", "late"]);
+    assert_eq!(
+        lines[0].name, "a",
+        "no display name falls back to the login"
+    );
+    assert_eq!((lines[1].login.as_str(), lines[1].name.as_str()), ("", ""));
+}
+
+/// Hits the real gql.twitch.tv. Run by hand to check the chat replay query still validates and
+/// that it still answers signed out: `cargo test -p htpc-twitch-api --test gql -- --ignored live_`
+#[tokio::test]
+#[ignore = "network: real Twitch GQL"]
+async fn live_chat_replay() {
+    let api = GqlClient::new().unwrap();
+    let page = api
+        .channel_videos("summit1g")
+        .await
+        .unwrap()
+        .expect("summit1g exists");
+    // A finished broadcast with a long chat, a few minutes in.
+    let video = page
+        .archives
+        .iter()
+        .find(|v| !v.recording && v.length_seconds > 1_200 && !v.sub_only)
+        .expect("a past broadcast");
+    let lines = api
+        .chat_replay(&video.id, 600)
+        .await
+        .unwrap()
+        .expect("a replay");
+    assert!(lines.len() > 10, "{} lines", lines.len());
+    assert!(lines
+        .windows(2)
+        .all(|w| w[0].offset_seconds <= w[1].offset_seconds));
+    assert!(lines
+        .iter()
+        .all(|l| !l.id.is_empty() && !l.fragments.is_empty()));
+    // The window starts a little before the offset and carries on past it.
+    assert!(lines[0].offset_seconds <= 600);
+    assert!(lines.last().unwrap().offset_seconds >= 600);
+    // Nothing past the end of the video.
+    let past = api
+        .chat_replay(&video.id, video.length_seconds + 5_000)
+        .await;
+    assert!(past.is_err() || past.unwrap().is_none_or(|l| l.is_empty()));
+    assert_eq!(
+        api.chat_replay("1", 0).await.unwrap(),
+        None,
+        "no such video"
+    );
+}
+
 /// Hits the real gql.twitch.tv. Run by hand to check the channel page and video queries still
 /// validate: `cargo test -p htpc-twitch-api --test gql -- --ignored live_`
 #[tokio::test]

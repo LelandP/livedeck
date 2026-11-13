@@ -365,14 +365,11 @@ fn b_stops_the_video_and_returns_to_the_page_where_it_was() {
 }
 
 #[test]
-fn y_and_view_do_nothing_on_a_video() {
-    let s = playing_at(MIN);
-    for intent in [Intent::ToggleChat, Intent::View] {
-        let (next, cmds) = reduce(&s, intent);
-        assert!(!next.chat_open);
-        assert!(next.popup.is_none());
-        assert!(cmds.is_empty(), "{intent:?}: {cmds:?}");
-    }
+fn view_does_nothing_on_a_video() {
+    // Y is the chat replay (`chat_replay.rs`).
+    let (next, cmds) = reduce(&playing_at(MIN), Intent::View);
+    assert!(next.popup.is_none());
+    assert!(cmds.is_empty(), "{cmds:?}");
 }
 
 #[test]

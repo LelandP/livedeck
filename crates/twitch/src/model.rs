@@ -250,6 +250,29 @@ pub struct LiveArchive {
     pub stream_started_at: String,
 }
 
+/// One piece of a replayed chat line: plain text, or an emote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayFragment {
+    pub text: String,
+    /// Twitch's emote id when the piece is an emote (`text` is its name). The app turns it into
+    /// an image address on Twitch's emote CDN.
+    pub emote_id: Option<String>,
+}
+
+/// One line of a video's chat replay (`TwitchApi::chat_replay`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayComment {
+    pub id: String,
+    /// Whole seconds from the start of the video.
+    pub offset_seconds: u32,
+    /// Empty when the account is gone.
+    pub login: String,
+    pub name: String,
+    /// `#RRGGBB`, or empty when the chatter never picked one.
+    pub color: String,
+    pub fragments: Vec<ReplayFragment>,
+}
+
 /// A Twitch user (`GET /users`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UserInfo {

@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     ChannelResult, ChannelVideos, ClipInfo, DropReason, Error, FollowedChannel, Game, HypeTrain,
-    LiveArchive, Page, PageRequest, Result, SendOutcome, StreamInfo, TwitchApi, UserInfo,
-    VideoChapter, VideoDetails, VideoInfo, VideoType,
+    LiveArchive, Page, PageRequest, ReplayComment, Result, SendOutcome, StreamInfo, TwitchApi,
+    UserInfo, VideoChapter, VideoDetails, VideoInfo, VideoType,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -37,6 +37,8 @@ pub struct FakeApi {
     pub clips_all_time: Vec<(String, ClipInfo)>,
     /// Chapter markers, by video id. A video without any gets one chapter, as GQL's does.
     pub chapters: Vec<(String, Vec<VideoChapter>)>,
+    /// The chat of a video, oldest first, by video id. A video without any has no replay.
+    pub replays: Vec<(String, Vec<ReplayComment>)>,
 }
 
 impl FakeApi {
@@ -339,10 +341,29 @@ impl TwitchApi for FakeApi {
                 stream_started_at: v.created_at.clone(),
             }))
     }
+
+    /// A window like Twitch's: [`FAKE_REPLAY_LINES`] lines starting [`FAKE_REPLAY_BEFORE_S`]
+    /// before the offset. No lines in the window (past the end) is `Ok(None)`, as for GQL.
+    async fn chat_replay(&self, id: &str, offset_s: u32) -> Result<Option<Vec<ReplayComment>>> {
+        let Some((_, comments)) = self.replays.iter().find(|(v, _)| v == id) else {
+            return Ok(None);
+        };
+        let from = offset_s.saturating_sub(FAKE_REPLAY_BEFORE_S);
+        let window: Vec<ReplayComment> = comments
+            .iter()
+            .filter(|c| c.offset_seconds >= from)
+            .take(FAKE_REPLAY_LINES)
+            .cloned()
+            .collect();
+        Ok((!window.is_empty()).then_some(window))
+    }
 }
 
 /// Items per row of a fake channel page: GQL's first page.
 const FAKE_PAGE: usize = 30;
+/// Lines in one fake chat replay window (GQL's 59), and how far before the offset it starts.
+const FAKE_REPLAY_LINES: usize = 59;
+const FAKE_REPLAY_BEFORE_S: u32 = 40;
 
 impl FakeApi {
     /// Every live stream the fake knows, Top Live first.

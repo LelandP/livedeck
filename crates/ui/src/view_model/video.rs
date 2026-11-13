@@ -54,6 +54,8 @@ pub struct VideoVm {
     pub speed: String,
     /// LB / RB have chapters to jump between (a video, not a clip).
     pub chapters: bool,
+    /// Y opens the chat replay (a broadcast or highlight whose replay Twitch has not refused).
+    pub replay: bool,
     /// The card at the end of the video, and its focused row (`EndRow` order).
     pub end_card: bool,
     pub end_focus: i32,
@@ -250,6 +252,7 @@ pub fn video_vm(state: &AppState) -> VideoVm {
             speed_label(v.speed)
         },
         chapters: !v.item.is_clip(),
+        replay: !v.item.is_clip() && !v.replay.unavailable(),
         end_card: v.end_card.is_some(),
         end_focus: v.end_card.map_or(0, |r| to_i32(r.index())),
     }

@@ -2,6 +2,7 @@
 //! details. UI-agnostic like `domain.rs`: raw numbers, no formatted strings.
 
 use crate::domain::{ChannelRef, Rgb, Stream};
+use crate::replay::ReplayChat;
 
 /// A stretch of a video, in whole seconds from its start (a muted part).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +246,9 @@ pub struct VideoSession {
     /// The time the card's page was fetched (`ChannelPage::now`), for *Streamed Nov 10*. 0 when
     /// unknown, which leaves the year out.
     pub now: u64,
+    /// The chat replay (phase 6): what was fetched and is not due yet, and what is on its way.
+    /// The lines shown are in `AppState::chat`.
+    pub replay: ReplayChat,
 }
 
 impl VideoSession {
@@ -268,6 +272,7 @@ impl VideoSession {
             end_card: None,
             menu_chapter: 0,
             now,
+            replay: ReplayChat::default(),
         }
     }
 

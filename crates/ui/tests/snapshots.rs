@@ -1,4 +1,4 @@
-﻿//! `insta` snapshots of the view-model for each Browse state. The view-model is rendered as plain
+//! `insta` snapshots of the view-model for each Browse state. The view-model is rendered as plain
 //! text (one line per card) so a diff in review shows exactly which card changed.
 //!
 //! Review changes with `cargo insta review`, or accept them with `INSTA_UPDATE=always cargo test`.
@@ -1923,6 +1923,104 @@ fn video_resume_toast_and_a_clip() {
         !menu.player_menu_rows().contains(&PlayerMenuRow::Chapters),
         "a clip has no chapters"
     );
+    insta::assert_snapshot!(out);
+}
+
+/// What the chat replay panel shows: header, status, lines, the compose line and the hint.
+fn replay_lines(vm: &ViewModel) -> String {
+    format!(
+        "title={:?} compose_hint={:?} compose_open={} hint_y={}\n{}{}",
+        vm.chat_title,
+        vm.compose_hint,
+        vm.compose_open,
+        vm.video.replay,
+        chat_lines(vm),
+        toast_lines(vm),
+    )
+}
+
+fn replay_line(offset_s: u32, user: &str, spans: Vec<ChatSpan>) -> htpc_core::ReplayLine {
+    htpc_core::ReplayLine {
+        offset_s,
+        message: ChatMessage {
+            id: format!("c{offset_s}"),
+            spans,
+            ..ChatMessage::plain(user, "")
+        },
+    }
+}
+
+#[test]
+fn chat_replay_panel_loading_lines_and_no_replay() {
+    let mut out = String::from("-- playing, panel closed\n");
+    let s = video_playing();
+    out += &replay_lines(&view_model(&s));
+
+    out += "-- Y: the panel opens, fetching\n";
+    let (open, cmds) = reduce(&s, Intent::ToggleChat);
+    out += &format!("requests: {cmds:?}\n");
+    out += &replay_lines(&view_model(&open));
+
+    out += "-- the window: lines up to the playhead show, with an emote\n";
+    let text = |t: &str| vec![ChatSpan::Text(t.into())];
+    let lines = vec![
+        replay_line(4_330, "mossy_k", text("that dodge was clean")),
+        replay_line(
+            4_345,
+            "Ember_Rae",
+            vec![
+                ChatSpan::Text("no way".into()),
+                ChatSpan::Emote {
+                    name: "Kappa".into(),
+                    url: "https://cdn/kappa".into(),
+                },
+            ],
+        ),
+        replay_line(4_360, "nightowl_dev", text("here we go")),
+        replay_line(4_375, "mossy_k", text("not due yet")),
+    ];
+    let loaded = reduce(
+        &open,
+        Event::ChatReplay {
+            id: "9001".into(),
+            offset_s: 4_360,
+            lines,
+        },
+    )
+    .0;
+    out += &replay_lines(&view_model(&loaded));
+
+    out += "-- the playhead passes the next line\n";
+    let later = reduce(&loaded, video_health(4_376_000)).0;
+    out += &replay_lines(&view_model(&later));
+
+    out += "-- a jump clears the panel and fetches again\n";
+    let (jumped, cmds) = reduce(&later, Intent::PageRight);
+    out += &format!("requests: {cmds:?}\n");
+    out += &replay_lines(&view_model(&jumped));
+
+    out += "-- Twitch gives no replay: the panel closes, said once\n";
+    let (refused, _) = reduce(&s, Intent::ToggleChat);
+    let refused = reduce(
+        &refused,
+        Event::ChatReplayFailed {
+            id: "9001".into(),
+            offset_s: 4_360,
+        },
+    )
+    .0;
+    out += &replay_lines(&view_model(&refused));
+    let (again, cmds) = reduce(&refused, Intent::ToggleChat);
+    out += &format!(
+        "Y again: {} commands, {} toasts\n",
+        cmds.len(),
+        again.toasts.len()
+    );
+
+    out += "-- a clip has no replay hint\n";
+    let clip = send(&channel_page(), &[Intent::PageRight, Intent::Select]);
+    let clip = reduce(&clip, Event::PlaybackStarted { slot: 0 }).0;
+    out += &replay_lines(&view_model(&clip));
     insta::assert_snapshot!(out);
 }
 
