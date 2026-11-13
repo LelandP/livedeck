@@ -655,6 +655,10 @@ const RESUME_CHECK: Duration = Duration::from_secs(60);
 /// reducer's `Event::FeedRefreshDue`).
 const FEED_REFRESH: Duration = Duration::from_secs(60);
 
+/// The longest a closing window waits for the store to save *Continue watching* (and the other
+/// files).
+const QUIT_SAVE_WAIT: Duration = Duration::from_millis(1_500);
+
 /// Spawns the store with `provider` and runs the window until it closes.
 fn run_app<P: Provider, R: StreamResolver>(
     provider: P,
@@ -704,7 +708,9 @@ fn run_app<P: Provider, R: StreamResolver>(
     let device = Arc::new(AtomicBool::new(true));
     wire_ui(&ui, &tx, &device);
     let rate = RefreshRate::new();
-    wire_window_events(&ui, &tx, rate.clone());
+    // The store tells the closing window when it has saved (`Event::Quitting`).
+    let (quit_saved, quit_wait) = std::sync::mpsc::channel();
+    wire_window_events(&ui, &tx, rate.clone(), quit_wait);
     let pool = make_pool(&ui, &tx, rate);
     sweep_idle_players(&runtime, &pool, &ui);
 
@@ -764,7 +770,8 @@ fn run_app<P: Provider, R: StreamResolver>(
     let raids = Raids::new(raid_connect, tx.clone());
     let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx)
         .with_sleep(sleep)
-        .with_raids(raids);
+        .with_raids(raids)
+        .with_quit_signal(quit_saved);
     if let Some(save) = save_settings {
         store = store.with_settings_saver(save);
     }
@@ -867,7 +874,12 @@ fn wire_ui(ui: &MainWindow, tx: &UnboundedSender<Msg>, device: &Arc<AtomicBool>)
 /// - Focus: the store pauses the stream while another app is in front.
 /// - The monitor's refresh rate, read whenever the window is shown, moved or resized (which is
 ///   also when it may have moved to another monitor). Video frames are paced to it.
-fn wire_window_events(ui: &MainWindow, tx: &UnboundedSender<Msg>, rate: RefreshRate) {
+fn wire_window_events(
+    ui: &MainWindow,
+    tx: &UnboundedSender<Msg>,
+    rate: RefreshRate,
+    quit_saved: std::sync::mpsc::Receiver<()>,
+) {
     use slint::winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor};
 
     let tx = tx.clone();
@@ -877,9 +889,13 @@ fn wire_window_events(ui: &MainWindow, tx: &UnboundedSender<Msg>, rate: RefreshR
                 tracing::debug!(focused, "window focus changed");
                 let _ = tx.send(Event::WindowFocus(*focused).into());
             }
-            // The app quits on purpose: a video on screen saves its place first.
+            // The app quits on purpose: a video on screen saves its place first. Slint ends the
+            // event loop right after this and the runtime stops, so the window waits (briefly)
+            // for the store to have the place on disk.
             WindowEvent::CloseRequested => {
-                let _ = tx.send(Event::Quitting.into());
+                if tx.send(Event::Quitting.into()).is_ok() {
+                    let _ = quit_saved.recv_timeout(QUIT_SAVE_WAIT);
+                }
             }
             WindowEvent::Moved(_)
             | WindowEvent::Resized(_)

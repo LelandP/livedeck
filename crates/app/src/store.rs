@@ -133,6 +133,20 @@ impl<T: Send + 'static> LatestWriter<T> {
             }
         });
     }
+
+    /// Writes what is still pending now, on this thread, and returns once it is on disk (or once
+    /// the write that had taken it is). For the end of the app, which cannot wait for a task.
+    fn flush(&self) {
+        let _one = self.writing.lock().unwrap_or_else(|e| e.into_inner());
+        let next = self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(value) = next {
+            (self.save)(&value);
+        }
+    }
 }
 
 /// A video's seek timer command: how long to wait, and the event to send then. `None` for any
@@ -170,6 +184,9 @@ pub struct Store<P, R, S> {
     save_multiview: Option<LatestWriter<htpc_core::SavedSet>>,
     /// And for *Continue watching*.
     save_continue: Option<LatestWriter<Vec<htpc_core::Progress>>>,
+    /// Told once `Event::Quitting` is reduced and what it saved is on disk. `None` in tests that
+    /// do not care.
+    quit_saved: Option<std::sync::mpsc::Sender<()>>,
     /// Keeps the screen on during a stream. `None` in tests that do not care.
     keep_awake: Option<KeepAwake>,
     /// What `keep_awake` was last told.
@@ -224,6 +241,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             save_favorites: None,
             save_multiview: None,
             save_continue: None,
+            quit_saved: None,
             keep_awake: None,
             awake: false,
             sleep: None,
@@ -273,6 +291,13 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
         self
     }
 
+    /// Sends `()` on `saved` when the window is closing (`Event::Quitting`) and the files are
+    /// written, so the closing window can wait for them: the runtime stops soon after it.
+    pub fn with_quit_signal(mut self, saved: std::sync::mpsc::Sender<()>) -> Self {
+        self.quit_saved = Some(saved);
+        self
+    }
+
     /// Keeps the screen on with `keep_awake` while a stream plays.
     pub fn with_keep_awake(mut self, keep_awake: KeepAwake) -> Self {
         self.keep_awake = Some(keep_awake);
@@ -297,9 +322,30 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
         self.publish();
         self.spawn_all(startup);
         while let Some(msg) = rx.recv().await {
+            let quitting = matches!(msg, Msg::Event(htpc_core::Event::Quitting));
             self.handle(msg);
+            if quitting {
+                self.finish_saving();
+            }
         }
         tracing::debug!("store loop finished");
+    }
+
+    /// The window is closing: what the last message asked to save is written before the signal,
+    /// not left to tasks the runtime may drop.
+    fn finish_saving(&self) {
+        if let Some(w) = &self.save_favorites {
+            w.flush();
+        }
+        if let Some(w) = &self.save_multiview {
+            w.flush();
+        }
+        if let Some(w) = &self.save_continue {
+            w.flush();
+        }
+        if let Some(saved) = &self.quit_saved {
+            let _ = saved.send(());
+        }
     }
 
     fn handle(&mut self, msg: Msg) {
@@ -961,6 +1007,93 @@ mod tests {
         let written = written.lock().unwrap();
         assert_eq!(written.last(), Some(&20), "{written:?}");
         assert!(written.windows(2).all(|w| w[0] < w[1]), "{written:?}");
+    }
+
+    #[test]
+    fn a_flush_writes_what_is_pending_before_it_returns() {
+        let written: Arc<Mutex<Vec<usize>>> = Arc::default();
+        let into = Arc::clone(&written);
+        let writer = LatestWriter::new(move |list: &Vec<usize>| {
+            std::thread::sleep(Duration::from_millis(20));
+            into.lock().unwrap().push(list.len());
+        });
+        // No runtime here: the write's task is never run, only the flush can write.
+        *writer.pending.lock().unwrap() = Some(vec![1, 2, 3]);
+        writer.flush();
+        assert_eq!(*written.lock().unwrap(), [3]);
+        writer.flush();
+        assert_eq!(
+            *written.lock().unwrap(),
+            [3],
+            "nothing pending, nothing written"
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_the_window_saves_the_place_before_the_signal() {
+        use htpc_core::{ChannelRef, Progress, Rgb, Video, VideoItem, VideoKind, VideoSession};
+        let video = Video {
+            id: "77".into(),
+            channel: ChannelRef::twitch("sleepy"),
+            channel_name: "Sleepy Fox".into(),
+            kind: VideoKind::Archive,
+            title: "late stream".into(),
+            category: "Hollow Knight".into(),
+            length_s: 15_128,
+            created_at: 1_794_335_302,
+            views: 18_000,
+            tint: Rgb::default(),
+            thumbnail: None,
+            muted: Vec::new(),
+            sub_only: false,
+            recording: false,
+        };
+        let (mut state, _) = init();
+        let mut session = VideoSession::new(VideoItem::Video(video), 0, 1_794_346_102);
+        session.pos_ms = 42 * 60_000;
+        state.video = Some(session);
+        state.screen = Screen::Player;
+        state.playback = CorePlayback::Playing;
+
+        let (tx, rx) = unbounded_channel();
+        let saved: Arc<Mutex<Vec<Vec<Progress>>>> = Arc::default();
+        let into = Arc::clone(&saved);
+        let (quit_tx, quit_rx) = std::sync::mpsc::channel();
+        let store = Store::new(
+            state,
+            ApiProvider::new(fake_api()),
+            Playback::new(
+                FakeResolver::playing("https://example.test/v.m3u8"),
+                PlayerPool::fake().0,
+            ),
+            Chat::new(
+                Arc::new(fake_chat(false)),
+                Arc::new(fake_chat(false)),
+                tx.clone(),
+            ),
+            fast_session(&tx, Viewer::default()),
+            Recorder::default(),
+            tx.clone(),
+        )
+        .with_continue_saver(Arc::new(move |list: &[Progress]| {
+            // A slow disk.
+            std::thread::sleep(Duration::from_millis(50));
+            into.lock().unwrap().push(list.to_vec());
+        }))
+        .with_quit_signal(quit_tx);
+        tokio::spawn(store.run(Vec::new(), rx));
+
+        tx.send(Event::Quitting.into()).unwrap();
+        let waited =
+            tokio::task::spawn_blocking(move || quit_rx.recv_timeout(Duration::from_secs(5)))
+                .await
+                .unwrap();
+        assert!(waited.is_ok(), "the store signals once it has saved");
+        // On disk by the time of the signal: the window may close and the runtime stop now.
+        let saved = saved.lock().unwrap();
+        assert_eq!(saved.len(), 1, "{saved:?}");
+        assert_eq!(saved[0][0].video.id, "77");
+        assert_eq!(saved[0][0].pos_s, 42 * 60);
     }
 
     #[tokio::test]
