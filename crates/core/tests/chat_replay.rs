@@ -758,21 +758,57 @@ fn an_answer_nobody_asked_for_is_dropped() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn a_refused_first_request_says_there_is_no_replay_once() {
+fn a_refused_first_request_says_there_is_no_replay_and_the_panel_closes() {
     let (s, _) = asked_at(10 * MIN);
     let (s, _) = reduce(&s, failure(600));
     assert!(!s.chat_open, "the panel closes");
     assert!(replay(&s).unavailable());
     assert_eq!(s.toasts.len(), 1);
     assert_eq!(s.toasts[0].kind, ToastKind::NoChatReplay);
-    // Y does nothing more for this video: no panel, no request, no second notice.
-    let (again, cmds) = reduce(&s, Intent::ToggleChat);
-    assert_eq!(again, s);
-    assert!(cmds.is_empty());
-    // Not even after a jump.
+    // A jump with the panel closed asks nothing.
     let (jumped, cmds) = press(&s, &[Intent::PageRight]);
     assert!(requests(&cmds).is_empty());
     assert_eq!(jumped.toasts.len(), 1);
+}
+
+#[test]
+fn y_tries_again_after_a_failure_and_the_notice_shows_once_per_streak() {
+    let (s, _) = asked_at(10 * MIN);
+    let (s, _) = reduce(&s, failure(600));
+    assert_eq!(s.toasts.len(), 1);
+    // A timeout was no proof there is no replay: Y asks again, and a second failure says nothing.
+    let (s, cmds) = reduce(&s, Intent::ToggleChat);
+    assert!(s.chat_open);
+    assert_eq!(requests(&cmds), [600]);
+    let (s, _) = reduce(&s, failure(600));
+    assert!(!s.chat_open);
+    assert_eq!(s.toasts.len(), 1, "no second notice for the same streak");
+    // This time it works, which ends the streak.
+    let (s, _) = reduce(&s, Intent::ToggleChat);
+    let (s, _) = reduce(&s, answer(600, window(560, 700)));
+    assert!(s.chat_open);
+    assert!(!replay(&s).unavailable());
+    assert!(!shown(&s).is_empty());
+}
+
+#[test]
+fn nothing_in_the_last_minutes_is_the_end_of_the_chat_not_a_missing_replay() {
+    // Y 100 s before the end of a 15128 s broadcast: an empty answer or a failure.
+    for empty in [true, false] {
+        let (s, _) = asked_at(15_028_000);
+        let (s, _) = if empty {
+            reduce(&s, answer(15_028, Vec::new()))
+        } else {
+            reduce(&s, failure(15_028))
+        };
+        assert!(s.chat_open, "the panel stays (empty: {empty})");
+        assert!(s.toasts.is_empty());
+        assert!(!replay(&s).unavailable());
+        assert!(!replay(&s).loading());
+        // A jump (to the start of the chapter) asks again.
+        let (_, cmds) = press(&s, &[Intent::PageLeft]);
+        assert_eq!(requests(&cmds), [7_800]);
+    }
 }
 
 #[test]

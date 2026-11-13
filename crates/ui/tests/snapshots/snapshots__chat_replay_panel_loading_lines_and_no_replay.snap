@@ -36,7 +36,7 @@ title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=false
 open=false overlay=false status="No messages yet"
 screen=Player more=0
   [#1 note: No chat replay for this video]
-Y again: 0 commands, 1 toasts
+Y again: 1 commands, 1 toasts
 -- a clip has no replay hint
 title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=false
 open=false overlay=false status="No messages yet"

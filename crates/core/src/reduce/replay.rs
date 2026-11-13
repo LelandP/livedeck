@@ -7,7 +7,7 @@
 //! | Any jump (`video::seek_to`)  | The shown lines go, and a window is fetched at the new spot |
 //! | Y, panel open                | The panel closes and everything is forgotten |
 //! | An answer                    | Dropped unless it is for this video and for the request still on its way |
-//! | A failure with no line ever  | The panel closes and *No chat replay for this video* shows, once |
+//! | A failure with no line ever  | The panel closes and *No chat replay for this video* shows, once while the tries keep failing (not in the last minutes: the chat may just have ended) |
 //!
 //! The lines are shown in `AppState::chat`, the buffer live chat uses. A live stream clears it
 //! when it starts and `video::open` and `video::leave` clear it too, so one never shows the
@@ -15,20 +15,20 @@
 
 use crate::msg::Command;
 use crate::replay::{
-    ReplayLine, LOOKAHEAD_MS, LOOK_BACK_S, NUDGE_MAX_S, NUDGE_STEP_S, WINDOW_LINES,
+    ReplayLine, LOOKAHEAD_MS, LOOK_BACK_S, NEAR_END_MS, NUDGE_MAX_S, NUDGE_STEP_S, WINDOW_LINES,
 };
 use crate::state::{AppState, ToastKind};
-use crate::video::VideoItem;
+use crate::video::{VideoItem, VideoSession};
 
 use super::{fetch_chat_images, pulse_hud, push_toast};
 
 /// Y on a video: the panel opens at the playhead, or closes. Only a broadcast or highlight has a
-/// replay (a clip has none), and once Twitch said there is none for this video, Y stays quiet.
+/// replay (a clip has none), and after a failure Y tries again.
 pub(super) fn toggle(s: &mut AppState, cmds: &mut Vec<Command>) {
     let Some(v) = s.video.as_ref() else {
         return;
     };
-    if v.replay.unavailable || !matches!(v.item, VideoItem::Video(_)) {
+    if !matches!(v.item, VideoItem::Video(_)) {
         return;
     }
     if s.chat_open {
@@ -182,12 +182,13 @@ pub(super) fn loaded(
         }
         // The end of the chat, as far as Twitch tells: nothing more until the next jump.
         v.replay.exhausted = true;
-        if !v.replay.had_lines {
+        if !v.replay.had_lines && !near_the_end(v, offset_s) {
             unavailable(s, cmds);
         }
         return;
     }
     v.replay.had_lines = true;
+    v.replay.unavailable = false;
     v.replay.nudge_s = 0;
     for line in fresh {
         match v.replay.last_s {
@@ -202,9 +203,10 @@ pub(super) fn loaded(
     show_due(s, cmds);
 }
 
-/// `Event::ChatReplayFailed`. With no line ever shown for this video there is no replay to be
-/// had, and the viewer is told. After lines had come it is more likely a bad moment (or the end),
-/// so the panel stays and the next jump tries again.
+/// `Event::ChatReplayFailed` (also an empty answer). With no line ever shown for this video there
+/// may be no replay, and the viewer is told once; Y tries again. After lines had come, or in the
+/// last minutes of the video, it is more likely a bad moment (or the end), so the panel stays and
+/// the next jump tries again.
 pub(super) fn failed(s: &mut AppState, id: &str, offset_s: u32, cmds: &mut Vec<Command>) {
     if !current(s, id, offset_s) {
         return;
@@ -213,20 +215,30 @@ pub(super) fn failed(s: &mut AppState, id: &str, offset_s: u32, cmds: &mut Vec<C
         return;
     };
     v.replay.in_flight = None;
-    if v.replay.had_lines {
+    if v.replay.had_lines || near_the_end(v, offset_s) {
         v.replay.exhausted = true;
     } else {
         unavailable(s, cmds);
     }
 }
 
-/// Twitch has no replay for this video: the panel closes, the viewer is told once, and Y does
-/// nothing more for this video.
+/// The request at `offset_s` was for the last minutes of the video, where nothing may have been
+/// said (an unknown length counts as not near).
+fn near_the_end(v: &VideoSession, offset_s: u32) -> bool {
+    v.length_ms > 0 && u64::from(offset_s) * 1_000 + NEAR_END_MS >= v.length_ms
+}
+
+/// Nothing came for a video that never gave a line: the panel closes and the viewer is told, once
+/// for as long as the tries keep failing. Y tries again.
 fn unavailable(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.chat_open = false;
     forget(s);
-    if let Some(v) = s.video.as_mut() {
+    let told = s.video.as_mut().is_some_and(|v| {
+        let told = v.replay.unavailable;
         v.replay.unavailable = true;
+        told
+    });
+    if !told {
+        push_toast(s, ToastKind::NoChatReplay, cmds);
     }
-    push_toast(s, ToastKind::NoChatReplay, cmds);
 }

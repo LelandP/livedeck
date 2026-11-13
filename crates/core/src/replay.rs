@@ -26,6 +26,10 @@ pub const LOOK_BACK_S: u32 = 35;
 /// line held may have more lines behind it, so it is not the end of the chat.
 pub const WINDOW_LINES: usize = 59;
 
+/// An empty answer or a failure this close to the end of the video, with no line ever, is only the
+/// end of the chat (nothing was said in the last minutes), not a video without a replay.
+pub const NEAR_END_MS: u64 = 300_000;
+
 /// How much further each try goes when a full window held nothing new, and the most it goes.
 pub const NUDGE_STEP_S: u32 = 5;
 pub const NUDGE_MAX_S: u32 = 60;
@@ -67,7 +71,8 @@ pub struct ReplayChat {
     /// Lines have come for this video, at some point. A video that never gave any has no
     /// replay (an empty window after a jump near the end is just the end of the chat).
     pub(crate) had_lines: bool,
-    /// Twitch had no replay to give for this video, and the viewer was told. Y does nothing more.
+    /// The latest tries gave nothing (or failed) and the viewer was told, once for the streak. Y
+    /// still tries again; lines coming end the streak.
     pub(crate) unavailable: bool,
 }
 
@@ -77,7 +82,7 @@ impl ReplayChat {
         self.in_flight.is_some()
     }
 
-    /// The viewer was told there is no replay for this video.
+    /// The viewer was told there is no replay for this video, and nothing has come since.
     pub fn unavailable(&self) -> bool {
         self.unavailable
     }
