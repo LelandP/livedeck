@@ -1412,13 +1412,14 @@ pub fn view_model(state: &AppState) -> ViewModel {
         Some(Tile::Channel(_)) => "Favorites",
         Some(Tile::Category(_) | Tile::Resume(_) | Tile::Video(_) | Tile::Clip(_)) | None => "",
     };
-    // Y opens the channel page of a Twitch stream or channel card (Kick has none).
+    // Y opens the channel page of a Twitch stream, channel or *Continue watching* card (Kick has none).
     let can_channel = browsing
         && !state.rail.focused
         && !search_on_keys
         && match state.focused_tile() {
             Some(Tile::Stream(s)) => s.channel.features().videos,
             Some(Tile::Channel(c)) => c.channel.features().videos,
+            Some(Tile::Video(v)) => v.channel.features().videos,
             _ => false,
         };
     // Overlays highlight the root screen underneath them.

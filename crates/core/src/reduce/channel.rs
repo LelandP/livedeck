@@ -1,6 +1,6 @@
 //! The channel page (vod-plan.md, phase 3): a Twitch channel's live stream, past broadcasts,
 //! highlights and clips, in two tabs. Opened by Y on a stream or channel card, A on an offline
-//! channel card, and the live player's menu. Back returns to where it was opened. It needs no
+//! channel card or *Continue watching* card, A on an offline channel card, and the live player's menu. Back returns to where it was opened. It needs no
 //! account: GQL lists videos signed out.
 //!
 //! It is a screen of its own, not a `FeedId`: its two tabs are the `Feed`s of
@@ -32,6 +32,14 @@ pub(super) fn open_from_card(s: &mut AppState, cmds: &mut Vec<Command>) {
         }
         Some(Tile::Channel(card)) if card.channel.features().videos => {
             open(s, ChannelPage::opening(card.channel, card.name, None), cmds);
+        }
+        // A *Continue watching* card: the page of the video's channel.
+        Some(Tile::Video(card)) if card.channel.features().videos => {
+            open(
+                s,
+                ChannelPage::opening(card.channel, card.channel_name, None),
+                cmds,
+            );
         }
         _ => {}
     }

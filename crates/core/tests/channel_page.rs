@@ -1,6 +1,6 @@
-//! The channel page (vod-plan.md, phase 3): every way in (Y on a card of any browse screen, A on
-//! an offline channel, the live player's menu), Kick left out, signed out, Back, the tabs and the
-//! subscribe card. A on a video or clip plays it (the player itself: `video_player.rs`).
+//! The channel page (vod-plan.md, phase 3): every way in (Y on a card of any browse screen, a
+//! *Continue watching* card included, A on an offline channel, the live player's menu), Kick left
+//! out, signed out, Back, the tabs and the subscribe card. A on a video or clip plays it (the player itself: `video_player.rs`).
 
 use htpc_core::*;
 
@@ -240,6 +240,78 @@ fn y_works_signed_out_and_signed_in() {
     }
 }
 
+/// Home with a Followed row and a *Continue watching* row holding two of sleepy's broadcasts,
+/// focus on the second card of that row.
+fn home_on_a_continue_card() -> AppState {
+    let (mut s, _) = init();
+    s.continue_watching = ["1", "2"]
+        .iter()
+        .map(|id| Progress {
+            video: video(id, false),
+            pos_s: 900,
+            saved_at: 1_794_400_000,
+        })
+        .collect();
+    let rows = vec![Row::new(
+        RowKind::FollowedLive,
+        vec![Tile::Stream(live("fox"))],
+    )];
+    let s = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Home,
+            rows,
+        },
+    )
+    .0;
+    let (s, _) = press(&s, &[Intent::Down, Intent::Right]);
+    assert!(matches!(s.focused_tile(), Some(Tile::Video(v)) if v.id == "2"));
+    s
+}
+
+#[test]
+fn y_on_a_continue_watching_card_opens_that_videos_channel_page() {
+    let s = home_on_a_continue_card();
+    let focus = s.home.focus;
+    let (s, cmds) = reduce(&s, Intent::ToggleChat);
+    assert_eq!(s.screen, Screen::Channel);
+    assert_eq!(s.back_stack, vec![Screen::Home]);
+    assert_eq!(cmds, vec![load_command(ChannelRef::twitch("sleepy"))]);
+    let page = s.channel_page.as_ref().expect("the page is open");
+    assert_eq!(page.channel, ChannelRef::twitch("sleepy"));
+    assert_eq!(
+        page.name, "Sleepy",
+        "the video's channel name shows at once"
+    );
+    assert!(page.live.is_none());
+    assert_eq!(page.tab, ChannelTab::Videos);
+    assert!(page.loading());
+    // The video is not played and the saved places stay as they were.
+    assert_eq!(s.video, None);
+    assert_eq!(s.continue_watching.len(), 2);
+
+    // B returns to Home with the card still focused, and saves nothing.
+    let (s, cmds) = reduce(&s, Intent::Back);
+    assert_eq!(s.screen, Screen::Home);
+    assert_eq!(s.channel_page, None);
+    assert_eq!(s.home.focus, focus);
+    assert!(!cmds.iter().any(|c| matches!(c, Command::SaveContinue(_))));
+}
+
+#[test]
+fn a_continue_watching_card_still_resumes_on_a_and_y_does_nothing_with_the_rail_open() {
+    let s = home_on_a_continue_card();
+    let (playing, _) = reduce(&s, Intent::Select);
+    assert_eq!(playing.screen, Screen::Player);
+    assert!(playing.video.is_some());
+    assert_eq!(playing.channel_page, None);
+
+    let (s, _) = press(&s, &[Intent::Left, Intent::Left]);
+    assert!(s.rail.focused);
+    let (after, cmds) = reduce(&s, Intent::ToggleChat);
+    assert_eq!(after, s);
+    assert!(cmds.is_empty());
+}
 #[test]
 fn the_page_loads_signed_out_and_shows_all_its_rows() {
     let s = page();

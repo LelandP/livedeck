@@ -11,7 +11,7 @@ row 2 Landscape "Continue watching": [No-hit run attempts, night 12 | img | 4:12
 row 3 Landscape "Top Live": [tidewatch | VALORANT | 31.5K viewers | img] [brickby | VALORANT | 22.4K viewers | img]
 row 4 Portrait "Categories": [Just Chatting | img] [VALORANT | img]
 -- on its first card: A resumes, X removes
-select="Resume at 25:00" remove=true channel_hint=false view=""
+select="Resume at 25:00" remove=true channel_hint=true view=""
 screen=Home heading="Live now" focus=(2, 0) rail_current=0
 select="Resume at 25:00" retry=false back=false empty=false error=""
 row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img]
@@ -22,7 +22,7 @@ row 4 Portrait "Categories": [Just Chatting | img] [VALORANT | img]
 -- on a stream card: no X
 select="Watch" remove=false channel_hint=true view="Multiview"
 -- after X on the first card
-select="Resume at 6:40" remove=true channel_hint=false view=""
+select="Resume at 6:40" remove=true channel_hint=true view=""
 screen=Home heading="Live now" focus=(2, 0) rail_current=0
 select="Resume at 6:40" retry=false back=false empty=false error=""
 row 0 Hero "": [grandmaster_k | VALORANT | 48.1K viewers | img]
