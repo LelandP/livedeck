@@ -384,6 +384,9 @@ pub enum ToastKind {
     /// A video opened at its saved place, `pos_s` seconds in: *Resumed at 1:12:40 · Start over
     /// in the menu*.
     Resumed { pos_s: u32 },
+    /// Y on a video whose chat replay Twitch would not give: *No chat replay for this video*.
+    /// Once per video.
+    NoChatReplay,
 }
 
 impl Toast {
@@ -393,7 +396,8 @@ impl Toast {
             ToastKind::Live(stream) => Some(stream),
             ToastKind::OfflineSkipped(_)
             | ToastKind::SlowNetwork { .. }
-            | ToastKind::Resumed { .. } => None,
+            | ToastKind::Resumed { .. }
+            | ToastKind::NoChatReplay => None,
         }
     }
 }

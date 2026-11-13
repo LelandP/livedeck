@@ -9,7 +9,7 @@
 //! | A       | Pause / play. On the error screen: try again from where it was |
 //! | ◀ ▶     | Taps add up into one seek, a hold scrubs (`seek.rs`) |
 //! | LB / RB | Start of this chapter (or the previous one within 5 s of its start) / next chapter |
-//! | Y       | Chat replay (phase 6): nothing yet |
+//! | Y       | Chat replay side panel (`replay.rs`): a broadcast or highlight, not a clip |
 //! | Start   | The player menu, with a video's rows (`PlayerMenuRow::VIDEO`) |
 //! | B       | Back. While scrubbing it cancels the scrub instead |
 //!
@@ -27,7 +27,7 @@ use crate::video::{
 
 use super::{
     back, channel, continue_watching, pause_in_background, pop_screen, pulse_hud, push_screen,
-    push_toast, toggle_pause,
+    push_toast, replay, toggle_pause,
 };
 
 /// Plays `item` from `start_ms` on the Player screen, over the current screen (the channel page),
@@ -68,6 +68,8 @@ pub(super) fn open(
     s.subscribe_card = false;
     s.player_menu = None;
     s.chat_open = false;
+    // The replay panel starts closed and empty, whatever the last stream or video left in it.
+    s.chat.clear();
     // Every video opens as video, as every stream does.
     s.audio_only = false;
     s.video = Some(session);
@@ -101,6 +103,8 @@ fn start(s: &mut AppState, cmds: &mut Vec<Command>) {
     pulse_hud(s);
     push_play(s, cmds);
     push_stats(s, cmds);
+    // A fresh load from `pos_ms` is a jump for the chat replay too.
+    replay::restart(s, cmds);
 }
 
 /// The video again at another quality, or as sound only, from where it is. While it plays it
@@ -165,6 +169,8 @@ pub(super) fn leave(s: &mut AppState, cmds: &mut Vec<Command>) {
         });
     }
     s.video = None;
+    // The replay's lines go with it (the panel closes in `back`).
+    s.chat.clear();
     s.playback = Playback::Idle;
     s.paused = false;
     s.background_paused = false;
@@ -253,6 +259,9 @@ fn seek_to(s: &mut AppState, to_ms: u64, cmds: &mut Vec<Command>) {
             cmds.push(play);
         }
     }
+    // Every jump (taps, a scrub's release, chapters, *Start over*) clears the chat replay and
+    // fetches it again from the new spot.
+    replay::restart(s, cmds);
 }
 
 /// A scrub holds the picture still, unless the viewer had paused it already.
@@ -311,8 +320,9 @@ pub(super) fn intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) 
         Intent::Menu => open_menu(s, cmds),
         Intent::Back => back(s, cmds),
         Intent::Up | Intent::Down => pulse_hud(s),
-        // Y is chat replay (phase 6). View: no videos in multiview. Typing never reaches the
-        // player, and releases are handled before (`released`).
+        Intent::ToggleChat if !failed => replay::toggle(s, cmds),
+        // View: no videos in multiview. Typing never reaches the player, and releases are
+        // handled before (`released`).
         Intent::Select
         | Intent::Retry
         | Intent::ToggleChat
@@ -765,7 +775,7 @@ pub(super) fn failed(s: &mut AppState, slot: u8, message: String, cmds: &mut Vec
 /// A health report of the single player: the video's position and length. Reports still on their
 /// way from before a seek are ignored until it has landed (`Landing`), so the playhead never
 /// flicks back. Entering a muted part brings the HUD back, with its chip.
-pub(super) fn health(s: &mut AppState, slot: u8, health: Health) {
+pub(super) fn health(s: &mut AppState, slot: u8, health: Health, cmds: &mut Vec<Command>) {
     if slot != MAIN_SLOT || s.screen != Screen::Player || s.playback != Playback::Playing {
         return;
     }
@@ -802,6 +812,8 @@ pub(super) fn health(s: &mut AppState, slot: u8, health: Health) {
     if !was_muted && v.is_muted_at(pos) {
         pulse_hud(s);
     }
+    // The chat replay follows the playhead: lines come due, the next window is asked for.
+    replay::tick(s, cmds);
 }
 
 /// `Event::VideoDetails`: the chapters, muted parts and seek previews of the video on screen.

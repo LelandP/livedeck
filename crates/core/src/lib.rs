@@ -13,6 +13,7 @@ pub mod multiview;
 pub mod netlimit;
 pub mod quality;
 pub mod reduce;
+pub mod replay;
 pub mod seek;
 pub mod settings;
 pub mod state;
@@ -36,6 +37,7 @@ pub use multiview::{
 pub use netlimit::{Health, NetLimit, Tier};
 pub use quality::{FrameRate, Rendition};
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
+pub use replay::{ReplayChat, ReplayLine, LOOKAHEAD_MS};
 pub use seek::{Scrub, Seeking, TapRun};
 pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
 pub use state::{

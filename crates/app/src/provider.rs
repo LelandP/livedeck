@@ -8,15 +8,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use htpc_chat::{EmoteProvider, TwitchCdn};
 use htpc_core::{
-    grid_rows, unix_from_rfc3339, Category, Channel, ChannelInfo, ChannelRef, Chapter, Clip,
-    Command, Event, FeedId, HypeTrain, PageOutcome, Paging, Platform, Rgb, Row, RowId, RowKind,
-    SendProblem, Span, Stream, Tile, Video, VideoDetails, VideoKind, RESUME_MIN_LIVE,
+    grid_rows, unix_from_rfc3339, Category, Channel, ChannelInfo, ChannelRef, Chapter, ChatKind,
+    ChatMessage, ChatSpan, Clip, Command, Event, FeedId, HypeTrain, PageOutcome, Paging, Platform,
+    ReplayLine, Rgb, Row, RowId, RowKind, SendProblem, Span, Stream, Tile, Video, VideoDetails,
+    VideoKind, RESUME_MIN_LIVE,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
     ChannelResult, ChannelVideos, ClipInfo, DropReason, FollowedChannel, Game, MutedSegment, Page,
-    PageRequest, StreamInfo, TwitchApi, VideoInfo, VideoType,
+    PageRequest, ReplayComment, StreamInfo, TwitchApi, VideoInfo, VideoType,
 };
 use htpc_ui::Thumbnail;
 use tokio::sync::OnceCell;
@@ -903,6 +905,73 @@ impl<A: TwitchApi> ApiProvider<A> {
             }
         }
     }
+
+    /// A window of a video's chat replay. No lines, or a failure (Twitch refusing these requests
+    /// is the one to expect), is `ChatReplayFailed`: the player decides whether that means *No
+    /// chat replay for this video*.
+    async fn chat_replay(&self, id: String, offset_s: u32) -> Event {
+        match self.api.chat_replay(&id, offset_s).await {
+            Ok(Some(comments)) => Event::ChatReplay {
+                lines: comments.into_iter().map(replay_line).collect(),
+                id,
+                offset_s,
+            },
+            Ok(None) => {
+                tracing::debug!(id, offset_s, "no chat replay here");
+                Event::ChatReplayFailed { id, offset_s }
+            }
+            Err(err) => {
+                tracing::debug!(id, offset_s, %err, "could not load the chat replay");
+                Event::ChatReplayFailed { id, offset_s }
+            }
+        }
+    }
+}
+
+/// A replayed comment as a chat line: its emotes through Twitch's emote CDN by id (the same
+/// images and cache as live chat), no badges. A line without a chatter (the account is gone)
+/// has a placeholder name.
+fn replay_line(c: ReplayComment) -> ReplayLine {
+    let spans = c
+        .fragments
+        .into_iter()
+        .filter(|f| !f.text.trim().is_empty())
+        .map(|f| {
+            let url = f.emote_id.as_deref().and_then(|id| TwitchCdn.tagged(id));
+            match url {
+                Some(url) => ChatSpan::Emote { name: f.text, url },
+                None => ChatSpan::Text(f.text.trim().to_owned()),
+            }
+        })
+        .collect();
+    let user = if c.name.is_empty() {
+        "deleted user".to_owned()
+    } else {
+        c.name
+    };
+    ReplayLine {
+        offset_s: c.offset_seconds,
+        message: ChatMessage {
+            id: c.id,
+            login: c.login,
+            user,
+            color: parse_hex_colour(&c.color),
+            badges: Vec::new(),
+            spans,
+            kind: ChatKind::Message,
+        },
+    }
+}
+
+/// `#RRGGBB` as a colour. Anything else (Twitch sends an empty string for a chatter who never
+/// picked one) is `None`, which draws in the default name colour.
+fn parse_hex_colour(text: &str) -> Option<Rgb> {
+    let hex = text.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+    Some(Rgb::new(channel(0)?, channel(2)?, channel(4)?))
 }
 
 impl<A: TwitchApi> Provider for ApiProvider<A> {
@@ -927,6 +996,9 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             }
             Command::LoadChannelPage { channel } => vec![self.load_channel_page(channel).await],
             Command::LoadVideoDetails { id } => self.video_details(&id).await.into_iter().collect(),
+            Command::LoadChatReplay { id, offset_s } => {
+                vec![self.chat_replay(id, offset_s).await]
+            }
             Command::FetchStreamInfo { channel } if !channel.is_twitch() => Vec::new(),
             Command::FetchStreamInfo { channel } => {
                 self.stream_info(&channel.login).await.into_iter().collect()
@@ -2560,6 +2632,113 @@ mod tests {
         );
 
         assert!(details("1").await.is_empty(), "no such video: no event");
+    }
+
+    #[tokio::test]
+    async fn chat_replay_maps_lines_with_emotes_from_the_cdn() {
+        let provider = ApiProvider::new(fake_api());
+        let ask = |offset_s| {
+            provider.execute(Command::LoadChatReplay {
+                id: "9000000001".into(),
+                offset_s,
+            })
+        };
+        let events = ask(600).await;
+        let [Event::ChatReplay {
+            id,
+            offset_s,
+            lines,
+        }] = events.as_slice()
+        else {
+            panic!("{events:?}")
+        };
+        assert_eq!((id.as_str(), *offset_s), ("9000000001", 600));
+        // A window starts 40 s before the offset and holds at most 59 lines, oldest first.
+        assert!(lines.len() > 10 && lines.len() <= 59);
+        assert!(lines[0].offset_s >= 560);
+        assert!(lines.windows(2).all(|w| w[0].offset_s <= w[1].offset_s));
+        let emote = lines
+            .iter()
+            .flat_map(|l| &l.message.spans)
+            .find_map(|s| match s {
+                ChatSpan::Emote { name, url } => Some((name.as_str(), url.as_str())),
+                ChatSpan::Text(_) => None,
+            })
+            .expect("a line with an emote");
+        assert!(emote
+            .1
+            .starts_with("https://static-cdn.jtvnw.net/emoticons/v2/"));
+
+        // No chat to give (past the end, or no such video): a failure the player can read.
+        let events = ask(9_999_999).await;
+        assert!(matches!(
+            events.as_slice(),
+            [Event::ChatReplayFailed {
+                offset_s: 9_999_999,
+                ..
+            }]
+        ));
+        let events = provider
+            .execute(Command::LoadChatReplay {
+                id: "nope".into(),
+                offset_s: 0,
+            })
+            .await;
+        assert!(matches!(
+            events.as_slice(),
+            [Event::ChatReplayFailed { .. }]
+        ));
+    }
+
+    #[test]
+    fn replay_comments_become_chat_lines() {
+        let comment =
+            |name: &str, color: &str, fragments: Vec<(&str, Option<&str>)>| ReplayComment {
+                id: "x".into(),
+                offset_seconds: 7,
+                login: name.to_ascii_lowercase(),
+                name: name.into(),
+                color: color.into(),
+                fragments: fragments
+                    .into_iter()
+                    .map(|(text, emote)| htpc_twitch_api::ReplayFragment {
+                        text: text.into(),
+                        emote_id: emote.map(str::to_owned),
+                    })
+                    .collect(),
+            };
+        let line = replay_line(comment(
+            "Mossy",
+            "#3FA34D",
+            vec![
+                ("gg ", None),
+                ("Kappa", Some("25")),
+                ("  ", None),
+                ("odd", Some("../x")),
+            ],
+        ));
+        assert_eq!(line.offset_s, 7);
+        assert_eq!(line.message.color, Some(Rgb::new(0x3F, 0xA3, 0x4D)));
+        assert_eq!(line.message.user, "Mossy");
+        assert_eq!(
+            line.message.spans,
+            [
+                ChatSpan::Text("gg".into()),
+                ChatSpan::Emote {
+                    name: "Kappa".into(),
+                    url: "https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/2.0".into()
+                },
+                // An emote id that is not safe to put in an address stays text.
+                ChatSpan::Text("odd".into()),
+            ]
+        );
+        // No colour, no account.
+        let line = replay_line(comment("", "", vec![("hi", None)]));
+        assert_eq!(line.message.color, None);
+        assert_eq!(line.message.user, "deleted user");
+        for bad in ["", "#12", "#GGGGGG", "123456", "#12345é"] {
+            assert_eq!(parse_hex_colour(bad), None, "{bad:?}");
+        }
     }
 
     /// The recorded GQL page through the real client: sizes, times and thumbnails as Twitch sends

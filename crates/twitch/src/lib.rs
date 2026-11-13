@@ -40,8 +40,8 @@ pub use helix::{Credentials, HelixClient, DEFAULT_BASE_URL};
 pub use hybrid::HybridApi;
 pub use model::{
     ChannelResult, ChannelVideos, ClipInfo, DropReason, FollowedChannel, Game, HypeTrain,
-    LiveArchive, MutedSegment, Page, PageRequest, SendOutcome, StreamInfo, UserInfo, VideoChapter,
-    VideoDetails, VideoInfo, VideoType, MAX_PAGE_SIZE,
+    LiveArchive, MutedSegment, Page, PageRequest, ReplayComment, ReplayFragment, SendOutcome,
+    StreamInfo, UserInfo, VideoChapter, VideoDetails, VideoInfo, VideoType, MAX_PAGE_SIZE,
 };
 pub use ratelimit::{Bucket, RateLimiter, RetryPolicy};
 pub use refreshing::{Refresher, RefreshingApi};
@@ -157,6 +157,20 @@ pub trait TwitchApi: Send + Sync + 'static {
         login: &str,
     ) -> impl Future<Output = Result<Option<LiveArchive>>> + Send {
         let _ = login;
+        async { Ok(None) }
+    }
+
+    /// A window of the chat of the video `id`, oldest first: about 60 lines around `offset_s`
+    /// (seconds into the video), starting a little before it. `Ok(None)` when the video has no
+    /// chat to give (no such video, or an offset past its end). GQL only, like
+    /// [`TwitchApi::channel_videos`]; paging by cursor fails the integrity check, so a viewer
+    /// fetches by offset.
+    fn chat_replay(
+        &self,
+        id: &str,
+        offset_s: u32,
+    ) -> impl Future<Output = Result<Option<Vec<ReplayComment>>>> + Send {
+        let _ = (id, offset_s);
         async { Ok(None) }
     }
 }

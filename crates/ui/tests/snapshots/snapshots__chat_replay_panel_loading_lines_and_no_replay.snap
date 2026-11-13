@@ -1,0 +1,43 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- playing, panel closed
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=true
+open=false overlay=false status="No messages yet"
+screen=Player more=0
+-- Y: the panel opens, fetching
+requests: [LoadChatReplay { id: "9001", offset_s: 4360 }]
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=true
+open=true overlay=false status="Loading…"
+screen=Player more=0
+-- the window: lines up to the playhead show, with an emote
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=true
+open=true overlay=false status=""
+Message #d6ff3a badges=0 mossy_k: that dodge was clean
+Message #d6ff3a badges=0 Ember_Rae: no way <Kappa>
+Message #d6ff3a badges=0 nightowl_dev: here we go
+screen=Player more=0
+-- the playhead passes the next line
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=true
+open=true overlay=false status=""
+Message #d6ff3a badges=0 mossy_k: that dodge was clean
+Message #d6ff3a badges=0 Ember_Rae: no way <Kappa>
+Message #d6ff3a badges=0 nightowl_dev: here we go
+Message #d6ff3a badges=0 mossy_k: not due yet
+screen=Player more=0
+-- a jump clears the panel and fetches again
+requests: [Seek { slot: 0, to_ms: 7800000 }, LoadChatReplay { id: "9001", offset_s: 7800 }]
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=true
+open=true overlay=false status="Loading…"
+screen=Player more=0
+-- Twitch gives no replay: the panel closes, said once
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=false
+open=false overlay=false status="No messages yet"
+screen=Player more=0
+  [#1 note: No chat replay for this video]
+Y again: 0 commands, 1 toasts
+-- a clip has no replay hint
+title="CHAT REPLAY" compose_hint="" compose_open=false hint_y=false
+open=false overlay=false status="No messages yet"
+screen=Player more=0

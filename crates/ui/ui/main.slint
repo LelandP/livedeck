@@ -116,6 +116,8 @@ export component MainWindow inherits Window {
     // Chat as an overlay on the video instead of a side panel, and its connection state.
     in property <bool> chat-overlay: false;
     in property <string> chat-status: "";
+    // The chat panel's header: empty for live chat, "CHAT REPLAY" over a video.
+    in property <string> chat-title: "";
     in property <StreamItem> now-playing;
 
     // Player screen. `video` is the latest mpv frame of slot `video-slot` (the stream with sound),
@@ -466,6 +468,7 @@ export component MainWindow inherits Window {
         chat-open: root.chat-open;
         chat-overlay: root.chat-overlay;
         chat-status: root.chat-status;
+        chat-title: root.chat-title;
         video: root.video;
         playback: root.playback;
         playback-error: root.playback-error;
@@ -803,6 +806,9 @@ export component MainWindow inherits Window {
             // The subscribe card takes only A and B: "A Open in browser · B Close", or only B in
             // Game Mode (`select-label` is empty there).
             if root.screen == 1 && !root.subscribe-open && !root.video-hud.on : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            // A video's chat replay: read only, so Y is all there is. Not while scrubbing or on
+            // the end card, where it does nothing.
+            if root.screen == 1 && !root.subscribe-open && root.video-hud.on && root.video-hud.replay && root.playback == 1 && !root.player-menu-open && !root.video-hud.end-card && !root.video-hud.scrubbing : Hint { glyph: "Y"; label: root.chat-open ? "Hide chat replay" : "Chat replay"; clicked => { root.action(UiAction.toggle-chat); } }
             // A video: the D-pad seeks (tap, or hold to scrub) and LB/RB jump between chapters.
             // While scrubbing only A (jump), the D-pad (reverse) and B (cancel) act.
             if root.screen == 1 && root.video-hud.on && root.playback == 1 && !root.player-menu-open && !root.video-hud.end-card : Hint { glyph: "◀▶"; label: root.video-hud.scrubbing ? "Scrub" : "Seek"; }
