@@ -184,6 +184,15 @@ fn seeks(cmds: &[Command]) -> Vec<u64> {
         .collect()
 }
 
+/// What leaving broadcast `1` at `pos_s` saves (the page was loaded at 1_794_346_102).
+fn left_at(pos_s: u32) -> Progress {
+    Progress {
+        video: video("1"),
+        pos_s,
+        saved_at: 1_794_346_102,
+    }
+}
+
 fn v(s: &AppState) -> &VideoSession {
     s.video.as_ref().expect("a video is on screen")
 }
@@ -569,7 +578,13 @@ fn channel_videos_in_the_menu_goes_back_to_the_page_below() {
     let (s, cmds) = reduce(&s, Intent::Select);
     assert_eq!(s.screen, Screen::Channel);
     assert_eq!(s.back_stack, vec![Screen::Home]);
-    assert_eq!(cmds, vec![Command::StopPlayback { slot: MAIN_SLOT }]);
+    assert_eq!(
+        cmds,
+        vec![
+            Command::SaveContinue(vec![left_at(300)]),
+            Command::StopPlayback { slot: MAIN_SLOT }
+        ]
+    );
     assert!(s.video.is_none());
     assert!(s.player_menu.is_none());
 }
@@ -592,6 +607,7 @@ fn channel_videos_without_a_page_below_opens_the_videos_channel() {
     assert_eq!(
         cmds,
         vec![
+            Command::SaveContinue(vec![left_at(300)]),
             Command::StopPlayback { slot: MAIN_SLOT },
             Command::LoadChannelPage {
                 channel: ChannelRef::twitch("sleepy")
@@ -814,7 +830,11 @@ fn the_sleep_timer_stops_the_video_and_suspends() {
     assert!(s.video.is_none());
     assert_eq!(
         cmds,
-        vec![Command::StopPlayback { slot: MAIN_SLOT }, Command::Suspend]
+        vec![
+            Command::SaveContinue(vec![left_at(60)]),
+            Command::StopPlayback { slot: MAIN_SLOT },
+            Command::Suspend
+        ]
     );
 }
 

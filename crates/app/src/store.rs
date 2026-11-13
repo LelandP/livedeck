@@ -86,6 +86,9 @@ pub type SaveFavorites = Arc<dyn Fn(&[htpc_core::ChannelRef]) + Send + Sync>;
 /// Writes the last multiview session to `multiview.toml`. Blocking, like [`SaveSettings`].
 pub type SaveMultiview = Arc<dyn Fn(&htpc_core::SavedSet) + Send + Sync>;
 
+/// Writes *Continue watching* to `continue.toml`. Blocking, like [`SaveSettings`].
+pub type SaveContinue = Arc<dyn Fn(&[htpc_core::Progress]) + Send + Sync>;
+
 /// Writes a file off the async workers, newest last: every star and unstar (or multiview change)
 /// writes, and two writes in flight must not land in the wrong order.
 struct LatestWriter<T> {
@@ -164,6 +167,8 @@ pub struct Store<P, R, S> {
     save_favorites: Option<LatestWriter<Vec<htpc_core::ChannelRef>>>,
     /// And for the last multiview session.
     save_multiview: Option<LatestWriter<htpc_core::SavedSet>>,
+    /// And for *Continue watching*.
+    save_continue: Option<LatestWriter<Vec<htpc_core::Progress>>>,
     /// Keeps the screen on during a stream. `None` in tests that do not care.
     keep_awake: Option<KeepAwake>,
     /// What `keep_awake` was last told.
@@ -217,6 +222,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             save_settings: None,
             save_favorites: None,
             save_multiview: None,
+            save_continue: None,
             keep_awake: None,
             awake: false,
             sleep: None,
@@ -254,6 +260,14 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     pub fn with_multiview_saver(mut self, save: SaveMultiview) -> Self {
         self.save_multiview = Some(LatestWriter::new(move |set: &htpc_core::SavedSet| {
             save(set)
+        }));
+        self
+    }
+
+    /// Persists *Continue watching* with `save` whenever it changes.
+    pub fn with_continue_saver(mut self, save: SaveContinue) -> Self {
+        self.save_continue = Some(LatestWriter::new(move |list: &Vec<htpc_core::Progress>| {
+            save(list)
         }));
         self
     }
@@ -375,6 +389,12 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 self.provider.set_resume_set(set.channels.clone());
                 if let Some(writer) = &self.save_multiview {
                     writer.write(set);
+                }
+                continue;
+            }
+            if let Command::SaveContinue(list) = cmd {
+                if let Some(writer) = &self.save_continue {
+                    writer.write(list);
                 }
                 continue;
             }

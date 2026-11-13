@@ -4,6 +4,7 @@
 //! Browse, Category) and the commands needed to fetch data.
 
 mod channel;
+mod continue_watching;
 mod favorites;
 mod multiview;
 mod network;
@@ -52,6 +53,7 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
     // where it belongs.
     multiview::track_saved(&mut next, &mut cmds);
     resume::settle(&mut next);
+    continue_watching::sync_home(&mut next, &mut cmds);
     (next, cmds)
 }
 
@@ -125,7 +127,10 @@ fn typed_key(s: &AppState, intent: Intent) -> Option<Intent> {
 /// cancels. Nothing else gets past the prompt.
 fn exit_prompt_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
-        Intent::Select => cmds.push(Command::Quit),
+        Intent::Select => {
+            continue_watching::save_leaving(s, cmds);
+            cmds.push(Command::Quit);
+        }
         Intent::Back | Intent::Menu => s.exit_prompt = false,
         _ => {}
     }
@@ -1265,6 +1270,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::FeedLoaded { feed, mut rows } => {
             if feed == FeedId::Home {
                 resume::home_loaded(s, &mut rows);
+                continue_watching::home_loaded(s, &mut rows);
             }
             // A category the user already left has no feed any more, so its answer is dropped.
             if let Some(f) = s.feed_mut(&feed) {
@@ -1332,9 +1338,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         // arms below (which match their channel against it) can never take a video's events,
         // and once the video is left its late reports find no video here.
         Event::PlaybackStarted { slot } if s.video.is_some() => video::started(s, slot, cmds),
-        Event::PlaybackEnded { slot } if s.video.is_some() => video::ended(s, slot),
+        Event::PlaybackEnded { slot } if s.video.is_some() => video::ended(s, slot, cmds),
         Event::PlaybackError { slot, message } if s.video.is_some() => {
-            video::failed(s, slot, message);
+            video::failed(s, slot, message, cmds);
         }
         Event::QualitySettleDue(id) => multiview::settle_due(s, id, cmds),
         Event::SeekSettleDue(id) => video::settle_due(s, id, cmds),
@@ -1401,6 +1407,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::WindowFocus(focused) => window_focus(s, focused, cmds),
+        // The window is closing: a video's place is saved before the app goes.
+        Event::Quitting => continue_watching::save_leaving(s, cmds),
         Event::DisplaySize { w, h } => {
             if w > 0 && h > 0 && s.display != (w, h) {
                 s.display = (w, h);
@@ -1779,6 +1787,10 @@ fn load_more_if_near_end(s: &mut AppState, cmds: &mut Vec<Command>) {
 
 /// X / `r`: reload a feed that failed to load, otherwise retry the pages that failed.
 fn retry(s: &mut AppState, cmds: &mut Vec<Command>) {
+    // X on a card of Home's *Continue watching* row removes it.
+    if continue_watching::remove_focused(s, cmds) {
+        return;
+    }
     let Some(id) = s.current_feed_id() else {
         return;
     };
@@ -1845,8 +1857,10 @@ fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
             cmds.push(Command::LoadFeed { feed });
         }
         Some(Tile::Resume(card)) => multiview::resume(s, card, cmds),
-        // Only the channel page shows these (`channel::select`).
-        Some(Tile::Video(_) | Tile::Clip(_)) | None => {}
+        // Home's *Continue watching* row: the video from where it was left.
+        Some(Tile::Video(card)) => continue_watching::resume_card(s, card, cmds),
+        // Only the channel page shows clips (`channel::select`).
+        Some(Tile::Clip(_)) | None => {}
     }
 }
 

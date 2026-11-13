@@ -1636,6 +1636,47 @@ fn channel_page_videos_tab() {
 }
 
 #[test]
+fn home_continue_watching_row() {
+    let mut s = home_loaded();
+    s.continue_watching = vec![
+        Progress {
+            video: video("9001", "No-hit run attempts, night 12", 15_128, STREAMED),
+            pos_s: 1_500,
+            saved_at: FETCHED,
+        },
+        Progress {
+            video: video("9004", "The 0.4 s dodge", 764, STREAMED - 86_400),
+            pos_s: 400,
+            saved_at: FETCHED - 3_600,
+        },
+    ];
+    // The row appears with the list, without a Home reload.
+    let mut out = String::from("-- the row after Followed\n");
+    let hints = |vm: &ViewModel| {
+        format!(
+            "select={:?} remove={} channel_hint={} view={:?}\n",
+            vm.select_label, vm.can_remove, vm.can_channel, vm.view_label
+        )
+    };
+    let s = reduce(&s, Event::FeedRefreshDue).0;
+    let vm = view_model(&s);
+    out += &render(&vm);
+    out += "-- on its first card: A resumes, X removes\n";
+    let on_card = send(&s, &[Intent::Down, Intent::Down]);
+    let vm = view_model(&on_card);
+    out += &hints(&vm);
+    out += &render(&vm);
+    out += "-- on a stream card: no X\n";
+    out += &hints(&view_model(&s));
+    out += "-- after X on the first card\n";
+    let removed = send(&on_card, &[Intent::Retry]);
+    let vm = view_model(&removed);
+    out += &hints(&vm);
+    out += &render(&vm);
+    insta::assert_snapshot!(out);
+}
+
+#[test]
 fn channel_page_clips_tab() {
     let s = send(&channel_page(), &[Intent::PageRight]);
     let mut out = String::from("-- the Clips tab\n");
