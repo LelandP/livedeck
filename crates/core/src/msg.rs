@@ -9,7 +9,7 @@ use crate::netlimit::Health;
 use crate::quality::{FrameRate, Rendition};
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
-use crate::video::{ChannelInfo, VideoDetails, VideoTarget};
+use crate::video::{ChannelInfo, Progress, VideoDetails, VideoTarget};
 
 /// What the user wants, independent of the input device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +182,10 @@ pub enum Command {
     /// (Home's next load checks which are live for the *Resume multiview* card) and writes it to
     /// `multiview.toml`. There is no `Event`.
     SaveMultiview(SavedSet),
+    /// *Continue watching* changed (a video was left, finished, dropped or failed to play): this
+    /// is the whole list, newest first, at most `CONTINUE_MAX`. The store writes it to
+    /// `continue.toml`. Entries with `saved_at` 0 get the wall clock then. There is no `Event`.
+    SaveContinue(Vec<Progress>),
     /// Start a sleep timer of `minutes`, replacing any running one. Answered over time with
     /// `Event::SleepTimerTick` once a minute, `Event::SleepTimerWarning` 60 s before the end, and
     /// `Event::SleepTimerFired` (after fading the sound out), all carrying `id`.
@@ -418,6 +422,9 @@ pub enum Event {
     /// app. Without `Settings::background_play`, losing it pauses the stream and regaining it
     /// resumes.
     WindowFocus(bool),
+    /// The window was asked to close (the app quits on purpose). A video on screen saves its place
+    /// first.
+    Quitting,
     /// The window is `w` x `h` physical pixels: sent at startup and on every resize. Multiview
     /// picks each tile's quality from it. An empty (minimised) window is ignored.
     DisplaySize {

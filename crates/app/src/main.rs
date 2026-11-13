@@ -51,7 +51,7 @@ use crate::provider::{ApiProvider, Provider};
 use crate::raids::Raids;
 use crate::session::{AppAuth, Apply, Notify, Session, Viewer, NO_CLIENT_ID};
 use crate::sleep::Sleep;
-use crate::store::{SaveFavorites, SaveMultiview, SaveSettings, Store};
+use crate::store::{SaveContinue, SaveFavorites, SaveMultiview, SaveSettings, Store};
 
 const HELP: &str = "\
 livedeck: couch-first, unofficial Twitch client for SteamOS
@@ -249,6 +249,8 @@ fn load_storage() -> Storage {
                 favorites_store: None,
                 last_multiview: None,
                 multiview_store: None,
+                continue_watching: Vec::new(),
+                continue_store: None,
             };
         }
     };
@@ -265,6 +267,13 @@ fn load_storage() -> Storage {
         path = %multiview_store.path().display(),
         streams = last_multiview.as_ref().map_or(0, |s| s.channels.len()),
         "last multiview session loaded"
+    );
+    let continue_store = htpc_storage::ContinueStore::new(paths.continue_file());
+    let continue_watching = continue_store.load_or_default();
+    tracing::info!(
+        path = %continue_store.path().display(),
+        count = continue_watching.len(),
+        "continue watching loaded"
     );
     let store = htpc_storage::ConfigStore::new(paths.config_file());
     let config = store.load_or_default();
@@ -300,6 +309,8 @@ fn load_storage() -> Storage {
         favorites_store: Some(favorites_store),
         last_multiview,
         multiview_store: Some(multiview_store),
+        continue_watching,
+        continue_store: Some(continue_store),
     }
 }
 
@@ -320,6 +331,35 @@ struct Storage {
     last_multiview: Option<htpc_core::SavedSet>,
     /// Where it is written when a running session changes.
     multiview_store: Option<htpc_storage::MultiviewStore>,
+    /// Where each video was left, from `continue.toml`.
+    continue_watching: Vec<htpc_core::Progress>,
+    /// Where it is written when a video is left.
+    continue_store: Option<htpc_storage::ContinueStore>,
+}
+
+/// Saves *Continue watching* into `continue.toml`. A place saved without a time (the reducer has
+/// no clock) gets the wall clock here.
+fn continue_saver(store: Option<htpc_storage::ContinueStore>) -> Option<SaveContinue> {
+    let store = store?;
+    Some(Arc::new(move |list: &[htpc_core::Progress]| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let stamped: Vec<htpc_core::Progress> = list
+            .iter()
+            .cloned()
+            .map(|mut p| {
+                if p.saved_at == 0 {
+                    p.saved_at = now;
+                }
+                p
+            })
+            .collect();
+        match store.save(&stamped) {
+            Ok(()) => tracing::debug!(count = stamped.len(), "continue watching saved"),
+            Err(err) => tracing::warn!(%err, "could not save continue watching"),
+        }
+    }))
 }
 
 /// Saves the multiview set into `multiview.toml`.
@@ -587,6 +627,10 @@ struct Wiring {
     last_multiview: Option<htpc_core::SavedSet>,
     /// Writes it when a running session changes. `None` in `--mock`.
     save_multiview: Option<SaveMultiview>,
+    /// Where each video was left, from `continue.toml`. Empty in `--mock`.
+    continue_watching: Vec<htpc_core::Progress>,
+    /// Writes it when a video is left. `None` in `--mock`.
+    save_continue: Option<SaveContinue>,
 }
 
 /// The real raid watch: EventSub with the session's token.
@@ -634,6 +678,8 @@ fn run_app<P: Provider, R: StreamResolver>(
         save_favorites,
         last_multiview,
         save_multiview,
+        continue_watching,
+        save_continue,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -677,6 +723,7 @@ fn run_app<P: Provider, R: StreamResolver>(
     state.quick_messages = quick_messages;
     state.favorites = favorites;
     state.last_multiview = last_multiview;
+    state.continue_watching = continue_watching;
     state.can_open_browser = browser::can_open_browser();
     // The account is in place before the first load, so Home already has its Followed row. A
     // token from the environment wins over a stored login.
@@ -726,6 +773,9 @@ fn run_app<P: Provider, R: StreamResolver>(
     }
     if let Some(save) = save_multiview {
         store = store.with_multiview_saver(save);
+    }
+    if let Some(save) = save_continue {
+        store = store.with_continue_saver(save);
     }
     // Stops the screen dimming, locking or sleeping mid-stream.
     if let Some(keep_awake) = awake::keep_awake() {
@@ -827,6 +877,10 @@ fn wire_window_events(ui: &MainWindow, tx: &UnboundedSender<Msg>, rate: RefreshR
                 tracing::debug!(focused, "window focus changed");
                 let _ = tx.send(Event::WindowFocus(*focused).into());
             }
+            // The app quits on purpose: a video on screen saves its place first.
+            WindowEvent::CloseRequested => {
+                let _ = tx.send(Event::Quitting.into());
+            }
             WindowEvent::Moved(_)
             | WindowEvent::Resized(_)
             | WindowEvent::ScaleFactorChanged { .. } => {
@@ -892,11 +946,14 @@ fn main() -> Result<()> {
         favorites_store,
         last_multiview,
         multiview_store,
+        continue_watching,
+        continue_store,
     } = load_storage();
     let settings = config.settings;
     let save_settings = settings_saver(&config, config_store);
     let save_favorites = favorites_saver(favorites_store);
     let save_multiview = multiview_saver(multiview_store);
+    let save_continue = continue_saver(continue_store);
     let fullscreen = want_fullscreen(args.fullscreen);
     let (tx, rx) = unbounded_channel::<Msg>();
     let notify: Notify = {
@@ -954,6 +1011,9 @@ fn main() -> Result<()> {
             // The same for the multiview set.
             last_multiview: None,
             save_multiview: None,
+            // And for what was left part-way: kept for the session, never written.
+            continue_watching: Vec::new(),
+            save_continue: None,
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -1007,6 +1067,8 @@ fn main() -> Result<()> {
         save_favorites,
         last_multiview,
         save_multiview,
+        continue_watching,
+        save_continue,
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

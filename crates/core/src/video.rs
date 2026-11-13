@@ -77,9 +77,22 @@ pub struct Clip {
     pub thumbnail: Option<String>,
 }
 
-/// A saved place in a video: one entry of *Continue watching* (vod-plan.md section 5). Phase 5
-/// fills `AppState::continue_watching` from `continue.toml`. Until then it is empty, and the
-/// channel page already reads it for *Resume at …*, *Start over* and the progress bar.
+/// How many videos *Continue watching* keeps (vod-plan.md section 1).
+pub const CONTINUE_MAX: usize = 10;
+
+/// A video left this close to its end (in seconds) is watched: it leaves *Continue watching*.
+pub const CONTINUE_END_MARGIN_S: u32 = 120;
+
+/// A video left before this many seconds in has no place worth keeping: the list stays as it was.
+pub const CONTINUE_MIN_S: u32 = 10;
+
+/// What the error screen says for a video that no longer exists. The video leaves *Continue
+/// watching* on it (the app's `video_message` in `playback.rs` uses it).
+pub const VIDEO_GONE_MESSAGE: &str = "This video is no longer available.";
+
+/// A saved place in a video: one entry of *Continue watching* (vod-plan.md section 5), kept in
+/// `AppState::continue_watching` and in `continue.toml`. The channel page reads it for *Resume at
+/// …*, *Start over* and the progress bar, Home for its row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Progress {
     /// The video's card, kept whole so Home's row can draw it without asking Twitch.

@@ -264,6 +264,9 @@ pub enum RowKind {
     ClipsWeek,
     /// A channel page's Clips tab: the most watched clips ever.
     ClipsAllTime,
+    /// Home: videos left part-way (`AppState::continue_watching`), after Followed. The reducer
+    /// builds it, the provider never sends it.
+    ContinueWatching,
 }
 
 impl RowKind {

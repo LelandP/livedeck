@@ -47,4 +47,5 @@ pub use state::{
 pub use video::{
     date_from_unix, unix_from_rfc3339, ChannelInfo, Chapter, Clip, EndRow, Landing, Progress, Span,
     Video, VideoDetails, VideoItem, VideoKind, VideoLoad, VideoSession, VideoTarget,
+    CONTINUE_END_MARGIN_S, CONTINUE_MAX, CONTINUE_MIN_S, VIDEO_GONE_MESSAGE,
 };

@@ -975,6 +975,7 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::SaveSettings(_)
             | Command::SaveFavorites(_)
             | Command::SaveMultiview(_)
+            | Command::SaveContinue(_)
             | Command::StartSleepTimer { .. }
             | Command::CancelSleepTimer
             | Command::Suspend

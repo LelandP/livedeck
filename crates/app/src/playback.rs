@@ -407,6 +407,10 @@ fn video_message(video: &VideoTarget, err: &ResolveError) -> String {
         VideoTarget::Clip(_) => "clip",
     };
     match err {
+        // The core drops a video that says this from *Continue watching*.
+        ResolveError::Offline if matches!(video, VideoTarget::Video(_)) => {
+            htpc_core::VIDEO_GONE_MESSAGE.to_owned()
+        }
         ResolveError::Offline => format!("This {what} is no longer available."),
         ResolveError::NotFound => format!("That {what} could not be found."),
         other => user_message(other),

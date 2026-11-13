@@ -76,6 +76,7 @@ export component MainWindow inherits Window {
     in property <string> channel-status: "";
     in property <int> channel-tab: 0;
     in property <bool> can-start-over: false;
+    in property <bool> can-remove: false;
 
     // Settings screen: the focused row, and the current value of each choice.
     in property <int> settings-focus: 0;
@@ -789,6 +790,8 @@ export component MainWindow inherits Window {
 
             if root.screen == 0 || root.screen == 3 : Hint { glyph: "A"; label: root.rail-focused ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if (root.screen == 0 || root.screen == 3) && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
+            // A video of Home's *Continue watching* row: X takes it off.
+            if root.screen == 0 && root.can-remove : Hint { glyph: "X"; label: "Remove"; clicked => { root.action(UiAction.retry); } }
             // Y on a Twitch stream or channel card: its channel page, with past broadcasts and clips.
             if (root.screen == 0 || root.screen == 3) && root.can-channel : Hint { glyph: "Y"; label: "Channel"; clicked => { root.action(UiAction.toggle-chat); } }
             // A live stream card: pick it for multiview, or watch the picked ones (and star it). An

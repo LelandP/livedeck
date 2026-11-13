@@ -19,6 +19,7 @@ const CONFIG_FILE: &str = "config.toml";
 const TOKEN_FILE: &str = "tokens.json";
 const FAVORITES_FILE: &str = "favorites.toml";
 const MULTIVIEW_FILE: &str = "multiview.toml";
+const CONTINUE_FILE: &str = "continue.toml";
 const IMAGE_DIR: &str = "images";
 
 /// The three base folders. Nothing is created until something is written.
@@ -70,6 +71,11 @@ impl Paths {
         self.data_dir.join(MULTIVIEW_FILE)
     }
 
+    /// Where each video was left (*Continue watching*). Written whenever one is left.
+    pub fn continue_file(&self) -> PathBuf {
+        self.data_dir.join(CONTINUE_FILE)
+    }
+
     pub fn image_cache_dir(&self) -> PathBuf {
         self.cache_dir.join(IMAGE_DIR)
     }
@@ -86,6 +92,7 @@ mod tests {
         assert_eq!(p.token_file(), Path::new("/r/data/tokens.json"));
         assert_eq!(p.favorites_file(), Path::new("/r/data/favorites.toml"));
         assert_eq!(p.multiview_file(), Path::new("/r/data/multiview.toml"));
+        assert_eq!(p.continue_file(), Path::new("/r/data/continue.toml"));
         assert_eq!(p.image_cache_dir(), Path::new("/r/cache/images"));
     }
 

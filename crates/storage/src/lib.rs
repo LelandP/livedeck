@@ -3,6 +3,8 @@
 //! - [`ConfigStore`] / [`Config`]: `config.toml` (`serde` + `toml`), forgiving load, atomic save.
 //! - [`FavoritesStore`]: `favorites.toml`, the starred channels. Same rules as the config.
 //! - [`MultiviewStore`]: `multiview.toml`, the last multiview session. Same rules.
+//! - [`ContinueStore`]: `continue.toml`, where each video was left (*Continue watching*). Same
+//!   rules.
 //! - [`TokenStore`]: OAuth tokens in the OS keyring, with an owner-only file as the fallback.
 //! - [`ImageCache`]: thumbnails in a size-capped disk LRU, fetched with `reqwest` and decoded
 //!   with `image`.
@@ -12,6 +14,7 @@
 
 mod cache;
 mod config;
+mod continue_watching;
 mod error;
 mod favorites;
 mod fs_util;
@@ -21,6 +24,7 @@ mod tokens;
 
 pub use cache::{decode, CacheStats, DecodedImage, ImageCache, MAX_DECODED_SIDE, MAX_IMAGE_BYTES};
 pub use config::{Config, ConfigStore, DEFAULT_IMAGE_CACHE_MB, MIN_IMAGE_CACHE_MB};
+pub use continue_watching::{continue_from_toml, continue_to_toml, ContinueStore};
 pub use error::{Error, Result};
 pub use favorites::{favorites_from_toml, favorites_to_toml, FavoritesStore};
 pub use multiview::{multiview_from_toml, multiview_to_toml, MultiviewStore};

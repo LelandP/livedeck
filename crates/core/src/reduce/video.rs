@@ -21,11 +21,13 @@ use crate::msg::{Command, Dir, Intent, MAIN_SLOT};
 use crate::netlimit::Health;
 use crate::seek::{self, Scrub, Seeking, TapRun};
 use crate::state::{AppState, Playback, Screen, ToastKind};
-use crate::video::{EndRow, Landing, VideoDetails, VideoItem, VideoLoad, VideoSession};
+use crate::video::{
+    EndRow, Landing, VideoDetails, VideoItem, VideoLoad, VideoSession, VIDEO_GONE_MESSAGE,
+};
 
 use super::{
-    back, channel, pause_in_background, pop_screen, pulse_hud, push_screen, push_toast,
-    toggle_pause,
+    back, channel, continue_watching, pause_in_background, pop_screen, pulse_hud, push_screen,
+    push_toast, toggle_pause,
 };
 
 /// Plays `item` from `start_ms` on the Player screen, over the current screen (the channel page),
@@ -50,7 +52,14 @@ pub(super) fn open(
             return;
         }
     }
-    let now = s.channel_page.as_ref().map_or(0, |p| p.now);
+    // The clock for *Streamed Nov 10*: the page's, or (from Home) the newest saved place's.
+    let now = s
+        .channel_page
+        .as_ref()
+        .map(|p| p.now)
+        .filter(|now| *now > 0)
+        .or_else(|| s.continue_watching.iter().map(|p| p.saved_at).max())
+        .unwrap_or(0);
     let details = item.video_id().map(str::to_owned);
     let mut session = VideoSession::new(item, 0, now);
     session.pos_ms = session.clamp(start_ms);
@@ -145,9 +154,9 @@ fn push_stats(s: &AppState, cmds: &mut Vec<Command>) {
 }
 
 /// Stops the video and forgets it: B, *Back* on the end card, *Channel videos*, the sleep timer.
-/// The caller leaves the screen. `pos_ms` was the resume point until here (Continue watching,
-/// phase 5, saves it at this spot).
+/// The caller leaves the screen. Its place goes into *Continue watching* first.
 pub(super) fn leave(s: &mut AppState, cmds: &mut Vec<Command>) {
+    continue_watching::save_leaving(s, cmds);
     cmds.push(Command::StopPlayback { slot: MAIN_SLOT });
     if s.session.stats {
         cmds.push(Command::SetStats {
@@ -701,10 +710,12 @@ pub(super) fn started(s: &mut AppState, slot: u8, cmds: &mut Vec<Command>) {
 
 /// The video played to its end (`Event::PlaybackEnded`): no autoplay, the last frame stays under
 /// the end card.
-pub(super) fn ended(s: &mut AppState, slot: u8) {
+pub(super) fn ended(s: &mut AppState, slot: u8, cmds: &mut Vec<Command>) {
     if slot != MAIN_SLOT || s.screen != Screen::Player || s.playback != Playback::Playing {
         return;
     }
+    // Watched: it leaves *Continue watching*.
+    continue_watching::finished(s, cmds);
     let Some(v) = s.video.as_mut() else {
         return;
     };
@@ -724,12 +735,16 @@ pub(super) fn ended(s: &mut AppState, slot: u8) {
 
 /// The player could not play the video (`Event::PlaybackError`): a video that was deleted, a
 /// failed resolve, a failed load. The error screen offers A to try again from where it was, and B.
-pub(super) fn failed(s: &mut AppState, slot: u8, message: String) {
+pub(super) fn failed(s: &mut AppState, slot: u8, message: String, cmds: &mut Vec<Command>) {
     if slot != MAIN_SLOT || s.screen != Screen::Player {
         return;
     }
     if !matches!(s.playback, Playback::Loading | Playback::Playing) {
         return;
+    }
+    // A video that is gone has nothing to continue.
+    if message == VIDEO_GONE_MESSAGE {
+        continue_watching::finished(s, cmds);
     }
     let Some(v) = s.video.as_mut() else {
         return;

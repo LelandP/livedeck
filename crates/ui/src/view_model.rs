@@ -262,6 +262,8 @@ pub struct ViewModel {
     pub channel_tab: i32,
     /// On the channel page, the focused video is in *Continue watching*: X starts it over.
     pub can_start_over: bool,
+    /// On Home, the focused card is a video of *Continue watching*: X takes it off the row.
+    pub can_remove: bool,
     /// Focused row of the Settings screen (`SettingsRow` order: account, chat layout, quality).
     pub settings_focus: i32,
     pub chat_layout_label: String,
@@ -867,6 +869,7 @@ fn row_title(kind: RowKind, platform: Platform, feed: &FeedId) -> &'static str {
         RowKind::Highlights => "Highlights",
         RowKind::ClipsWeek => "Top clips · last 7 days",
         RowKind::ClipsAllTime => "Top clips · all time",
+        RowKind::ContinueWatching => "Continue watching",
     }
 }
 
@@ -887,7 +890,8 @@ fn shape_of(kind: RowKind) -> Shape {
         | RowKind::PastBroadcasts
         | RowKind::Highlights
         | RowKind::ClipsWeek
-        | RowKind::ClipsAllTime => Shape::Landscape,
+        | RowKind::ClipsAllTime
+        | RowKind::ContinueWatching => Shape::Landscape,
     }
 }
 
@@ -973,9 +977,16 @@ fn tile_card(state: &AppState, tile: &Tile) -> CardVm {
     }
 }
 
-/// The page's clock for dates (0 before it has loaded, which leaves the year out).
+/// The clock for dates: the channel page's, or on Home the newest saved place's (0 when there is
+/// none, which leaves the year out).
 fn now_of(state: &AppState) -> u64 {
-    state.channel_page.as_ref().map_or(0, |p| p.now)
+    state
+        .channel_page
+        .as_ref()
+        .map(|p| p.now)
+        .filter(|now| *now > 0)
+        .or_else(|| state.continue_watching.iter().map(|p| p.saved_at).max())
+        .unwrap_or(0)
 }
 
 /// The parts that are not empty, joined: "Nov 10 · Just Chatting".
@@ -1501,6 +1512,16 @@ pub fn view_model(state: &AppState) -> ViewModel {
         },
         _ => String::new(),
     });
+    // Home's *Continue watching* row: A resumes the focused video, X takes it off the row.
+    let home_video = match focused_card {
+        Some(Tile::Video(v)) if state.screen == Screen::Home => Some(v),
+        _ => None,
+    };
+    let home_select: Option<String> = home_video.map(|v| match state.progress_of(&v.id) {
+        Some(p) => format!("Resume at {}", format_duration(p.pos_s)),
+        None => "Watch".to_owned(),
+    });
+    let can_remove = home_video.is_some() && !state.rail.focused;
     let (playback, playback_error) = match &state.playback {
         Playback::Idle | Playback::Loading => (PlaybackId::Loading, String::new()),
         Playback::Playing => (PlaybackId::Playing, String::new()),
@@ -1577,6 +1598,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
         }
     } else if let Some(label) = &channel_select {
         (label.as_str(), error.is_some())
+    } else if let Some(label) = &home_select {
+        (label.as_str(), error.is_some() || failed_page)
     } else {
         (
             if selects_category {
@@ -1647,6 +1670,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         channel_status: channel_page.map(channel_status).unwrap_or_default(),
         channel_tab: channel_page.map_or(0, |p| p.tab as i32),
         can_start_over: channel_page.is_some() && state.focused_progress().is_some(),
+        can_remove,
         settings_focus: to_i32(state.settings_focus.index()),
         chat_layout_label: state.settings.chat_layout.label().to_owned(),
         quality_label: state.settings.quality.label().to_owned(),
@@ -1937,6 +1961,7 @@ impl Update {
         ui.set_channel_status(vm.channel_status.into());
         ui.set_channel_tab(vm.channel_tab);
         ui.set_can_start_over(vm.can_start_over);
+        ui.set_can_remove(vm.can_remove);
         ui.set_settings_focus(vm.settings_focus);
         ui.set_chat_layout_label(vm.chat_layout_label.into());
         ui.set_quality_label(vm.quality_label.into());
