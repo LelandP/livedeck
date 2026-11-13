@@ -719,6 +719,13 @@ pub(super) fn menu_jump(s: &mut AppState, cmds: &mut Vec<Command>) {
     };
     s.player_menu = None;
     v.seeking = Seeking::Idle;
+    // On the error screen or the end card there is no picture to seek in: the video starts again
+    // there, as *Start over* does (a bare load would play on behind the error).
+    if !matches!(s.playback, Playback::Playing | Playback::Loading) || v.end_card.is_some() {
+        v.pos_ms = v.clamp(to);
+        start(s, cmds);
+        return;
+    }
     disarm(s);
     pulse_hud(s);
     seek_to(s, to, cmds);

@@ -495,6 +495,31 @@ fn chapters_in_the_menu_point_and_jump() {
 }
 
 #[test]
+fn a_chapter_picked_on_the_error_screen_starts_the_video_there_not_behind_the_error() {
+    let s = playing_at(25 * MIN);
+    let (s, _) = reduce(
+        &s,
+        Event::PlaybackError {
+            slot: MAIN_SLOT,
+            message: "x".into(),
+        },
+    );
+    let (s, _) = press(&s, &[Intent::Menu, Intent::Down, Intent::Down]);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::Chapters));
+    let (s, cmds) = press(&s, &[Intent::Right, Intent::Select]);
+    assert_eq!(s.player_menu, None);
+    assert_eq!(cmds, vec![play_cmd("1", 130 * MIN)]);
+    assert_eq!(
+        s.playback,
+        Playback::Loading,
+        "its first frame will show it"
+    );
+    assert_eq!(v(&s).pos_ms, 130 * MIN);
+    let (s, _) = reduce(&s, Event::PlaybackStarted { slot: MAIN_SLOT });
+    assert_eq!(s.playback, Playback::Playing);
+}
+
+#[test]
 fn start_over_in_the_menu_goes_to_the_start_and_plays() {
     let s = playing_at(70 * MIN);
     let (paused, _) = reduce(&s, Intent::Select);
