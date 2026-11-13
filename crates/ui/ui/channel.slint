@@ -42,6 +42,8 @@ export component ChannelContent inherits Rectangle {
     in property <string> status;
     // 0 Videos, 1 Clips.
     in property <int> tab;
+    // One of LiveDeck's favorites: a star after the name.
+    in property <bool> favorite;
     callback picked(int, int);
     clip: true;
 
@@ -126,12 +128,23 @@ export component ChannelContent inherits Rectangle {
             height: 72px;
             alignment: center;
             spacing: 2px;
-            Text {
-                text: root.name;
-                color: Theme.text;
-                font-size: Theme.fs-title;
-                font-weight: 900;
-                overflow: elide;
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+                Text {
+                    text: root.name;
+                    color: Theme.text;
+                    font-size: Theme.fs-title;
+                    font-weight: 900;
+                    overflow: elide;
+                }
+                // The favorites' star, as in the multiview picker.
+                if root.favorite : Text {
+                    text: "★";
+                    color: Theme.accent-light;
+                    font-size: Theme.fs-title;
+                    vertical-alignment: center;
+                }
             }
             HorizontalLayout {
                 spacing: 8px;

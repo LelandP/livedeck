@@ -1518,7 +1518,7 @@ fn channel_page() -> AppState {
 
 fn channel_lines(vm: &ViewModel) -> String {
     format!(
-        "name={:?} initial={:?} avatar={:?} live={} status={:?} tab={}\n\
+        "name={:?} initial={:?} avatar={:?} live={} status={:?} tab={} favorite={}\n\
          select={:?} start_over={} retry={} back={} channel_hint={} view={:?} empty={} empty_text={:?} error={:?}\n",
         vm.channel_name,
         vm.channel_initial,
@@ -1526,6 +1526,7 @@ fn channel_lines(vm: &ViewModel) -> String {
         vm.channel_live,
         vm.channel_status,
         vm.channel_tab,
+        vm.channel_favorite,
         vm.select_label,
         vm.can_start_over,
         vm.can_retry,
@@ -1596,6 +1597,11 @@ fn channel_page_videos_tab() {
     let vm = view_model(&saved);
     out += &channel_lines(&vm);
     out += &render(&vm);
+
+    out += "-- View: added to favorites (a star in the header), then View again: removed\n";
+    let starred = send(&s, &[Intent::View]);
+    out += &channel_lines(&view_model(&starred));
+    out += &channel_lines(&view_model(&send(&starred, &[Intent::View])));
 
     out += "-- live: the Live now row comes first\n";
     let live = Stream {

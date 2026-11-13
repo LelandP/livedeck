@@ -1019,6 +1019,15 @@ fn channel_page(ui: &MainWindow) {
         "no X Start over"
     );
 
+    // View: a favorite now, and a star (accent-light, like the ring) follows the name.
+    let header_star = |image: &_| count(image, 150..1000, 20..92, ring);
+    assert_eq!(header_star(&shown(ui, &s)), 0, "a star before View");
+    let (starred, _) = reduce(&s, Intent::View);
+    assert!(
+        header_star(&shown(ui, &starred)) > 100,
+        "no star after the name"
+    );
+
     // The Clips tab lights the other pill.
     let (clips, _) = reduce(&s, Intent::PageRight);
     let image = shown(ui, &clips);

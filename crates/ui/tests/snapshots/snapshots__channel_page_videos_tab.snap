@@ -4,37 +4,42 @@ expression: out
 ---
 -- opened from the offline card, loading
 on the card: select="Channel videos" channel_hint=true
-name="Sleepy Fox" initial="S" avatar="" live=false status="" tab=0
-select="" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="" live=false status="" tab=0 favorite=false
+select="" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 screen=Channel heading="Sleepy Fox" focus=(0, 0) rail_current=0
 select="" retry=false back=false empty=false error=""
 row 0 Landscape "": [skeleton] [skeleton] [skeleton] [skeleton] [skeleton]
 -- loaded, the first broadcast focused
-name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0
-select="Watch" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=false
+select="Watch" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 screen=Channel heading="Sleepy Fox" focus=(0, 0) rail_current=0
 select="Watch" retry=false back=false empty=false error=""
 row 0 Landscape "Past broadcasts": [No-hit run attempts, night 12 | img | 4:12:08 | Nov 10 · Hollow Knight | some audio muted] [Subathon recap and Q&A | img | 2:03:55 | Nov 6 · Hollow Knight | locked] [Night 11: the boss that will not die | img | 5:40:21 | Feb 19, 2025 · Hollow Knight]
 row 1 Landscape "Highlights": [The 0.4 s dodge | img | 12:44 | Nov 10 · Hollow Knight]
 -- the subscriber-only broadcast
-name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0
-select="Subscribe" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=false
+select="Subscribe" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 -- the broadcast from last year, then down to the highlight
-name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0
-select="Watch" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
-name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0
-select="Watch" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=false
+select="Watch" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=false
+select="Watch" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 focus=(1, 0) row_cols=[2, 0]
 -- the first broadcast was left at 25:00 (Continue watching, phase 5)
-name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0
-select="Resume at 25:00" start_over=true retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=false
+select="Resume at 25:00" start_over=true retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 screen=Channel heading="Sleepy Fox" focus=(0, 0) rail_current=0
 select="Resume at 25:00" retry=false back=false empty=false error=""
 row 0 Landscape "Past broadcasts": [No-hit run attempts, night 12 | img | 4:12:08 | Nov 10 · Hollow Knight | progress 99/1000 | some audio muted] [Subathon recap and Q&A | img | 2:03:55 | Nov 6 · Hollow Knight | locked] [Night 11: the boss that will not die | img | 5:40:21 | Feb 19, 2025 · Hollow Knight]
 row 1 Landscape "Highlights": [The 0.4 s dodge | img | 12:44 | Nov 10 · Hollow Knight]
+-- View: added to favorites (a star in the header), then View again: removed
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=true
+select="Watch" start_over=false retry=false back=false channel_hint=false view="Remove from favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="https://cdn/avatar.jpg" live=false status="Offline · last live 3 hours ago" tab=0 favorite=false
+select="Watch" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 -- live: the Live now row comes first
-name="Sleepy Fox" initial="S" avatar="" live=true status="Live now" tab=0
-select="Watch" start_over=false retry=false back=false channel_hint=false view="" empty=false empty_text="No past broadcasts or highlights yet" error=""
+name="Sleepy Fox" initial="S" avatar="" live=true status="Live now" tab=0 favorite=false
+select="Watch" start_over=false retry=false back=false channel_hint=false view="Add to favorites" empty=false empty_text="No past broadcasts or highlights yet" error=""
 screen=Channel heading="Sleepy Fox" focus=(0, 0) rail_current=0
 select="Watch" retry=false back=false empty=false error=""
 row 0 Landscape "Live now": [sleepy_fox | Hollow Knight | 1.2K viewers]

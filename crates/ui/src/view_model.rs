@@ -247,7 +247,8 @@ pub struct ViewModel {
     /// A stream or channel card has focus on a browse screen: View opens its popup.
     pub can_view: bool,
     /// What the hints bar calls that: "Multiview" on a live stream, "Favorites" on an offline
-    /// channel. Empty when `can_view` is off.
+    /// channel, and on a channel page (where View stars at once) "Add to favorites" or "Remove
+    /// from favorites". Empty when `can_view` is off.
     pub view_label: String,
     /// The tray above the hints bar on browse screens: "Multiview · 3 picked". Empty while
     /// nothing is picked.
@@ -263,6 +264,8 @@ pub struct ViewModel {
     pub channel_live: bool,
     pub channel_status: String,
     pub channel_tab: i32,
+    /// The channel page's channel is one of the favorites: a star after its name.
+    pub channel_favorite: bool,
     /// On the channel page, the focused video is in *Continue watching*: X starts it over.
     pub can_start_over: bool,
     /// On Home, the focused card is a video of *Continue watching*: X takes it off the row.
@@ -1404,9 +1407,25 @@ pub fn view_model(state: &AppState) -> ViewModel {
             | Screen::Category
             | Screen::Search
     );
+    // Whether the channel page's channel is one of the favorites (a star in its header).
+    let channel_favorite = state
+        .channel_page
+        .as_ref()
+        .filter(|_| state.screen == Screen::Channel)
+        .is_some_and(|p| state.is_favorite(&p.channel));
     // What View does on the focused card: multiview on a live stream, favorites on an offline
-    // channel, nothing on a category.
+    // channel, nothing on a category. On a channel page it stars or unstars the channel at once,
+    // with the words of the View popup's row.
     let view_label = match state.focused_tile() {
+        _ if state.screen == Screen::Channel => {
+            if state.channel_page.is_none() || state.rail.focused || state.subscribe_card {
+                ""
+            } else if channel_favorite {
+                "Remove from favorites"
+            } else {
+                "Add to favorites"
+            }
+        }
         _ if !browsing || state.rail.focused || search_on_keys => "",
         Some(Tile::Stream(_)) => "Multiview",
         Some(Tile::Channel(_)) => "Favorites",
@@ -1687,6 +1706,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         channel_live: channel_page.is_some_and(|p| p.live.is_some()),
         channel_status: channel_page.map(channel_status).unwrap_or_default(),
         channel_tab: channel_page.map_or(0, |p| p.tab as i32),
+        channel_favorite,
         can_start_over: channel_page.is_some() && state.focused_progress().is_some(),
         can_remove,
         settings_focus: to_i32(state.settings_focus.index()),
@@ -1979,6 +1999,7 @@ impl Update {
         ui.set_channel_live(vm.channel_live);
         ui.set_channel_status(vm.channel_status.into());
         ui.set_channel_tab(vm.channel_tab);
+        ui.set_channel_favorite(vm.channel_favorite);
         ui.set_can_start_over(vm.can_start_over);
         ui.set_can_remove(vm.can_remove);
         ui.set_settings_focus(vm.settings_focus);

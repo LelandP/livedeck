@@ -1,5 +1,6 @@
 //! Favorites (plan.md, phase 6): LiveDeck's own starred channels, Kick and Twitch. Starring works
-//! from the View popup (on a card, the single player, multiview) and the picker (Y). The list is
+//! from the View popup (on a card, the single player, multiview), the picker (Y), and View on a
+//! channel page (vod-plan.md, phase 3: Twitch has no follow API for apps). The list is
 //! saved on every change (`Command::SaveFavorites`); which favorites are live comes from
 //! `FeedId::Favorites`, and Home has a row of the live ones.
 //!
@@ -7,7 +8,7 @@
 //! starred live stream joins the live rows and an offline channel the offline row. The next load
 //! brings the real picture.
 
-use crate::domain::{ChannelRef, FeedId, Row, RowKind, Tile};
+use crate::domain::{Channel, ChannelRef, FeedId, Rgb, Row, RowKind, Tile};
 use crate::msg::Command;
 use crate::state::{AppState, Feed, RailEntry, Screen};
 
@@ -51,6 +52,30 @@ pub(super) fn toggle(s: &mut AppState, tile: Tile, cmds: &mut Vec<Command>) {
     if !s.is_signed_in() {
         return;
     }
+    switch(s, tile, cmds);
+}
+
+/// View on the channel page: stars the page's channel, or unstars it, and saves the list. Signed
+/// out too: the list is LiveDeck's own (the Favorites screen shows it once signed in), so only
+/// the list changes then, not the rows.
+pub(super) fn toggle_page(s: &mut AppState, cmds: &mut Vec<Command>) {
+    let Some(page) = s.channel_page.as_ref() else {
+        return;
+    };
+    let tile = match &page.live {
+        Some(stream) => Tile::Stream(stream.clone()),
+        None => Tile::Channel(Channel {
+            channel: page.channel.clone(),
+            name: page.name.clone(),
+            tint: Rgb::default(),
+        }),
+    };
+    switch(s, tile, cmds);
+}
+
+/// Stars or unstars the channel of `tile`, and saves the list. The rows that list favorites
+/// follow, but a star only adds to them signed in (they are not shown signed out).
+fn switch(s: &mut AppState, tile: Tile, cmds: &mut Vec<Command>) {
     let Some(channel) = tile.channel().cloned() else {
         return;
     };
@@ -61,6 +86,10 @@ pub(super) fn toggle(s: &mut AppState, tile: Tile, cmds: &mut Vec<Command>) {
         retain_tiles(&mut s.home, gone);
     } else {
         s.favorites.push(channel);
+        if !s.is_signed_in() {
+            cmds.push(Command::SaveFavorites(s.favorites.clone()));
+            return;
+        }
         match tile {
             Tile::Stream(stream) => {
                 let tile = Tile::Stream(stream);

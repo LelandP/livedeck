@@ -1,6 +1,7 @@
 //! The channel page (vod-plan.md, phase 3): every way in (Y on a card of any browse screen, a
 //! *Continue watching* card included, A on an offline channel, the live player's menu), Kick left
 //! out, signed out, Back, the tabs and the subscribe card. A on a video or clip plays it (the player itself: `video_player.rs`).
+//! View adds the channel to Favorites or removes it, signed out too.
 
 use htpc_core::*;
 
@@ -1018,17 +1019,124 @@ fn a_card_click_selects_it() {
     );
 }
 
-#[test]
-fn view_does_not_open_the_multiview_popup_on_the_page() {
-    let (s, _) = press(&home(), &[Intent::ToggleChat]);
+// ---------------------------------------------------------------------------------------------
+// View: Favorites (Twitch has no follow API for apps)
+// ---------------------------------------------------------------------------------------------
+
+/// The live channel `fox`'s page, opened with Y on its card and loaded.
+fn live_page(signed_in: bool) -> AppState {
+    let home = if signed_in { sign_in(&home()) } else { home() };
+    let (s, _) = press(&home, &[Intent::ToggleChat]);
     let now_live = Event::ChannelPageLoaded {
         info: info("fox", Some(live("fox"))),
         rows: vec![Row::new(RowKind::LiveNow, vec![Tile::Stream(live("fox"))])],
     };
-    let (s, _) = reduce(&s, now_live);
-    let s = sign_in(&s);
+    reduce(&s, now_live).0
+}
+
+fn favorites_rows(feed: &Feed) -> Vec<(RowKind, Vec<String>)> {
+    feed.rows
+        .iter()
+        .filter(|r| matches!(r.kind, RowKind::FavoritesLive | RowKind::FavoritesOffline))
+        .map(|r| {
+            let logins = r.tiles.iter().filter_map(|t| t.channel());
+            (r.kind, logins.map(|c| c.login.clone()).collect())
+        })
+        .collect()
+}
+
+#[test]
+fn view_on_the_page_adds_the_channel_to_favorites_and_again_removes_it_signed_out() {
+    let s = page();
+    assert!(!s.is_signed_in());
+    let (starred, cmds) = reduce(&s, Intent::View);
+    assert_eq!(starred.favorites, [ChannelRef::twitch("sleepy")]);
+    assert_eq!(
+        cmds,
+        [Command::SaveFavorites(vec![ChannelRef::twitch("sleepy")])]
+    );
+    // No popup, the page stays as it was, and signed out no favorites row appears anywhere.
+    assert_eq!(starred.popup, None);
+    assert_eq!(starred.screen, Screen::Channel);
+    assert_eq!(starred.channel_page, s.channel_page);
+    assert_eq!(starred.home, s.home);
+    assert_eq!(starred.favorites_feed, s.favorites_feed);
+    let (unstarred, cmds) = reduce(&starred, Intent::View);
+    assert!(unstarred.favorites.is_empty());
+    assert_eq!(cmds, [Command::SaveFavorites(Vec::new())]);
+    assert_eq!(unstarred.channel_page, s.channel_page);
+}
+
+#[test]
+fn view_on_a_live_page_signed_in_adds_the_stream_to_the_favorites_rows() {
+    let s = live_page(true);
+    let (starred, cmds) = reduce(&s, Intent::View);
+    // Not the multiview popup: View on the page is Favorites only.
+    assert_eq!(starred.popup, None);
+    assert_eq!(starred.favorites, [ChannelRef::twitch("fox")]);
+    assert_eq!(
+        cmds,
+        [Command::SaveFavorites(vec![ChannelRef::twitch("fox")])]
+    );
+    let fox = vec!["fox".to_owned()];
+    assert_eq!(
+        favorites_rows(&starred.favorites_feed),
+        [(RowKind::FavoritesLive, fox.clone())]
+    );
+    assert_eq!(
+        favorites_rows(&starred.home),
+        [(RowKind::FavoritesLive, fox)]
+    );
+    // Again: gone from the list and the rows.
+    let (unstarred, cmds) = reduce(&starred, Intent::View);
+    assert!(unstarred.favorites.is_empty());
+    assert_eq!(cmds, [Command::SaveFavorites(Vec::new())]);
+    assert!(favorites_rows(&unstarred.favorites_feed).is_empty());
+    assert!(favorites_rows(&unstarred.home).is_empty());
+}
+
+#[test]
+fn view_on_an_offline_page_signed_in_adds_the_channel_to_the_offline_row() {
+    let s = sign_in(&page());
+    let (starred, _) = reduce(&s, Intent::View);
+    let rows = &starred.favorites_feed.rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, RowKind::FavoritesOffline);
+    match &rows[0].tiles[..] {
+        [Tile::Channel(c)] => {
+            assert_eq!(c.channel, ChannelRef::twitch("sleepy"));
+            assert_eq!(c.name, "Sleepy Fox", "the page's name");
+        }
+        other => panic!("{other:?}"),
+    }
+    // Home lists only live favorites.
+    assert!(favorites_rows(&starred.home).is_empty());
+}
+
+#[test]
+fn view_removes_a_channel_starred_elsewhere() {
+    // Starred from the View popup on another screen, as the login in other letters.
+    let mut s = live_page(false);
+    s.favorites = vec![ChannelRef::twitch("Fox"), ChannelRef::kick("dozer")];
     let (after, cmds) = reduce(&s, Intent::View);
-    assert_eq!(after.popup, None);
+    assert_eq!(after.favorites, [ChannelRef::kick("dozer")]);
+    assert_eq!(
+        cmds,
+        [Command::SaveFavorites(vec![ChannelRef::kick("dozer")])]
+    );
+}
+
+#[test]
+fn view_does_nothing_with_the_rail_or_the_subscribe_card_open() {
+    let (rail, _) = press(&page(), &[Intent::Left]);
+    assert!(rail.rail.focused);
+    let (after, cmds) = reduce(&rail, Intent::View);
+    assert_eq!(after, rail);
+    assert!(cmds.is_empty());
+    let (card, _) = reduce(&on_the_sub_only_video(true), Intent::Select);
+    assert!(card.subscribe_card);
+    let (after, cmds) = reduce(&card, Intent::View);
+    assert!(after.favorites.is_empty());
     assert!(cmds.is_empty());
 }
 

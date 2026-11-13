@@ -11,6 +11,9 @@
 //! `AppState::channel_page`, each keeping its own focus. A on a video or a clip plays it in the
 //! video player (`video.rs`) over the page, so B comes back to the page; a subscriber-only video
 //! opens the subscribe card instead.
+//!
+//! View adds the channel to LiveDeck's Favorites, or removes it (`favorites::toggle_page`),
+//! signed out too: Twitch has no follow API for apps.
 
 use crate::domain::{ChannelRef, Row, Tile};
 use crate::msg::{Command, Intent};
@@ -233,6 +236,8 @@ pub(super) fn intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) 
             }
         }
         Intent::Back => back(s, cmds),
+        // Stars the channel, or unstars it (Twitch has no follow API for apps).
+        Intent::View => super::favorites::toggle_page(s, cmds),
         _ => {}
     }
 }

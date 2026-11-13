@@ -75,6 +75,8 @@ export component MainWindow inherits Window {
     in property <bool> channel-live: false;
     in property <string> channel-status: "";
     in property <int> channel-tab: 0;
+    // The channel is one of the favorites: a star after its name. View stars or unstars it.
+    in property <bool> channel-favorite: false;
     in property <bool> can-start-over: false;
     in property <bool> can-remove: false;
 
@@ -362,6 +364,7 @@ export component MainWindow inherits Window {
         live: root.channel-live;
         status: root.channel-status;
         tab: root.channel-tab;
+        favorite: root.channel-favorite;
         picked(r, c) => { root.card-clicked(r, c); }
     }
 
@@ -843,12 +846,15 @@ export component MainWindow inherits Window {
             if root.screen == 5 && root.search-in-results && !root.rail-focused : Hint { glyph: "B"; label: "Keyboard"; clicked => { root.action(UiAction.back); } }
 
             // A channel's page: A plays (or subscribes, for a subscriber-only video), X starts a
-            // saved video over or retries a failed load, LB and RB switch tab, B goes back. With
+            // saved video over or retries a failed load, LB and RB switch tab, View stars the
+            // channel, B goes back. With
             // the subscribe card open only A and B act.
             if root.screen == 7 && ((root.rail-focused && !root.subscribe-open) || root.select-label != "") : Hint { glyph: "A"; label: root.rail-focused && !root.subscribe-open ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
             if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-start-over : Hint { glyph: "X"; label: "Start over"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 7 && !root.subscribe-open && !root.rail-focused : Hint { glyph: "RB"; label: "LB/RB Videos / Clips"; clicked => { root.action(UiAction.page-right); } }
+            // View stars the channel at once, or unstars it (LiveDeck's Favorites).
+            if root.screen == 7 && root.can-view : Hint { glyph: "View"; label: root.view-label; clicked => { root.action(UiAction.view); } }
             if root.screen == 7 && !root.subscribe-open : Hint { glyph: "≡"; label: "Menu"; clicked => { root.action(UiAction.menu); } }
             if root.screen == 7 : Hint { glyph: "B"; label: root.subscribe-open ? "Close" : (root.rail-focused ? "Quit" : "Back"); clicked => { root.action(UiAction.back); } }
         }
