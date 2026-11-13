@@ -60,6 +60,9 @@ pub(super) fn open(
         .filter(|now| *now > 0)
         .or_else(|| s.continue_watching.iter().map(|p| p.saved_at).max())
         .unwrap_or(0);
+    // A live stream playing behind the page stops first: a video and a stream cannot share
+    // `now_playing`. B from the page brings it back (`channel::back_to_live`).
+    channel::park_live(s, cmds);
     let details = item.video_id().map(str::to_owned);
     let mut session = VideoSession::new(item, 0, now);
     session.pos_ms = session.clamp(start_ms);

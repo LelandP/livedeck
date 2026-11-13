@@ -19,7 +19,7 @@ fn is_favorites_row(kind: RowKind) -> bool {
 /// Shows Favorites as a root screen and asks again which favorites are live. Rows from an earlier
 /// visit stay on screen until the answer.
 pub(super) fn open(s: &mut AppState, cmds: &mut Vec<Command>) {
-    s.back_stack.clear();
+    super::reset_stack(s, cmds);
     s.category = None;
     s.channel_page = None;
     s.subscribe_card = false;

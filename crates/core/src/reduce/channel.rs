@@ -1,7 +1,11 @@
 //! The channel page (vod-plan.md, phase 3): a Twitch channel's live stream, past broadcasts,
 //! highlights and clips, in two tabs. Opened by Y on a stream or channel card, A on an offline
-//! channel card or *Continue watching* card, A on an offline channel card, and the live player's menu. Back returns to where it was opened. It needs no
-//! account: GQL lists videos signed out.
+//! channel card or *Continue watching* card, and the live player's menu. Back returns to where it
+//! was opened. It needs no account: GQL lists videos signed out.
+//!
+//! From the live player's menu the page goes over the Player and the stream keeps playing behind it
+//! (`AppState::live_covered`): B is instant (`back_to_live`). A video or clip played from the page
+//! stops the stream first and parks it (`park_live`), and B from the page then loads it again.
 //!
 //! It is a screen of its own, not a `FeedId`: its two tabs are the `Feed`s of
 //! `AppState::channel_page`, each keeping its own focus. A on a video or a clip plays it in the
@@ -9,13 +13,13 @@
 //! opens the subscribe card instead.
 
 use crate::domain::{ChannelRef, Row, Tile};
-use crate::msg::{Command, Intent, MAIN_SLOT};
-use crate::state::{AppState, ChannelPage, Feed, Playback, Screen};
+use crate::msg::{Command, Intent};
+use crate::state::{AppState, ChannelPage, Feed, Playback, Screen, RAID_SECONDS};
 use crate::video::{ChannelInfo, VideoItem};
 
 use super::{
-    back, fetch_thumbnails, open_player, pop_screen, push_screen, stop_watching,
-    subscribe_card_intent, video,
+    back, begin_stream, drop_live_behind, fetch_thumbnails, open_player, pop_screen, pulse_hud,
+    push_screen, stop_live, subscribe_card_intent, video,
 };
 
 /// Y on the focused card of a browse screen: a Twitch stream or channel card opens its channel
@@ -64,9 +68,10 @@ pub(super) fn open_from_offline_card(
     true
 }
 
-/// The *Channel videos* row of the live player's menu. The stream stops as it does on B, and the
-/// page takes the Player screen's place, so B on the page returns to the screen the stream was
-/// opened from. Does nothing in multiview, or for a platform without videos.
+/// The *Channel videos* row of the live player's menu. The page goes over the Player
+/// (`[…, Player, Channel]`) and the stream keeps playing behind it, sound and chat included (the
+/// picture is not drawn: no video area on that screen), so B on the page is instant
+/// (`back_to_live`). Does nothing in multiview, or for a platform without videos.
 pub(super) fn open_from_player(s: &mut AppState, cmds: &mut Vec<Command>) {
     if s.multiview.is_some() {
         return;
@@ -79,35 +84,72 @@ pub(super) fn open_from_player(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
     // A stream that was on the end screen is not live.
     let live = matches!(s.playback, Playback::Playing | Playback::Loading).then(|| stream.clone());
-    cmds.push(Command::StopPlayback { slot: MAIN_SLOT });
-    if s.session.stats {
-        cmds.push(Command::SetStats {
-            slot: MAIN_SLOT,
-            on: false,
-        });
-    }
-    stop_watching(s, cmds);
-    s.chat_open = false;
-    pop_screen(s);
+    s.player_menu = None;
     let login = stream.channel.login.clone();
     let page = ChannelPage::opening(stream.channel, login, live);
-    // The stream was opened from this very page (or from the page of the channel it raided): no
-    // second page on the stack.
-    if s.screen == Screen::Channel {
-        match s.channel_page.as_mut() {
-            Some(old) if old.channel.is_same(&page.channel) => {
-                old.live = page.live;
-                reload(s, cmds);
+    let below = s.back_stack.iter().rposition(|x| *x == Screen::Channel);
+    match (below, s.channel_page.as_mut()) {
+        // The stream was opened from this very page: no second page, the one below is reused.
+        (Some(_), Some(old)) if old.channel.is_same(&page.channel) => {
+            old.live = page.live;
+            s.rail.focused = false;
+            s.subscribe_card = false;
+            push_screen(s, Screen::Channel);
+            reload(s, cmds);
+        }
+        // Another channel's page below (a raid was followed): this page replaces it.
+        (below, _) => {
+            if let Some(i) = below {
+                s.back_stack.remove(i);
             }
-            _ => {
-                let channel = page.channel.clone();
-                s.channel_page = Some(page);
-                cmds.push(Command::LoadChannelPage { channel });
+            open(s, page, cmds);
+        }
+    }
+}
+
+/// B on the channel page over a live stream: back to the Player. A stream that kept playing is
+/// just there again (the HUD shows briefly, and a raid that came meanwhile gets its card and
+/// countdown now). One parked for a video (`park_live`) loads again. The page is dropped unless it
+/// is also the one the stream was opened from, further down the stack. `false` if no live stream
+/// is behind the page.
+pub(super) fn back_to_live(s: &mut AppState, cmds: &mut Vec<Command>) -> bool {
+    if s.live_behind().is_none() {
+        return false;
+    }
+    s.subscribe_card = false;
+    pop_screen(s);
+    if !s.back_stack.contains(&Screen::Channel) {
+        s.channel_page = None;
+    }
+    match s.parked_live.take() {
+        Some(stream) => begin_stream(s, stream, cmds),
+        None => {
+            pulse_hud(s);
+            if let Some(offer) = s.raid.as_mut() {
+                offer.seconds_left = RAID_SECONDS;
+                cmds.push(Command::StartRaidCountdown {
+                    id: offer.id,
+                    seconds: RAID_SECONDS,
+                });
             }
         }
+    }
+    true
+}
+
+/// A video or clip is about to play over the page, and a video cannot share `now_playing` with a
+/// live stream: the stream behind the page stops (player, chat, raids, hype train) and is
+/// remembered, so B from the page can load it again. Nothing happens without a live stream
+/// playing behind the page.
+pub(super) fn park_live(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if !s.live_covered() {
         return;
     }
-    open(s, page, cmds);
+    let Some(stream) = s.now_playing.clone() else {
+        return;
+    };
+    stop_live(s, cmds);
+    s.parked_live = Some(stream);
 }
 
 /// Opens `channel`'s page over the current screen (a video's *Channel videos* with no page
@@ -203,7 +245,18 @@ pub(super) fn select(s: &mut AppState, cmds: &mut Vec<Command>) {
         return;
     };
     match tile {
-        Tile::Stream(stream) => open_player(s, stream, cmds),
+        Tile::Stream(stream) => match s.live_behind() {
+            // That stream is behind the page already: it is just B.
+            Some(behind) if behind.is_same(&stream.channel) => {
+                back_to_live(s, cmds);
+            }
+            // Another one (a raid was followed): the old stream ends.
+            Some(_) => {
+                drop_live_behind(s, cmds);
+                open_player(s, stream, cmds);
+            }
+            None => open_player(s, stream, cmds),
+        },
         Tile::Video(video) if video.sub_only => {
             s.subscribe_card = video.channel.features().subscribe;
         }

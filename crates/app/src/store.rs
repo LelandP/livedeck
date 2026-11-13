@@ -149,9 +149,10 @@ fn seek_timer(cmd: &Command) -> Option<(u64, htpc_core::Event)> {
 }
 
 /// True while a stream is on screen and starting or playing: the time to keep the screen on. In
-/// multiview, `playback` is the stream with sound's.
+/// multiview, `playback` is the stream with sound's. Also while the channel page covers a stream
+/// that still plays (it has sound).
 fn watching(state: &AppState) -> bool {
-    matches!(state.screen, Screen::Player | Screen::Multiview)
+    (matches!(state.screen, Screen::Player | Screen::Multiview) || state.live_covered())
         && matches!(
             state.playback,
             CorePlayback::Loading | CorePlayback::Playing

@@ -482,13 +482,29 @@ fn y_and_a_open_the_page_on_every_browse_screen_and_b_returns_there() {
     }
 }
 
-#[test]
-fn the_live_players_menu_opens_the_page_and_stops_the_stream() {
-    let (s, _) = reduce(&home(), Intent::Select);
+/// `fox` playing on the Player screen with the menu on its *Channel videos* row, opened from Home.
+fn menu_on_channel_videos(s: &AppState) -> AppState {
+    let (s, _) = reduce(s, Intent::Select);
     let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     let (s, _) = press(&s, &[Intent::Menu]);
     let (s, _) = press(&s, &[Intent::Down; 9]);
     assert_eq!(s.player_menu, Some(PlayerMenuRow::ChannelVideos));
+    s
+}
+
+/// The channel page of `fox`, opened from the player's menu over the stream (still playing),
+/// signed in or not, and loaded (a broadcast, a sub-only one and a clip of `sleepy`'s sort).
+fn page_over_the_stream(signed_in: bool) -> AppState {
+    let home = if signed_in { sign_in(&home()) } else { home() };
+    let s = menu_on_channel_videos(&home);
+    let (s, _) = reduce(&s, Intent::Select);
+    assert_eq!(s.screen, Screen::Channel);
+    reduce(&s, loaded("fox")).0
+}
+
+#[test]
+fn the_live_players_menu_opens_the_page_over_the_stream_which_keeps_playing() {
+    let s = menu_on_channel_videos(&home());
     // Left and Right do nothing on an action row.
     let (still, cmds) = press(&s, &[Intent::Left, Intent::Right]);
     assert_eq!(still.screen, Screen::Player);
@@ -496,22 +512,279 @@ fn the_live_players_menu_opens_the_page_and_stops_the_stream() {
 
     let (page, cmds) = reduce(&s, Intent::Select);
     assert_eq!(page.screen, Screen::Channel);
-    assert_eq!(page.back_stack, vec![Screen::Home]);
-    assert_eq!(page.now_playing, None);
-    assert_eq!(page.playback, Playback::Idle);
+    // The Player stays on the stack under the page.
+    assert_eq!(page.back_stack, vec![Screen::Home, Screen::Player]);
+    assert_eq!(page.now_playing.as_ref().unwrap().channel.login, "fox");
+    assert_eq!(page.playback, Playback::Playing);
     assert_eq!(page.player_menu, None);
-    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
-    assert!(cmds.contains(&Command::LeaveChat));
-    assert!(cmds.contains(&load_command(ChannelRef::twitch("fox"))));
+    // Only the page is asked for: the player, chat and the rest are left alone.
+    assert_eq!(cmds, vec![load_command(ChannelRef::twitch("fox"))]);
+    assert!(page.live_covered());
     assert!(
         page.channel_page.as_ref().unwrap().live.is_some(),
         "it was playing"
     );
+}
 
-    // B returns to the screen the stream was opened from.
-    let (back, _) = reduce(&page, Intent::Back);
-    assert_eq!(back.screen, Screen::Home);
+#[test]
+fn b_on_the_page_goes_straight_back_to_the_playing_stream_with_no_commands() {
+    let (s, _) = reduce(&home(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    // Chat shown, a pause, the stats box: all as they were.
+    let (s, _) = press(&s, &[Intent::ToggleChat, Intent::Select]);
+    assert!(s.chat_open && s.paused);
+    let (s, _) = press(&s, &[Intent::Menu]);
+    let (s, _) = press(&s, &[Intent::Down; 9]);
+    let (page, _) = reduce(&s, Intent::Select);
+    let page = reduce(&page, loaded("fox")).0;
+
+    let (back, cmds) = reduce(&page, Intent::Back);
+    assert!(cmds.is_empty(), "nothing reloads: {cmds:?}");
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(back.back_stack, vec![Screen::Home]);
     assert_eq!(back.channel_page, None);
+    assert_eq!(back.now_playing, page.now_playing);
+    assert_eq!(back.playback, Playback::Playing);
+    assert!(back.chat_open && back.paused, "the HUD state is as it was");
+    assert_ne!(back.hud_pulse, page.hud_pulse, "the HUD shows again");
+
+    // And B on the Player is the usual one: the stream stops, Home is back.
+    let (home, cmds) = reduce(&back, Intent::Back);
+    assert_eq!(home.screen, Screen::Home);
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+    assert!(cmds.contains(&Command::LeaveChat));
+}
+
+#[test]
+fn the_stream_behind_the_page_is_still_followed() {
+    let s = page_over_the_stream(false);
+    assert!(s.stream_on_screen());
+    // The player's own reports still count: the end of the stream is the offline screen.
+    let (s, cmds) = reduce(&s, Event::PlaybackEnded { slot: 0 });
+    assert_eq!(s.playback, Playback::Offline);
+    assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 1 }]);
+    assert_eq!(s.screen, Screen::Channel, "the page stays up");
+    // The quiet recheck runs behind the page, and finds the stream back.
+    let (s, cmds) = reduce(&s, Event::OfflineRecheckDue(1));
+    assert!(cmds.iter().any(|c| matches!(c, Command::Play { .. })));
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    assert_eq!(s.playback, Playback::Playing);
+    // A hype train for the channel shows when the Player is back.
+    let train = HypeTrain {
+        level: 2,
+        progress: 400,
+        goal: 1800,
+        seconds_left: 297,
+    };
+    let (s, _) = reduce(
+        &s,
+        Event::HypeTrain {
+            channel: "fox".into(),
+            train: Some(train),
+        },
+    );
+    assert_eq!(s.hype_train, Some(train));
+    let (back, cmds) = reduce(&s, Intent::Back);
+    assert!(cmds.is_empty());
+    assert_eq!(back.screen, Screen::Player);
+    assert!(back.hype_train.is_some());
+}
+
+#[test]
+fn a_stream_that_went_offline_behind_the_page_shows_the_offline_screen_on_return() {
+    let s = page_over_the_stream(false);
+    let (s, _) = reduce(&s, Event::PlaybackEnded { slot: 0 });
+    let (back, cmds) = reduce(&s, Intent::Back);
+    assert!(cmds.is_empty());
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(back.playback, Playback::Offline);
+    // A on it tries again, as on any offline stream.
+    let (_, cmds) = reduce(&back, Intent::Select);
+    assert!(cmds.iter().any(|c| matches!(c, Command::Play { .. })));
+}
+
+#[test]
+fn a_raid_behind_the_page_waits_and_its_card_counts_down_on_return() {
+    let s = page_over_the_stream(true);
+    let (s, cmds) = reduce(
+        &s,
+        Event::Raided {
+            from_login: "fox".into(),
+            to_login: "next_up".into(),
+            to_name: "Next Up".into(),
+            viewers: 50,
+        },
+    );
+    let id = s.raid.as_ref().expect("the offer is kept").id;
+    assert!(cmds.is_empty(), "no countdown behind the page: {cmds:?}");
+    assert_eq!(s.screen, Screen::Channel);
+    // The page takes its buttons as usual: A on the focused card does not follow the raid.
+    let (still, _) = press(&s, &[Intent::PageRight]);
+    assert!(still.raid.is_some());
+    assert_eq!(still.now_playing.as_ref().unwrap().channel.login, "fox");
+
+    let (back, cmds) = reduce(&s, Intent::Back);
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(cmds, vec![Command::StartRaidCountdown { id, seconds: 10 }]);
+    assert_eq!(back.raid.as_ref().unwrap().seconds_left, 10);
+    // From there it is the usual card: A follows.
+    let (followed, cmds) = reduce(&back, Intent::Select);
+    assert_eq!(followed.now_playing.unwrap().channel.login, "next_up");
+    assert!(cmds.iter().any(
+        |c| matches!(c, Command::Play { channel, .. } if *channel == ChannelRef::twitch("next_up"))
+    ));
+}
+
+#[test]
+fn the_slow_network_rule_and_the_background_pause_still_apply_behind_the_page() {
+    let s = page_over_the_stream(false);
+    let stall = Event::PlayerHealth {
+        slot: 0,
+        at_ms: 0,
+        health: Health {
+            stalled: true,
+            buffer_ms: 0,
+            pos_ms: None,
+            length_ms: None,
+        },
+    };
+    let (s, cmds) = reduce(&s, stall);
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::Play { .. })),
+        "the stream reloads lower: {cmds:?}"
+    );
+    assert!(s.net.is_limited());
+    // Switching to another app pauses it (no background play), coming back resumes it.
+    let (away, cmds) = reduce(&s, Event::WindowFocus(false));
+    assert!(away.paused);
+    assert_eq!(
+        cmds,
+        vec![Command::SetPaused {
+            slot: 0,
+            paused: true
+        }]
+    );
+    let (back, _) = reduce(&away, Event::WindowFocus(true));
+    assert!(!back.paused);
+}
+
+#[test]
+fn the_sleep_timer_ends_the_stream_behind_the_page_and_leaves_the_page() {
+    let mut s = page_over_the_stream(false);
+    s.sleep = Some(SleepTimer {
+        id: 4,
+        minutes: 15,
+        left_min: 0,
+        warning: false,
+    });
+    let (s, cmds) = reduce(&s, Event::SleepTimerFired { id: 4 });
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+    assert!(cmds.contains(&Command::LeaveChat));
+    assert!(cmds.contains(&Command::Suspend));
+    assert_eq!(s.now_playing, None);
+    // The page is still up, and B leaves it for where the stream was opened from.
+    assert_eq!(s.screen, Screen::Channel);
+    assert_eq!(s.back_stack, vec![Screen::Home]);
+    let (home, _) = reduce(&s, Intent::Back);
+    assert_eq!(home.screen, Screen::Home);
+}
+
+#[test]
+fn a_rail_entry_from_the_page_ends_the_stream_behind_it() {
+    let s = page_over_the_stream(false);
+    let (s, cmds) = reduce(&s, Intent::RailPick(RailEntry::Settings));
+    assert_eq!(s.screen, Screen::Settings);
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+    assert!(cmds.contains(&Command::LeaveChat));
+    assert_eq!(s.now_playing, None);
+    assert!(s.back_stack.is_empty());
+}
+
+#[test]
+fn a_video_from_the_page_stops_the_stream_and_b_twice_loads_it_again() {
+    let s = page_over_the_stream(true);
+    let (s, cmds) = reduce(&s, Intent::Select);
+    assert_eq!(s.screen, Screen::Player);
+    assert!(s.video.is_some());
+    assert_eq!(s.now_playing, None, "a video and a stream never share it");
+    assert_eq!(s.parked_live.as_ref().unwrap().channel.login, "fox");
+    assert_eq!(
+        s.back_stack,
+        vec![Screen::Home, Screen::Player, Screen::Channel]
+    );
+    // The stream stops, with its chat and raid watch, before the video starts.
+    let stopped = cmds
+        .iter()
+        .position(|c| *c == Command::StopPlayback { slot: 0 })
+        .expect("the stream stops");
+    let playing = cmds
+        .iter()
+        .position(|c| matches!(c, Command::PlayVideo { .. }))
+        .expect("the video plays");
+    assert!(stopped < playing, "{cmds:?}");
+    assert!(cmds.contains(&Command::LeaveChat));
+    assert!(cmds.contains(&Command::StopRaids));
+
+    // B from the video: the page, as usual, with the stream still parked.
+    let (page, _) = reduce(&s, Intent::Back);
+    assert_eq!(page.screen, Screen::Channel);
+    assert!(page.video.is_none());
+    assert_eq!(page.now_playing, None);
+    assert!(!page.live_covered());
+    // The Player entry below the page is still the stream's.
+    assert_eq!(page.back_stack, vec![Screen::Home, Screen::Player]);
+
+    // B from the page: the stream is loaded again (it cannot be instant).
+    let (live, cmds) = reduce(&page, Intent::Back);
+    assert_eq!(live.screen, Screen::Player);
+    assert_eq!(live.back_stack, vec![Screen::Home]);
+    assert_eq!(live.channel_page, None);
+    assert_eq!(live.parked_live, None);
+    assert_eq!(live.now_playing.as_ref().unwrap().channel.login, "fox");
+    assert_eq!(live.playback, Playback::Loading);
+    assert!(cmds.contains(&Command::JoinChat {
+        channel: ChannelRef::twitch("fox")
+    }));
+    assert!(cmds.iter().any(
+        |c| matches!(c, Command::Play { channel, .. } if *channel == ChannelRef::twitch("fox"))
+    ));
+
+    // From there B is the usual one.
+    let (home, cmds) = reduce(&live, Intent::Back);
+    assert_eq!(home.screen, Screen::Home);
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+}
+
+#[test]
+fn a_subscriber_only_video_leaves_the_stream_behind_the_page_playing() {
+    let s = page_over_the_stream(false);
+    let (s, _) = press(&s, &[Intent::Right]);
+    let (s, cmds) = reduce(&s, Intent::Select);
+    assert!(s.subscribe_card, "the card opens instead");
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert!(s.live_covered());
+    assert_eq!(s.parked_live, None);
+}
+
+#[test]
+fn a_on_the_live_card_of_the_stream_behind_the_page_is_just_b() {
+    let (s, _) = reduce(&home(), Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    let (s, _) = press(&s, &[Intent::Menu]);
+    let (s, _) = press(&s, &[Intent::Down; 9]);
+    let (s, _) = reduce(&s, Intent::Select);
+    let (s, _) = reduce(
+        &s,
+        Event::ChannelPageLoaded {
+            info: info("fox", Some(live("fox"))),
+            rows: vec![Row::new(RowKind::LiveNow, vec![Tile::Stream(live("fox"))])],
+        },
+    );
+    let (back, cmds) = reduce(&s, Intent::Select);
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(back.back_stack, vec![Screen::Home]);
+    assert_eq!(back.playback, Playback::Playing);
 }
 
 #[test]
@@ -803,14 +1076,33 @@ fn the_menu_row_from_a_stream_opened_on_the_page_returns_to_that_page() {
     let (s, _) = press(&s, &[Intent::Menu]);
     let (s, _) = press(&s, &[Intent::Down; 9]);
     let (s, cmds) = reduce(&s, Intent::Select);
-    // The page that was underneath is reused: no second one on the stack.
+    // The page that was underneath is reused (and reloaded): no second page, but it is pushed
+    // again so B goes back to the stream, which keeps playing.
     assert_eq!(s.screen, Screen::Channel);
-    assert_eq!(s.back_stack, vec![Screen::Home]);
-    assert_eq!(cmds.last(), Some(&load_command(ChannelRef::twitch("fox"))));
+    assert_eq!(
+        s.back_stack,
+        vec![Screen::Home, Screen::Channel, Screen::Player]
+    );
+    assert_eq!(cmds, vec![load_command(ChannelRef::twitch("fox"))]);
     assert_eq!(
         s.channel_page.as_ref().unwrap().channel,
         ChannelRef::twitch("fox")
     );
+    assert!(s.live_covered());
+
+    // B: the stream, with the page it was opened from still below it.
+    let (live, cmds) = reduce(&s, Intent::Back);
+    assert!(cmds.is_empty());
+    assert_eq!(live.screen, Screen::Player);
+    assert_eq!(live.back_stack, vec![Screen::Home, Screen::Channel]);
+    assert!(live.channel_page.is_some(), "the lower page is kept");
+    // B again stops the stream and shows that page, B once more leaves it.
+    let (page, cmds) = reduce(&live, Intent::Back);
+    assert_eq!(page.screen, Screen::Channel);
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+    let (home, _) = reduce(&page, Intent::Back);
+    assert_eq!(home.screen, Screen::Home);
+    assert_eq!(home.channel_page, None);
 }
 
 #[test]

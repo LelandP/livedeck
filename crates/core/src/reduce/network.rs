@@ -5,7 +5,7 @@
 use crate::msg::{Command, Slot, StreamKind, MAIN_SLOT};
 use crate::netlimit::{Change, Health, Tier};
 use crate::quality::Rendition;
-use crate::state::{AppState, Playback, Screen, ToastKind};
+use crate::state::{AppState, Playback, ToastKind};
 
 use super::{multiview, push_toast, reload_playback};
 
@@ -65,7 +65,7 @@ fn counts(s: &AppState, slot: Slot) -> bool {
         }),
         None => {
             slot == MAIN_SLOT
-                && s.screen == Screen::Player
+                && s.on_live_player()
                 && s.playback == Playback::Playing
                 && !s.paused
                 && !s.rechecking

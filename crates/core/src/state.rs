@@ -660,7 +660,8 @@ pub struct AppState {
     /// The open category, while the Category screen is on the back stack or on screen.
     pub category: Option<CategoryFeed>,
     /// The channel page, while the Channel screen is on screen or on the back stack under the
-    /// player (a video or the live stream opened from it).
+    /// player (a video or the live stream opened from it). Also while it covers the live player
+    /// (`live_covered`).
     pub channel_page: Option<ChannelPage>,
     /// *Continue watching*: the videos left part-way, newest first, at most 10 (vod-plan.md
     /// section 5). Nothing fills it until Phase 5, so it is empty: the channel page already reads
@@ -679,6 +680,10 @@ pub struct AppState {
     /// How the chat connection of the channel being watched is doing.
     pub chat_status: ChatStatus,
     pub now_playing: Option<Stream>,
+    /// The live stream that was stopped to play a video from the channel page opened over it
+    /// (`[…, Player, Channel, Player]`). B from the page reloads it. `now_playing` is `None`
+    /// meanwhile: a video and a live stream never share it.
+    pub parked_live: Option<Stream>,
     /// The stream on screen plays sound only (player menu). Unlike `session`, it belongs to this
     /// stream: every stream opens as video.
     pub audio_only: bool,
@@ -992,10 +997,36 @@ impl AppState {
         }
     }
 
-    /// The stream with sound (`now_playing`) is on screen: the Player screen, or multiview's grid.
-    /// Its chat, raids and hype trains are followed only then.
+    /// The stream with sound (`now_playing`) is on screen: the Player screen, multiview's grid, or
+    /// the channel page over a live stream that keeps playing (`live_covered`). Its chat, raids and
+    /// hype trains are followed only then.
     pub fn stream_on_screen(&self) -> bool {
-        matches!(self.screen, Screen::Player | Screen::Multiview)
+        matches!(self.screen, Screen::Player | Screen::Multiview) || self.live_covered()
+    }
+
+    /// The channel of the live stream the channel page sits over (`[…, Player, Channel]`): the one
+    /// still playing, or the one parked while a video plays.
+    pub fn live_behind(&self) -> Option<&ChannelRef> {
+        if self.screen != Screen::Channel || self.back_stack.last() != Some(&Screen::Player) {
+            return None;
+        }
+        self.now_playing
+            .as_ref()
+            .or(self.parked_live.as_ref())
+            .map(|s| &s.channel)
+    }
+
+    /// The channel page is open over a live stream that keeps playing (sound and all) behind it.
+    /// The picture is not drawn then (`htpc_ui::video_size` gives the page no video area), but
+    /// everything else of the single live player carries on: the player's events, the offline
+    /// recheck, the slow-network rule, chat, hype trains, and raids (held until the Player is back).
+    pub fn live_covered(&self) -> bool {
+        self.now_playing.is_some() && self.multiview.is_none() && self.live_behind().is_some()
+    }
+
+    /// The single live player is up: its screen, or the channel page over it.
+    pub fn on_live_player(&self) -> bool {
+        self.screen == Screen::Player || self.live_covered()
     }
 
     /// The feed of the current screen.

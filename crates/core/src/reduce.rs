@@ -281,7 +281,7 @@ fn refresh_visible_feed(s: &AppState, cmds: &mut Vec<Command>) {
 /// Shows Following as a root screen and refreshes it. Rows from an earlier visit stay on screen
 /// until the new ones arrive.
 fn open_following(s: &mut AppState, cmds: &mut Vec<Command>) {
-    s.back_stack.clear();
+    reset_stack(s, cmds);
     s.category = None;
     s.channel_page = None;
     s.subscribe_card = false;
@@ -701,9 +701,6 @@ fn raided(
     }
     s.last_raid_id = s.last_raid_id.wrapping_add(1);
     let id = s.last_raid_id;
-    s.player_menu = None;
-    s.subscribe_card = false;
-    s.popup = None;
     s.raid = Some(RaidOffer {
         id,
         from,
@@ -716,6 +713,15 @@ fn raided(
         viewers,
         seconds_left: RAID_SECONDS,
     });
+    // The channel page covers the stream: the offer waits with no countdown, and the card shows
+    // (and counts down) when the page is left (`channel::back_to_live`). The page's own subscribe
+    // card is not touched.
+    if s.live_covered() {
+        return;
+    }
+    s.player_menu = None;
+    s.subscribe_card = false;
+    s.popup = None;
     cmds.push(Command::StartRaidCountdown {
         id,
         seconds: RAID_SECONDS,
@@ -990,7 +996,7 @@ fn window_focus(s: &mut AppState, focused: bool, cmds: &mut Vec<Command>) {
         return;
     }
     if std::mem::take(&mut s.background_paused)
-        && s.screen == Screen::Player
+        && s.on_live_player()
         && s.multiview.is_none()
         && s.playback == Playback::Playing
         && s.paused
@@ -1011,7 +1017,7 @@ fn pause_in_background(s: &mut AppState, cmds: &mut Vec<Command>) {
     if s.in_background
         && !s.settings.background_play
         && s.multiview.is_none()
-        && s.screen == Screen::Player
+        && s.on_live_player()
         && s.playback == Playback::Playing
         && !s.paused
     {
@@ -1389,7 +1395,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         // screen, in the state that can produce them.
         Event::PlaybackStarted { .. } => {
             let rechecked = s.rechecking && s.playback == Playback::Offline;
-            if s.screen == Screen::Player && (s.playback == Playback::Loading || rechecked) {
+            if s.on_live_player() && (s.playback == Playback::Loading || rechecked) {
                 s.playback = Playback::Playing;
                 s.rechecking = false;
                 pulse_hud(s);
@@ -1397,17 +1403,17 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::PlaybackEnded { .. } => {
-            if s.screen == Screen::Player && s.playback == Playback::Playing {
+            if s.on_live_player() && s.playback == Playback::Playing {
                 go_offline(s, cmds);
             }
         }
         Event::PlaybackError { message, .. } => {
             let active = matches!(s.playback, Playback::Loading | Playback::Playing);
-            if s.screen == Screen::Player && active {
+            if s.on_live_player() && active {
                 s.playback = Playback::Failed(message);
                 s.paused = false;
                 s.background_paused = false;
-            } else if s.screen == Screen::Player {
+            } else if s.on_live_player() {
                 recheck_failed(s, cmds);
             }
         }
@@ -1423,7 +1429,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         }
         Event::OfflineRecheckDue(id) => {
             let due = id == s.offline_recheck && !s.rechecking;
-            let single = s.screen == Screen::Player && s.multiview.is_none();
+            let single = s.on_live_player() && s.multiview.is_none();
             if due && single && s.playback == Playback::Offline {
                 s.rechecking = true;
                 push_play(s, cmds);
@@ -1432,7 +1438,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         // Like the other player events, only trusted while a stream is on screen, and only while
         // the stats box is on (a report can still be on its way after it was turned off).
         Event::PlayerStats(stats) => {
-            if s.screen == Screen::Player && s.session.stats {
+            if s.on_live_player() && s.session.stats {
                 s.stats = Some(stats);
             }
         }
@@ -1613,6 +1619,9 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                     multiview::leave(s, cmds);
                 } else if s.screen == Screen::Player {
                     back(s, cmds);
+                } else if s.live_behind().is_some() {
+                    // The channel page is open over the stream: it stops, the page stays.
+                    drop_live_behind(s, cmds);
                 }
                 cmds.push(Command::Suspend);
             }
@@ -1879,6 +1888,14 @@ fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
 /// starts playback.
 fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.rail.focused = false;
+    s.parked_live = None;
+    push_screen(s, Screen::Player);
+    begin_stream(s, stream, cmds);
+}
+
+/// Starts `stream` on the Player screen, which is already the screen: chat, hype train, playback
+/// and raids. Also reloads the stream that was parked while a video played (`channel::back_to_live`).
+fn begin_stream(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.chat.clear();
     s.chat_status = ChatStatus::Connecting;
     reset_chat_room(s);
@@ -1890,7 +1907,6 @@ fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.now_playing = Some(stream);
     // Every stream opens as video.
     s.audio_only = false;
-    push_screen(s, Screen::Player);
     start_playback(s, cmds);
     watch_raids(s, cmds);
 }
@@ -1944,7 +1960,7 @@ fn activate_rail(s: &mut AppState, entry: RailEntry, cmds: &mut Vec<Command>) {
 /// Shows a root screen. Root screens reset the back stack and drop any open category. Search
 /// keeps its text and results from the last visit.
 fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
-    s.back_stack.clear();
+    reset_stack(s, cmds);
     s.category = None;
     s.channel_page = None;
     s.subscribe_card = false;
@@ -1960,18 +1976,13 @@ fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
 
 /// B / Escape on Player, Login or Category. Like the scaffold, it always closes chat.
 fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
+    // The channel page over a live stream: straight back to it.
+    if s.screen == Screen::Channel && channel::back_to_live(s, cmds) {
+        return;
+    }
     match s.screen {
         Screen::Player if s.video.is_some() => video::leave(s, cmds),
-        Screen::Player => {
-            cmds.push(Command::StopPlayback { slot: MAIN_SLOT });
-            if s.session.stats {
-                cmds.push(Command::SetStats {
-                    slot: MAIN_SLOT,
-                    on: false,
-                });
-            }
-            stop_watching(s, cmds);
-        }
+        Screen::Player => stop_live(s, cmds),
         Screen::Login => leave_login(s, cmds),
         Screen::Category => s.category = None,
         Screen::Channel => {
@@ -1982,6 +1993,43 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
     s.chat_open = false;
     pop_screen(s);
+}
+
+/// Stops the single player's live stream and forgets it (B on the Player screen).
+fn stop_live(s: &mut AppState, cmds: &mut Vec<Command>) {
+    cmds.push(Command::StopPlayback { slot: MAIN_SLOT });
+    if s.session.stats {
+        cmds.push(Command::SetStats {
+            slot: MAIN_SLOT,
+            on: false,
+        });
+    }
+    stop_watching(s, cmds);
+}
+
+/// The channel page is open over a live stream (playing, or parked while a video played) that is
+/// not wanted any more: stops it and takes its Player entry off the back stack, so the page's B
+/// goes to the screen the stream was opened from.
+fn drop_live_behind(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.now_playing.is_some() {
+        stop_live(s, cmds);
+    }
+    s.parked_live = None;
+    s.chat_open = false;
+    if s.back_stack.last() == Some(&Screen::Player) {
+        s.back_stack.pop();
+    }
+}
+
+/// A root screen was chosen: the back stack goes. A live stream that kept playing behind the
+/// channel page ends with it, and so does the one parked for a video.
+fn reset_stack(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.now_playing.is_some() && s.multiview.is_none() && s.back_stack.contains(&Screen::Player) {
+        stop_live(s, cmds);
+        s.chat_open = false;
+    }
+    s.parked_live = None;
+    s.back_stack.clear();
 }
 
 /// Forgets the stream on screen and everything that hangs off it (chat, raids, hype train, the
