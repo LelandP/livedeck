@@ -494,6 +494,12 @@ pub enum Event {
     },
     /// The answer to `LoadVideoDetails`.
     VideoDetails(VideoDetails),
+    /// Twitch says the video `id` does not exist (any more): the details lookup came back with no
+    /// video. A failed lookup is no answer at all. The video leaves *Continue watching*, and the
+    /// error screen says it is gone.
+    VideoGone {
+        id: String,
+    },
     /// The answer to `LoadChatReplay`: the window asked for, oldest line first. Dropped unless it
     /// is for the video on screen and the request still on its way (a jump since asks again).
     ChatReplay {

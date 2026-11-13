@@ -351,21 +351,56 @@ fn quitting_from_the_prompt_saves_first() {
 
 #[test]
 fn a_video_that_is_gone_leaves_the_list_and_stays_out_after_back() {
+    let gone = || Event::VideoGone { id: "1".into() };
+    let error = || Event::PlaybackError {
+        slot: MAIN_SLOT,
+        message: "This video could not be played.".into(),
+    };
     let s = page(vec![saved("1", 900), saved("2", 60)]);
+    let (s, _) = reduce(&s, Intent::Select);
+    // Twitch's answer and the player's error, in either order.
+    for events in [vec![gone(), error()], vec![error(), gone()]] {
+        let (failed, cmds) = events
+            .into_iter()
+            .fold((s.clone(), Vec::new()), |(s, mut all), e| {
+                let (next, cmds) = reduce(&s, e);
+                all.extend(cmds);
+                (next, all)
+            });
+        assert_eq!(ids(&failed.continue_watching), ["2"]);
+        assert_eq!(saves(&cmds).len(), 1);
+        assert_eq!(
+            failed.playback,
+            Playback::Failed(VIDEO_GONE_MESSAGE.into()),
+            "the screen says it is gone"
+        );
+        let (back, cmds) = reduce(&failed, Intent::Back);
+        assert_eq!(ids(&back.continue_watching), ["2"], "not saved again");
+        assert!(saves(&cmds).is_empty());
+    }
+}
+
+#[test]
+fn a_video_that_cannot_be_played_keeps_its_place_unless_twitch_says_it_is_gone() {
+    // Streamlink's "no playable streams" is not proof: it also comes for a restriction or a
+    // bad moment. The error shows and the saved place stays, also after B.
+    let s = page(vec![saved("1", 900)]);
     let (s, _) = reduce(&s, Intent::Select);
     let (failed, cmds) = reduce(
         &s,
         Event::PlaybackError {
             slot: MAIN_SLOT,
-            message: VIDEO_GONE_MESSAGE.into(),
+            message: "This video could not be played.".into(),
         },
     );
-    assert_eq!(ids(&failed.continue_watching), ["2"]);
-    assert_eq!(saves(&cmds).len(), 1);
-    assert!(matches!(failed.playback, Playback::Failed(_)));
-    let (back, cmds) = reduce(&failed, Intent::Back);
-    assert_eq!(ids(&back.continue_watching), ["2"], "not saved again");
+    assert_eq!(ids(&failed.continue_watching), ["1"]);
     assert!(saves(&cmds).is_empty());
+    let (back, _) = reduce(&failed, Intent::Back);
+    assert_eq!(ids(&back.continue_watching), ["1"]);
+    // Another video's answer changes nothing.
+    let (other, cmds) = reduce(&failed, Event::VideoGone { id: "2".into() });
+    assert_eq!(other, failed);
+    assert!(cmds.is_empty());
 }
 
 #[test]

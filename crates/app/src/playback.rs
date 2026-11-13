@@ -499,9 +499,10 @@ fn video_message(video: &VideoTarget, err: &ResolveError) -> String {
         VideoTarget::Clip(_) => "clip",
     };
     match err {
-        // The core drops a video that says this from *Continue watching*.
+        // Streamlink says this for a deleted video but for others too (a restriction, a bad
+        // moment): the saved place stays unless Twitch says the video is gone (`VideoGone`).
         ResolveError::Offline if matches!(video, VideoTarget::Video(_)) => {
-            htpc_core::VIDEO_GONE_MESSAGE.to_owned()
+            "This video could not be played.".to_owned()
         }
         ResolveError::Offline => format!("This {what} is no longer available."),
         ResolveError::NotFound => format!("That {what} could not be found."),
@@ -1117,7 +1118,7 @@ mod tests {
             events,
             [Event::PlaybackError {
                 slot: MAIN_SLOT,
-                message: "This video is no longer available.".into()
+                message: "This video could not be played.".into()
             }]
         );
         assert!(player.calls().is_empty());

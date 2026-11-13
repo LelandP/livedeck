@@ -877,7 +877,7 @@ impl<A: TwitchApi> ApiProvider<A> {
     }
 
     /// A video's chapters, muted parts and seek previews. A failure is only logged: the player
-    /// does without them.
+    /// does without them. No such video is `VideoGone`.
     async fn video_details(&self, id: &str) -> Option<Event> {
         match self.api.video_details(id).await {
             Ok(Some(d)) => Some(Event::VideoDetails(VideoDetails {
@@ -897,7 +897,7 @@ impl<A: TwitchApi> ApiProvider<A> {
             })),
             Ok(None) => {
                 tracing::debug!(id, "no such video");
-                None
+                Some(Event::VideoGone { id: id.to_owned() })
             }
             Err(err) => {
                 tracing::debug!(id, %err, "could not load the video's details");
@@ -2631,7 +2631,11 @@ mod tests {
             }]
         );
 
-        assert!(details("1").await.is_empty(), "no such video: no event");
+        assert_eq!(
+            details("1").await,
+            [Event::VideoGone { id: "1".into() }],
+            "Twitch has no such video"
+        );
     }
 
     #[tokio::test]

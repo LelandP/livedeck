@@ -819,19 +819,21 @@ pub(super) fn ended(s: &mut AppState, slot: u8, cmds: &mut Vec<Command>) {
 
 /// The player could not play the video (`Event::PlaybackError`): a video that was deleted, a
 /// failed resolve, a failed load. The error screen offers A to try again from where it was, and B.
-pub(super) fn failed(s: &mut AppState, slot: u8, message: String, cmds: &mut Vec<Command>) {
+pub(super) fn failed(s: &mut AppState, slot: u8, message: String) {
     if slot != MAIN_SLOT || s.screen != Screen::Player {
         return;
     }
     if !matches!(s.playback, Playback::Loading | Playback::Playing) {
         return;
     }
-    // A video that is gone has nothing to continue.
-    if message == VIDEO_GONE_MESSAGE {
-        continue_watching::finished(s, cmds);
-    }
     let Some(v) = s.video.as_mut() else {
         return;
+    };
+    // A video Twitch said is gone (its details came back empty): that is what the screen says.
+    let message = if v.gone {
+        VIDEO_GONE_MESSAGE.to_owned()
+    } else {
+        message
     };
     if let Some(run) = v.seeking.run() {
         v.pos_ms = v.clamp(run.raw_target());
@@ -888,6 +890,23 @@ pub(super) fn health(s: &mut AppState, slot: u8, health: Health, cmds: &mut Vec<
     }
     // The chat replay follows the playhead: lines come due, the next window is asked for.
     replay::tick(s, cmds);
+}
+
+/// `Event::VideoGone`: Twitch has no such video. It has no place to keep, so it leaves *Continue
+/// watching* (and `save_leaving` keeps it out), and an error screen already up says it is gone.
+pub(super) fn gone(s: &mut AppState, id: &str, cmds: &mut Vec<Command>) {
+    let Some(v) = s
+        .video
+        .as_mut()
+        .filter(|v| v.item.video_id() == Some(id) && !v.gone)
+    else {
+        return;
+    };
+    v.gone = true;
+    continue_watching::forget(s, id, cmds);
+    if let Playback::Failed(message) = &mut s.playback {
+        *message = VIDEO_GONE_MESSAGE.to_owned();
+    }
 }
 
 /// `Event::VideoDetails`: the chapters, muted parts and seek previews of the video on screen.

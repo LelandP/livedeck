@@ -6,7 +6,7 @@
 //!   timer, the window closing). Another video can only start from the page or Home, never over a
 //!   playing one. Clips are never saved.
 //! - It is dropped when it plays to its end or is left within `CONTINUE_END_MARGIN_S` of it, and
-//!   when it fails with `VIDEO_GONE_MESSAGE`.
+//!   when Twitch says it no longer exists (`Event::VideoGone`).
 //! - Home shows the list as a row after Followed (`RowKind::ContinueWatching`): A resumes, X removes.
 //!   `sync_home` keeps the row true to the list as it changes, so it needs no Home reload.
 
@@ -57,7 +57,7 @@ fn set(s: &mut AppState, list: Vec<Progress>, cmds: &mut Vec<Command>) {
 }
 
 /// The video on screen is being left: its place goes into the list, or out of it. Call before the
-/// session is dropped. A clip, and a video that failed because it is gone, change nothing.
+/// session is dropped. A clip, and a video Twitch says is gone, change nothing.
 pub(super) fn save_leaving(s: &mut AppState, cmds: &mut Vec<Command>) {
     let Some(v) = s.video.as_ref() else {
         return;
@@ -65,8 +65,7 @@ pub(super) fn save_leaving(s: &mut AppState, cmds: &mut Vec<Command>) {
     let VideoItem::Video(card) = &v.item else {
         return;
     };
-    if matches!(&s.playback, crate::state::Playback::Failed(m) if m == crate::video::VIDEO_GONE_MESSAGE)
-    {
+    if v.gone {
         return;
     }
     let mut video = card.clone();

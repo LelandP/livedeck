@@ -87,8 +87,8 @@ pub const CONTINUE_END_MARGIN_S: u32 = 120;
 /// A video left before this many seconds in has no place worth keeping: the list stays as it was.
 pub const CONTINUE_MIN_S: u32 = 10;
 
-/// What the error screen says for a video that no longer exists. The video leaves *Continue
-/// watching* on it (the app's `video_message` in `playback.rs` uses it).
+/// What the error screen says for a video that Twitch confirmed no longer exists
+/// (`Event::VideoGone`). The video leaves *Continue watching* then, and only then.
 pub const VIDEO_GONE_MESSAGE: &str = "This video is no longer available.";
 
 /// A saved place in a video: one entry of *Continue watching* (vod-plan.md section 5), kept in
@@ -254,6 +254,8 @@ pub struct VideoSession {
     /// press, dropped when its window ends (`seek::SCRUB_CARRY_MS`).
     pub carry: Option<crate::seek::Carry>,
     pub load: VideoLoad,
+    /// Twitch said the video does not exist (`Event::VideoGone`): it has no place to keep.
+    pub gone: bool,
     /// Where the load that is `Reloading` was asked to start. The old player plays on while it
     /// loads, so the new one starts behind `pos_ms` and catches up when it takes over.
     pub reload_from_ms: u64,
@@ -288,6 +290,7 @@ impl VideoSession {
             timer: 0,
             carry: None,
             load: VideoLoad::Starting,
+            gone: false,
             reload_from_ms: 0,
             landing: None,
             end_card: None,

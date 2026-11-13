@@ -1351,7 +1351,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::PlaybackStarted { slot } if s.video.is_some() => video::started(s, slot, cmds),
         Event::PlaybackEnded { slot } if s.video.is_some() => video::ended(s, slot, cmds),
         Event::PlaybackError { slot, message } if s.video.is_some() => {
-            video::failed(s, slot, message, cmds);
+            video::failed(s, slot, message);
         }
         Event::QualitySettleDue(id) => multiview::settle_due(s, id, cmds),
         Event::SeekSettleDue(id) => video::settle_due(s, id, cmds),
@@ -1590,6 +1590,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::ChannelPageLoaded { info, rows } => channel::loaded(s, *info, rows, cmds),
         Event::ChannelPageFailed { channel, message } => channel::failed(s, &channel, message),
         Event::VideoDetails(details) => video::details(s, details),
+        Event::VideoGone { id } => video::gone(s, &id, cmds),
         Event::ChatReplay {
             id,
             offset_s,
