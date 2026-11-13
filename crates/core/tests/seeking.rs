@@ -357,15 +357,16 @@ fn taps_and_holds_as_scripted() {
         },
         Case {
             // Held from 0: a hold at 400 (its first step at once), steps every 100 ms. Let go at
-            // 1400, after the step due then: 11 steps of 1 s (ticks 0-9 and the hold's), the
-            // 11th at 2 s. The jump comes 300 ms after the release.
-            name: "a hold scrubs, speeding up after a second, and jumps on release",
+            // 1400, after the step due then: 11 steps, 8 of 1 s (ticks 0-7), then 3 of 2 s. The
+            // jump comes 300 ms after the release. (Doubling every second, before 2026-11-13,
+            // this was +12 s.)
+            name: "a hold scrubs, speeding up after 0.8 s, and jumps on release",
             start_ms: AT,
             script: &[(0, Act::Press(Right)), (1_400, Act::Release(Right))],
             until: 3_000,
-            seeks: &[(1_400 + S, AT + 12_000)],
+            seeks: &[(1_400 + S, AT + 14_000)],
             pauses: &[(400, true), (1_400 + S, false)],
-            pos_ms: AT + 12_000,
+            pos_ms: AT + 14_000,
         },
         Case {
             name: "a short hold back",
@@ -462,6 +463,158 @@ fn taps_and_holds_as_scripted() {
 }
 
 #[test]
+fn a_new_hold_soon_after_a_scrub_picks_up_near_its_speed() {
+    const S: u64 = SEEK_SETTLE_MS;
+    // Every case starts with Right held from 0 to 2000: a hold at 400, then steps at 400 ...
+    // 2000, 17 of them (ticks 0-16): 8 of 1 s, 8 of 2 s, 1 of 4 s, so +28 s, sent at 2300. Its
+    // last step was 4 s, so a carried scrub starts on the 2 s steps (tick 8).
+    const FIRST: (u64, u64) = (2_000 + S, AT + 28_000);
+    assert_eq!(seek::SCRUB_CARRY_MS, 1_500);
+    assert_eq!(seek::SCRUB_CARRY_PERCENT, 50);
+    let cases = [
+        Case {
+            // 1 s after letting go: the hold at 3400 steps 2 s at 3400, 3500, 3600.
+            name: "the same way within 1.5 s carries on near half the speed",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::Release(Right)),
+                (3_000, Act::Press(Right)),
+                (3_600, Act::Release(Right)),
+            ],
+            until: 6_000,
+            seeks: &[FIRST, (3_600 + S, AT + 34_000)],
+            pauses: &[(400, true), (2_300, false), (3_400, true), (3_900, false)],
+            pos_ms: AT + 34_000,
+        },
+        Case {
+            // Pressed again during the release's wait: the scrub goes on, from the 2 s steps
+            // (2100, 2200, 2300).
+            name: "the same way within the release's wait carries on near half the speed",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::Release(Right)),
+                (2_100, Act::Press(Right)),
+                (2_300, Act::Release(Right)),
+            ],
+            until: 6_000,
+            seeks: &[(2_300 + S, AT + 34_000)],
+            pauses: &[(400, true), (2_600, false)],
+            pos_ms: AT + 34_000,
+        },
+        Case {
+            // 1.6 s after letting go: the window closed at 3500. 1 s steps at 4000 ... 4200.
+            name: "the same way after 1.5 s starts slowly",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::Release(Right)),
+                (3_600, Act::Press(Right)),
+                (4_200, Act::Release(Right)),
+            ],
+            until: 6_000,
+            seeks: &[FIRST, (4_200 + S, AT + 31_000)],
+            pauses: &[(400, true), (2_300, false), (4_000, true), (4_500, false)],
+            pos_ms: AT + 31_000,
+        },
+        Case {
+            name: "the other way starts slowly",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::Release(Right)),
+                (3_000, Act::Press(Left)),
+                (3_600, Act::Release(Left)),
+            ],
+            until: 6_000,
+            seeks: &[FIRST, (3_600 + S, AT + 25_000)],
+            pauses: &[(400, true), (2_300, false), (3_400, true), (3_900, false)],
+            pos_ms: AT + 25_000,
+        },
+        Case {
+            // B during the release's wait cancels the scrub: nothing to carry on.
+            name: "after B cancelled the scrub, the same way starts slowly",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::Release(Right)),
+                (2_100, Act::B),
+                (2_500, Act::Press(Right)),
+                (3_100, Act::Release(Right)),
+            ],
+            until: 6_000,
+            seeks: &[(3_100 + S, AT + 3_000)],
+            pauses: &[(400, true), (2_100, false), (2_900, true), (3_400, false)],
+            pos_ms: AT + 3_000,
+        },
+        Case {
+            name: "after B while held, the same way starts slowly",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::B),
+                (2_050, Act::Release(Right)),
+                (2_500, Act::Press(Right)),
+                (3_100, Act::Release(Right)),
+            ],
+            until: 6_000,
+            seeks: &[(3_100 + S, AT + 3_000)],
+            pauses: &[(400, true), (2_000, false), (2_900, true), (3_400, false)],
+            pos_ms: AT + 3_000,
+        },
+        Case {
+            // A tap at 3000 (+10 s, sent at 3350), then a hold in its run: from the slowest.
+            name: "a tap in between starts the next hold slowly",
+            start_ms: AT,
+            script: &[
+                (0, Act::Press(Right)),
+                (2_000, Act::Release(Right)),
+                (3_000, Act::Press(Right)),
+                (3_050, Act::Release(Right)),
+                (3_500, Act::Press(Right)),
+                (4_100, Act::Release(Right)),
+            ],
+            until: 6_000,
+            seeks: &[FIRST, (3_050 + S, AT + 38_000), (4_100 + S, AT + 41_000)],
+            pauses: &[(400, true), (2_300, false), (3_900, true), (4_400, false)],
+            pos_ms: AT + 41_000,
+        },
+    ];
+    for case in &cases {
+        play(case);
+    }
+}
+
+#[test]
+fn a_carried_scrub_still_keeps_to_the_cap() {
+    // 18 hours: the cap is 1%, 648 s a step.
+    const CAP: u64 = 648_000;
+    let mut sim = Sim::new(playing(18 * 3_600, 0));
+    // Held 8.5 s: at the cap since 8 s in.
+    sim.press(0, Right).release(8_900, Right);
+    sim.run_until(9_500);
+    assert!(sim.video().seeking.is_idle());
+    // Again 600 ms after letting go: from 256 s a step (the fastest doubling at or under half
+    // the cap), then 512 s, then the cap, never more.
+    sim.press(9_500, Right);
+    let mut at = sim.video().pos_ms;
+    let mut steps = Vec::new();
+    for t in (9_900..=12_900).step_by(100) {
+        sim.run_until(t);
+        let Seeking::Scrub(scrub) = sim.video().seeking else {
+            panic!("not scrubbing at {t}");
+        };
+        steps.push(scrub.at_ms - at);
+        at = scrub.at_ms;
+    }
+    assert_eq!(steps[0], 256_000);
+    assert_eq!(steps[8], 512_000);
+    assert!(steps.iter().all(|step| *step <= CAP), "{steps:?}");
+    assert_eq!(steps.last(), Some(&CAP));
+}
+
+#[test]
 fn the_chip_counts_while_the_run_lasts_and_goes_after_600_ms() {
     let mut sim = Sim::new(playing(15_128, AT));
     sim.press(0, Right).release(60, Right);
@@ -498,8 +651,8 @@ fn a_hold_on_a_paused_video_leaves_it_paused() {
 }
 
 #[test]
-fn the_scrub_ramp_doubles_every_second_and_caps_at_one_percent() {
-    // 18 hours: held for 15 s, the steps grow to 1% (648 s) after 10 s and stay there.
+fn the_scrub_ramp_doubles_every_0_8_seconds_and_caps_at_one_percent() {
+    // 18 hours: held for 15 s, the steps grow to 1% (648 s) after 8 s and stay there.
     let mut sim = Sim::new(playing(18 * 3_600, 0));
     sim.press(0, Right);
     sim.run_until(HOLD_AFTER_MS + 15_000);

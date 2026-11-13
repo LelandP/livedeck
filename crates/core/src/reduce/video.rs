@@ -396,6 +396,8 @@ fn press(s: &mut AppState, dir: Dir, cmds: &mut Vec<Command>) {
     let Some(v) = s.video.as_mut() else {
         return;
     };
+    // Any press ends the carry-over window: only this one can use it.
+    let carry = v.carry.take();
     match v.seeking {
         Seeking::Scrub(mut scrub) => {
             // The same direction still held: its release was lost, the scrub carries on.
@@ -403,10 +405,15 @@ fn press(s: &mut AppState, dir: Dir, cmds: &mut Vec<Command>) {
                 return;
             }
             // The other direction reverses, slowly again. The same one again shortly after a
-            // release (a rocker D-pad passing through the middle) carries on.
+            // release (a rocker D-pad passing through the middle) carries on near the speed it
+            // had, as a new hold soon after would.
+            scrub.ticks = if scrub.dir == dir {
+                seek::carried_ticks(scrub.ticks, v.length_ms)
+            } else {
+                0
+            };
             scrub.dir = dir;
             scrub.held = true;
-            scrub.ticks = 0;
             scrub.step(v.length_ms, v.end_ms());
             v.seeking = Seeking::Scrub(scrub);
             let id = arm(s);
@@ -417,12 +424,13 @@ fn press(s: &mut AppState, dir: Dir, cmds: &mut Vec<Command>) {
             v.seeking = Seeking::Pressed {
                 dir,
                 run: TapRun::new(v.pos_ms, dir),
+                carry: carry.filter(|c| c.dir == dir).map_or(0, |c| c.ticks),
             };
         }
         // Another tap of a run (or a press whose release was lost, which counts as a tap).
         Seeking::Pressed { mut run, .. } | Seeking::Taps { mut run, .. } => {
             run.tap(dir);
-            v.seeking = Seeking::Pressed { dir, run };
+            v.seeking = Seeking::Pressed { dir, run, carry: 0 };
         }
     }
     let id = arm(s);
@@ -440,7 +448,7 @@ pub(super) fn released(s: &mut AppState, dir: Dir, cmds: &mut Vec<Command>) {
         return;
     };
     match v.seeking {
-        Seeking::Pressed { dir: down, run } if down == dir => {
+        Seeking::Pressed { dir: down, run, .. } if down == dir => {
             v.seeking = Seeking::Taps {
                 run,
                 settled: false,
@@ -482,7 +490,12 @@ pub(super) fn hold_due(s: &mut AppState, id: u32, cmds: &mut Vec<Command>) {
     let Some(v) = s.video.as_mut().filter(|v| v.timer == id) else {
         return;
     };
-    let Seeking::Pressed { dir, mut run } = v.seeking else {
+    let Seeking::Pressed {
+        dir,
+        mut run,
+        carry,
+    } = v.seeking
+    else {
         return;
     };
     if !free || v.load == VideoLoad::Starting || v.end_card.is_some() {
@@ -496,7 +509,8 @@ pub(super) fn hold_due(s: &mut AppState, id: u32, cmds: &mut Vec<Command>) {
         held: true,
         from_ms: from,
         at_ms: from,
-        ticks: 0,
+        // Soon after a scrub the same way, near the speed it had.
+        ticks: carry,
         total_ticks: 0,
     };
     // The first step at once, so the hold shows.
@@ -536,6 +550,13 @@ pub(super) fn scrub_tick(s: &mut AppState, id: u32, cmds: &mut Vec<Command>) {
 /// `Event::SeekSettleDue`: the taps' seek goes out, and later the run ends (another tap can
 /// still add to it until then). A released scrub jumps.
 pub(super) fn settle_due(s: &mut AppState, id: u32, cmds: &mut Vec<Command>) {
+    // The end of a carry-over window has its own id.
+    if let Some(v) = s.video.as_mut() {
+        if v.carry.is_some_and(|c| c.id == id) {
+            v.carry = None;
+            return;
+        }
+    }
     let Some(v) = s.video.as_mut().filter(|v| v.timer == id) else {
         return;
     };
@@ -577,12 +598,36 @@ fn finish_scrub(s: &mut AppState, cmds: &mut Vec<Command>) {
         return;
     };
     v.seeking = Seeking::Idle;
+    let carried = seek::carried_ticks(scrub.ticks, v.length_ms);
     disarm(s);
+    // Let go (not A while held, nor the 30 s guard): a hold the same way soon after picks up
+    // near this speed. The window counts from the release, `SEEK_SETTLE_MS` ago.
+    if !scrub.held && carried > 0 {
+        let id = arm_carry(s);
+        if let Some(v) = s.video.as_mut() {
+            v.carry = Some(seek::Carry {
+                dir: scrub.dir,
+                ticks: carried,
+                id,
+            });
+        }
+        cmds.push(Command::SettleSeek {
+            id,
+            ms: seek::SCRUB_CARRY_MS.saturating_sub(seek::SEEK_SETTLE_MS),
+        });
+    }
     if scrub.at_ms != scrub.from_ms {
         seek_to(s, scrub.at_ms, cmds);
     }
     release_picture(s, cmds);
     pulse_hud(s);
+}
+
+/// A new id for the end of a carry-over window, from the seek timers' count, without making it
+/// the latest seek timer: the timers of the next press must not cancel it.
+fn arm_carry(s: &mut AppState) -> u32 {
+    s.last_seek_id = s.last_seek_id.wrapping_add(1);
+    s.last_seek_id
 }
 
 /// B while scrubbing: back to where it started, as if nothing happened.

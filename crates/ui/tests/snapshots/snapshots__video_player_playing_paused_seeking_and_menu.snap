@@ -35,13 +35,13 @@ screen=Player playback=Playing paused=false select="Pause" retry=false hints_men
 -- held: scrubbing forward, a few steps in
 screen=Player playback=Playing paused=false select="Jump here" retry=false hints_menu=false
   top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
-  bar: 1:12:56 / "4:12:08" head=2892 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  bar: 1:12:58 / "4:12:08" head=2893 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
   seek: chip="" side=0 seeking=true scrubbing=true speed="" chapters=true end_card=false end_focus=0
   stream card: "Sleepy Fox" "No-hit run attempts, night 12"
 -- let go: the jump
 screen=Player playback=Playing paused=false select="Pause" retry=false hints_menu=false
   top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
-  bar: 1:12:56 / "4:12:08" head=2892 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
+  bar: 1:12:58 / "4:12:08" head=2893 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
   seek: chip="" side=0 seeking=false scrubbing=false speed="" chapters=true end_card=false end_focus=0
   stream card: "Sleepy Fox" "No-hit run attempts, night 12"
 -- in a muted part

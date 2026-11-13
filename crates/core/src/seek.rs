@@ -7,7 +7,7 @@
 //!   plays on meanwhile.
 //! - **Hold:** a press still down after [`HOLD_AFTER_MS`] scrubs. The video pauses on its frame and
 //!   only the playhead moves, [`SCRUB_TICK_MS`] apart: [`SCRUB_FIRST_STEP_MS`] of video per tick
-//!   at first, doubling every [`SCRUB_DOUBLING_TICKS`] ticks, never more than
+//!   at first, doubling every [`SCRUB_DOUBLING_TICKS`] ticks (0.8 s), never more than
 //!   [`SCRUB_CAP_PER_MILLE`] thousandths of the video's length per tick.
 //! - **Release:** the video jumps to the playhead [`SEEK_SETTLE_MS`] later, and plays again unless
 //!   it was paused before. The wait lets a rocker D-pad, which passes through neither direction,
@@ -15,9 +15,14 @@
 //! - **While scrubbing:** the other direction reverses (the speed-up starts over), B cancels back
 //!   to where it started, and A jumps at once. A scrub ends by itself after
 //!   [`SCRUB_MAX_TICKS`] ticks held, in case a release was lost.
+//! - **Again:** a press of the same direction within [`SCRUB_CARRY_MS`] of letting go of a scrub
+//!   that jumped starts its hold at about [`SCRUB_CARRY_PERCENT`]% of the speed that scrub
+//!   reached ([`carried_ticks`]), and speeds up from there. The other direction, a scrub B
+//!   cancelled, a tap in between or a longer gap start from the slowest step.
 //!
 //! The reducer has no clock: the waits are timer commands with ids (`Command::SettleSeek`,
-//! `HoldCheck`, `ScrubTick`), and only the latest id counts.
+//! `HoldCheck`, `ScrubTick`), and only the latest id counts. The end of the carry-over window
+//! is a `SettleSeek` with its own id ([`Carry::id`]), so the other timers do not stop it.
 
 use crate::msg::Dir;
 
@@ -34,8 +39,16 @@ pub const HOLD_AFTER_MS: u64 = 400;
 pub const SCRUB_TICK_MS: u64 = 100;
 /// The first scrub steps move this much video each.
 pub const SCRUB_FIRST_STEP_MS: u64 = 1_000;
-/// The step doubles after this many ticks (a second).
-pub const SCRUB_DOUBLING_TICKS: u32 = 10;
+/// The step doubles after this many ticks (0.8 s). Was 10 (a second) until 2026-11-13, which felt
+/// about 20% too slow on a TV: 8 reaches each speed 25% sooner. The cap is unchanged.
+pub const SCRUB_DOUBLING_TICKS: u32 = 8;
+/// A new hold of the same direction within this long of letting go of a scrub (counted from the
+/// release to the press) picks up near the speed that scrub had. For tuning on a TV.
+pub const SCRUB_CARRY_MS: u64 = 1_500;
+/// How much of that speed it picks up, in percent: the new scrub starts at the fastest step of
+/// the ramp at or under this share of the last step, and speeds up from there. For tuning on a
+/// TV.
+pub const SCRUB_CARRY_PERCENT: u64 = 50;
 /// The largest step, in thousandths of the video's length: 1%. On an 18 h broadcast about 11 min
 /// a tick, on a 10 min highlight 6 s.
 pub const SCRUB_CAP_PER_MILLE: u64 = 10;
@@ -81,6 +94,24 @@ pub fn scrub_step(tick: u32, length_ms: u64) -> u64 {
         return step;
     }
     step.min((length_ms * SCRUB_CAP_PER_MILLE / 1_000).max(1))
+}
+
+/// Where the ramp of a new scrub starts (its first `Scrub::ticks`) when it carries on from one
+/// that was `ticks` into its ramp: the start of the fastest doubling whose step is at most
+/// [`SCRUB_CARRY_PERCENT`] of the last step taken. 0, the slowest, when even the first step is
+/// faster than that. The cap still holds, as every step goes through [`scrub_step`].
+pub fn carried_ticks(ticks: u32, length_ms: u64) -> u32 {
+    let Some(last) = ticks.checked_sub(1) else {
+        return 0;
+    };
+    let target = scrub_step(last, length_ms).saturating_mul(SCRUB_CARRY_PERCENT) / 100;
+    let mut start = 0;
+    let mut tick = 0;
+    while tick <= last && scrub_step(tick, length_ms) <= target {
+        start = tick;
+        tick += SCRUB_DOUBLING_TICKS;
+    }
+    start
 }
 
 /// Which way, as a signed step.
@@ -165,14 +196,26 @@ impl Scrub {
     }
 }
 
+/// A scrub that was let go and jumped, for [`SCRUB_CARRY_MS`]: a hold of the same direction
+/// soon after picks up near its speed (`VideoSession::carry`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Carry {
+    pub dir: Dir,
+    /// Where the next scrub's ramp starts ([`carried_ticks`]).
+    pub ticks: u32,
+    /// The id of the `SettleSeek` that ends the window.
+    pub id: u32,
+}
+
 /// Where ◀ ▶ are in a video.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Seeking {
     #[default]
     Idle,
     /// ◀ or ▶ is down, and may turn out to be a hold (`Command::HoldCheck` is running). Its tap
-    /// is already in `run`.
-    Pressed { dir: Dir, run: TapRun },
+    /// is already in `run`. `carry` is where the scrub's ramp starts if it is a hold: above 0
+    /// when it came soon after a scrub the same way ([`Carry`]).
+    Pressed { dir: Dir, run: TapRun, carry: u32 },
     /// Let go: the run waits for more taps. Not `settled`: the seek goes out at the next
     /// `SeekSettleDue`. `settled`: it went out, and the run ends at the next one.
     Taps { run: TapRun, settled: bool },
@@ -208,25 +251,46 @@ mod tests {
     const HOUR: u64 = 3_600_000;
 
     #[test]
-    fn the_scrub_speeds_up_every_second_up_to_one_percent() {
-        // 18 h: 1 s, 2 s, 4 s ... until 1% (648 s) caps it.
+    fn the_scrub_speeds_up_every_0_8_seconds_up_to_one_percent() {
+        // 18 h: 1 s, 2 s, 4 s ... until 1% (648 s) caps it, 8 s in (10 s before 2026-11-13).
         let long = 18 * HOUR;
         assert_eq!(scrub_step(0, long), 1_000);
-        assert_eq!(scrub_step(9, long), 1_000);
-        assert_eq!(scrub_step(10, long), 2_000);
-        assert_eq!(scrub_step(20, long), 4_000);
-        assert_eq!(scrub_step(90, long), 512_000);
-        assert_eq!(scrub_step(100, long), 648_000, "about 11 minutes a tick");
+        assert_eq!(scrub_step(7, long), 1_000);
+        assert_eq!(scrub_step(8, long), 2_000);
+        assert_eq!(scrub_step(16, long), 4_000);
+        assert_eq!(scrub_step(72, long), 512_000);
+        assert_eq!(scrub_step(79, long), 512_000);
+        assert_eq!(scrub_step(80, long), 648_000, "about 11 minutes a tick");
         assert_eq!(scrub_step(10_000, long), 648_000, "and never more");
         // A 10 min highlight never passes 6 s a tick.
         let short = 600_000;
-        assert_eq!(scrub_step(20, short), 4_000);
-        assert_eq!(scrub_step(30, short), 6_000);
+        assert_eq!(scrub_step(16, short), 4_000);
+        assert_eq!(scrub_step(24, short), 6_000);
         assert_eq!(scrub_step(300, short), 6_000);
         // A 30 s clip: 0.3 s from the first tick.
         assert_eq!(scrub_step(0, 30_000), 300);
         // Unknown length: no cap.
-        assert_eq!(scrub_step(30, 0), 8_000);
+        assert_eq!(scrub_step(24, 0), 8_000);
+    }
+
+    #[test]
+    fn a_carried_scrub_starts_near_half_the_speed_it_had() {
+        let long = 18 * HOUR;
+        // Not into the ramp, or still at the first steps: from the slowest.
+        assert_eq!(carried_ticks(0, long), 0);
+        assert_eq!(carried_ticks(8, long), 0);
+        // Last step 2 s: back to the 1 s steps, which is the start anyway.
+        assert_eq!(carried_ticks(9, long), 0);
+        // Last step 4 s: from the start of the 2 s steps.
+        assert_eq!(carried_ticks(17, long), 8);
+        assert_eq!(scrub_step(carried_ticks(17, long), long), 2_000);
+        // Capped at 648 s: the fastest doubling at or under 324 s is 256 s.
+        assert_eq!(carried_ticks(150, long), 64);
+        assert_eq!(scrub_step(64, long), 256_000);
+        // A 10 min highlight capped at 6 s: from the 2 s steps.
+        assert_eq!(carried_ticks(100, 600_000), 8);
+        // A clip whose cap is under the first step: from the start.
+        assert_eq!(carried_ticks(50, 30_000), 0);
     }
 
     #[test]

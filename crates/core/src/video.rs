@@ -250,6 +250,9 @@ pub struct VideoSession {
     /// The id of the latest seek timer (`SettleSeek`, `HoldCheck`, `ScrubTick`). Only its
     /// events count.
     pub timer: u32,
+    /// A scrub just let go: a hold the same way soon picks up near its speed. Taken by the next
+    /// press, dropped when its window ends (`seek::SCRUB_CARRY_MS`).
+    pub carry: Option<crate::seek::Carry>,
     pub load: VideoLoad,
     pub landing: Option<Landing>,
     /// The card at the end of the video, on this row.
@@ -280,6 +283,7 @@ impl VideoSession {
             speed: crate::seek::NORMAL_SPEED,
             seeking: crate::seek::Seeking::Idle,
             timer: 0,
+            carry: None,
             load: VideoLoad::Starting,
             landing: None,
             end_card: None,
