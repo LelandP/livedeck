@@ -496,8 +496,11 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             if Playback::<R>::handles(&cmd) {
                 let playback = Arc::clone(&self.playback);
                 let tx = self.tx.clone();
+                // The ordered part now, in the order of the batch: a stop and the play after it
+                // are two tasks, and whichever ran last would otherwise win the slot.
+                let prepared = playback.prepare(cmd);
                 tokio::spawn(async move {
-                    for event in playback.execute(cmd).await {
+                    for event in playback.finish(prepared).await {
                         if tx.send(event.into()).is_err() {
                             break;
                         }

@@ -75,6 +75,28 @@ pub struct Playback<R> {
     speeds: std::sync::Mutex<[Option<VideoSpeed>; SLOTS]>,
 }
 
+/// A command after its ordered part ([`Playback::prepare`]), waiting for [`Playback::finish`].
+pub struct Prepared(Step);
+
+enum Step {
+    Done,
+    Play {
+        slot: Slot,
+        channel: ChannelRef,
+        stream: StreamKind,
+        latency: Latency,
+        generation: u64,
+    },
+    PlayVideo {
+        slot: Slot,
+        target: VideoTarget,
+        start_ms: u64,
+        stream: StreamKind,
+        generation: u64,
+    },
+    Other(Command),
+}
+
 impl<R: StreamResolver> Playback<R> {
     pub fn new(resolver: R, pool: Arc<PlayerPool>) -> Self {
         Self {
@@ -124,21 +146,98 @@ impl<R: StreamResolver> Playback<R> {
         )
     }
 
-    /// Runs `cmd` on the player of the slot it names. Player options are shared by every slot.
+    /// Runs `cmd` on the player of the slot it names (prepare and finish at once, as the tests
+    /// need). Player options are shared by every slot.
+    #[cfg(test)]
     pub async fn execute(&self, cmd: Command) -> Vec<Event> {
+        let prepared = self.prepare(cmd);
+        self.finish(prepared).await
+    }
+
+    /// The part of `cmd` that must happen in the order the reducer gave its commands, done at
+    /// once: a stop, or the claim a play makes on its slot (a new generation, and the video's
+    /// speed). The store prepares a batch in order and then runs the rest of each in its own task
+    /// (`finish`), so a `StopPlayback` followed by a `Play` of the same slot can never land the
+    /// other way round and drop the play as stale.
+    pub fn prepare(&self, cmd: Command) -> Prepared {
         match cmd {
             Command::Play {
                 slot,
                 channel,
                 stream,
                 latency,
-            } if usize::from(slot) < SLOTS => self.play(slot, channel, stream, latency).await,
+            } if usize::from(slot) < SLOTS => {
+                // A live stream plays at normal speed (the player sees to that).
+                self.speeds()[usize::from(slot)] = None;
+                let generation = self.claim(slot);
+                Prepared(Step::Play {
+                    slot,
+                    channel,
+                    stream,
+                    latency,
+                    generation,
+                })
+            }
             Command::PlayVideo {
                 slot,
                 target,
                 start_ms,
                 stream,
-            } if usize::from(slot) < SLOTS => self.play_video(slot, target, start_ms, stream).await,
+            } if usize::from(slot) < SLOTS => {
+                self.note_video(slot, &target);
+                let generation = self.claim(slot);
+                Prepared(Step::PlayVideo {
+                    slot,
+                    target,
+                    start_ms,
+                    stream,
+                    generation,
+                })
+            }
+            Command::StopPlayback { slot } if usize::from(slot) < SLOTS => {
+                self.generation(slot).fetch_add(1, Ordering::SeqCst);
+                self.set_loaded(slot, None);
+                self.speeds()[usize::from(slot)] = None;
+                self.pool.stop(slot);
+                Prepared(Step::Done)
+            }
+            other => Prepared(Step::Other(other)),
+        }
+    }
+
+    /// The rest of a prepared command: resolving and loading, and everything that needs no order.
+    pub async fn finish(&self, prepared: Prepared) -> Vec<Event> {
+        match prepared.0 {
+            Step::Done => Vec::new(),
+            Step::Play {
+                slot,
+                channel,
+                stream,
+                latency,
+                generation,
+            } => self.play(slot, channel, stream, latency, generation).await,
+            Step::PlayVideo {
+                slot,
+                target,
+                start_ms,
+                stream,
+                generation,
+            } => {
+                self.play_video(slot, target, start_ms, stream, generation)
+                    .await
+            }
+            Step::Other(cmd) => self.run(cmd),
+        }
+    }
+
+    /// A new generation for `slot`: whatever resolves under an older one is dropped.
+    fn claim(&self, slot: Slot) -> u64 {
+        self.generation(slot).fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// The commands that change something at once and answer with nothing.
+    fn run(&self, cmd: Command) -> Vec<Event> {
+        match cmd {
             // Only into a video: a live stream has nowhere to seek to.
             Command::Seek { slot, to_ms } if usize::from(slot) < SLOTS => {
                 if !self.has_video(slot) {
@@ -161,13 +260,6 @@ impl<R: StreamResolver> Playback<R> {
             // Made if needed: a muted tile is muted before its first load.
             Command::SetMuted { slot, muted } if usize::from(slot) < SLOTS => {
                 self.pool.set_muted(slot, muted);
-                Vec::new()
-            }
-            Command::StopPlayback { slot } if usize::from(slot) < SLOTS => {
-                self.generation(slot).fetch_add(1, Ordering::SeqCst);
-                self.set_loaded(slot, None);
-                self.speeds()[usize::from(slot)] = None;
-                self.pool.stop(slot);
                 Vec::new()
             }
             Command::SetPlayerOption(option) => {
@@ -193,15 +285,15 @@ impl<R: StreamResolver> Playback<R> {
         }
     }
 
-    /// Resolves `target` for `slot` in its turn, under a new generation. `None` if a newer play
+    /// Resolves `target` for `slot` in its turn, under the generation the slot was claimed with. `None` if a newer play
     /// or a stop of the slot replaced it meanwhile: then nothing may be loaded or reported.
     async fn resolve(
         &self,
         slot: Slot,
+        generation: u64,
         target: &Target,
         rendition: &str,
     ) -> Option<Result<PlaylistUrl, ResolveError>> {
-        let generation = self.generation(slot).fetch_add(1, Ordering::SeqCst) + 1;
         // Made (or kept from idle) before resolving, so it is not dropped meanwhile.
         let _player = self.pool.player(slot);
         let stale = || {
@@ -251,12 +343,11 @@ impl<R: StreamResolver> Playback<R> {
         channel: ChannelRef,
         stream: StreamKind,
         latency: Latency,
+        generation: u64,
     ) -> Vec<Event> {
         let rendition = rendition_name(stream);
-        // A live stream plays at normal speed (the player sees to that).
-        self.speeds()[usize::from(slot)] = None;
         let target = Target::channel(site(channel.platform), channel.login.clone());
-        let Some(resolved) = self.resolve(slot, &target, &rendition).await else {
+        let Some(resolved) = self.resolve(slot, generation, &target, &rendition).await else {
             return Vec::new();
         };
         match resolved {
@@ -299,25 +390,14 @@ impl<R: StreamResolver> Playback<R> {
         video: VideoTarget,
         start_ms: u64,
         stream: StreamKind,
+        generation: u64,
     ) -> Vec<Event> {
         let rendition = rendition_name(stream);
-        {
-            // A new video starts at normal speed. The same one again (another quality) keeps
-            // its speed.
-            let mut speeds = self.speeds();
-            let speed = &mut speeds[usize::from(slot)];
-            if speed.as_ref().is_none_or(|s| s.target != video) {
-                *speed = Some(VideoSpeed {
-                    target: video.clone(),
-                    milli: NORMAL_SPEED,
-                });
-            }
-        }
         let target = match &video {
             VideoTarget::Video(id) => Target::TwitchVideo(id.clone()),
             VideoTarget::Clip(slug) => Target::TwitchClip(slug.clone()),
         };
-        let Some(resolved) = self.resolve(slot, &target, &rendition).await else {
+        let Some(resolved) = self.resolve(slot, generation, &target, &rendition).await else {
             return Vec::new();
         };
         match resolved {
@@ -340,6 +420,18 @@ impl<R: StreamResolver> Playback<R> {
                     message: video_message(&video, &err),
                 }]
             }
+        }
+    }
+
+    /// A new video starts at normal speed. The same one again (another quality) keeps its speed.
+    fn note_video(&self, slot: Slot, video: &VideoTarget) {
+        let mut speeds = self.speeds();
+        let speed = &mut speeds[usize::from(slot)];
+        if speed.as_ref().is_none_or(|s| s.target != *video) {
+            *speed = Some(VideoSpeed {
+                target: video.clone(),
+                milli: NORMAL_SPEED,
+            });
         }
     }
 
@@ -929,6 +1021,33 @@ mod tests {
                 LoadOptions::video(0)
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn a_stop_then_a_play_of_one_batch_leave_the_play_whichever_task_runs_last() {
+        // The store spawns a task per command, so the one that stops can finish after the one
+        // that plays. Prepared in the batch's order, the play is the newest claim either way.
+        for stop_first in [true, false] {
+            let (pb, player) = playback(FakeResolver::playing("https://x/v.m3u8"));
+            pb.execute(play("chan")).await;
+            let stop = pb.prepare(Command::StopPlayback { slot: MAIN_SLOT });
+            let video = pb.prepare(play_video("42", 5_000));
+            if stop_first {
+                pb.finish(stop).await;
+                assert!(pb.finish(video).await.is_empty());
+            } else {
+                assert!(pb.finish(video).await.is_empty());
+                pb.finish(stop).await;
+            }
+            assert_eq!(
+                player.calls().last(),
+                Some(&PlayerCall::Load(
+                    "https://x/v.m3u8".into(),
+                    LoadOptions::video(5_000)
+                )),
+                "the video loaded (stop first: {stop_first})"
+            );
+        }
     }
 
     #[tokio::test]
