@@ -669,13 +669,17 @@ fn chapter(s: &mut AppState, forward: bool, cmds: &mut Vec<Command>) {
     } else {
         Some(starts[i])
     };
-    // The jump replaces the taps.
-    v.seeking = Seeking::Idle;
-    disarm(s);
     pulse_hud(s);
-    if let Some(to) = to {
-        seek_to(s, to, cmds);
+    // Nowhere to go (RB in the last chapter): the taps still adding up carry on.
+    let Some(to) = to else {
+        return;
+    };
+    // The jump replaces the taps.
+    if let Some(v) = s.video.as_mut() {
+        v.seeking = Seeking::Idle;
     }
+    disarm(s);
+    seek_to(s, to, cmds);
 }
 
 /// The menu's *Start over*: the video from 0:00, playing. The menu closes.

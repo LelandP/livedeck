@@ -861,6 +861,17 @@ fn a_chapter_jump_replaces_taps_still_adding_up() {
 }
 
 #[test]
+fn a_chapter_button_with_nowhere_to_go_leaves_the_taps_alone() {
+    // No chapters: the video is one chapter, so RB has no next one and LB goes to the start.
+    let mut sim = Sim::new(playing(15_128, AT));
+    sim.press(0, Right).release(60, Right);
+    sim.at(100, Intent::PageRight);
+    sim.run_until(2_000);
+    assert_eq!(sim.seeks(), [(60 + SEEK_SETTLE_MS, AT + 10_000)]);
+    assert_eq!(sim.video().pos_ms, AT + 10_000);
+}
+
+#[test]
 fn the_menu_takes_the_d_pad_from_a_press() {
     let mut sim = Sim::new(playing(15_128, AT));
     sim.press(0, Right);
