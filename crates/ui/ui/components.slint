@@ -202,7 +202,7 @@ export component StreamCard inherits Rectangle {
             animate opacity { duration: Theme.t-med; easing: ease-out; }
         }
 
-        // *Resume multiview*: up to four of the set's previews, 2Ã—2, each over its tint.
+        // *Resume multiview*: up to four of the set's previews, 2×2, each over its tint.
         if root.item.resume : Rectangle {
             background: Theme.surface;
             for cell[i] in root.item.mosaic : Rectangle {
@@ -360,7 +360,7 @@ export component StreamCard inherits Rectangle {
                     background: Theme.live;
                 }
                 Text {
-                    text: root.item.viewers + "  Â·  " + root.item.category;
+                    text: root.item.viewers + "  ·  " + root.item.category;
                     color: Theme.muted;
                     font-size: Theme.fs-small;
                     overflow: elide;
@@ -469,8 +469,8 @@ export component Hint inherits TouchArea {
         : (root.glyph == "X" ? "R"
         : (root.glyph == "RB" ? "PgDn"
         : (root.glyph == "View" ? "V"
-        : (root.glyph == "â‰¡" ? "Menu"
-        : (root.glyph == "â—€â–¶" ? "â† â†’" : root.glyph))))));
+        : (root.glyph == "≡" ? "Menu"
+        : (root.glyph == "◀▶" ? "← →" : root.glyph))))));
     // The View button's two-box icon, on a controller only.
     property <bool> view-icon: root.glyph == "View" && !root.keys;
 

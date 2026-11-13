@@ -113,7 +113,7 @@ component TileChrome inherits Rectangle {
             border-radius: 6px;
             background: #0000008c;
             q-text := Text {
-                text: root.tile.lowered ? root.tile.quality + " â†“" : root.tile.quality;
+                text: root.tile.lowered ? root.tile.quality + " ↓" : root.tile.quality;
                 color: root.tile.lowered ? Theme.amber : Theme.muted;
                 font-size: Theme.fs-chip;
                 font-weight: root.tile.lowered ? 700 : 400;
@@ -261,7 +261,7 @@ component TileView inherits Rectangle {
         y: (parent.height - self.height) / 2 - (root.tile.focused ? 40px : 0px);
         width: parent.width - 24px;
         x: 12px;
-        text: root.tile.state == 0 ? "Startingâ€¦" : (root.tile.state == 2 ? "Offline" : "Could not play");
+        text: root.tile.state == 0 ? "Starting…" : (root.tile.state == 2 ? "Offline" : "Could not play");
         color: root.tile.state == 3 ? Theme.btn-b : Theme.text;
         font-size: root.small ? Theme.fs-small : Theme.fs-body;
         font-weight: 700;
@@ -433,7 +433,7 @@ component PickerPanel inherits Rectangle {
                         kick: item.kick;
                     }
                     if picker-row.star : Text {
-                        text: "â˜…";
+                        text: "★";
                         color: Theme.accent-light;
                         font-size: Theme.fs-body;
                     }
@@ -446,7 +446,7 @@ component PickerPanel inherits Rectangle {
                     }
                 }
                 Text {
-                    text: (item.kick ? "Kick" : "Twitch") + (item.offline ? " Â· Offline" : (item.category != "" ? " Â· " + item.category : "") + (item.viewers != "" ? " Â· " + item.viewers : ""));
+                    text: (item.kick ? "Kick" : "Twitch") + (item.offline ? " · Offline" : (item.category != "" ? " · " + item.category : "") + (item.viewers != "" ? " · " + item.viewers : ""));
                     color: Theme.muted;
                     font-size: Theme.fs-small;
                     overflow: elide;
@@ -702,7 +702,7 @@ export component ViewPopup inherits Rectangle {
                             overflow: elide;
                         }
                         if row.value != "" : Text {
-                            text: popup-row.focused ? "â—€  " + row.value + "  â–¶" : row.value;
+                            text: popup-row.focused ? "◀  " + row.value + "  ▶" : row.value;
                             color: popup-row.focused ? Theme.accent-light : Theme.muted;
                             font-size: Theme.fs-small;
                             vertical-alignment: center;
@@ -779,7 +779,7 @@ export component FullScreenStrip inherits Rectangle {
                 overflow: elide;
             }
             Text {
-                text: (root.stream.kick ? "Kick" : "Twitch") + (root.stream.category != "" ? " Â· " + root.stream.category : "") + (root.stream.viewers != "" ? " Â· " + root.stream.viewers + " watching" : "") + " Â· " + root.position;
+                text: (root.stream.kick ? "Kick" : "Twitch") + (root.stream.category != "" ? " · " + root.stream.category : "") + (root.stream.viewers != "" ? " · " + root.stream.viewers + " watching" : "") + " · " + root.position;
                 color: Theme.muted;
                 font-size: Theme.fs-small;
                 overflow: elide;
