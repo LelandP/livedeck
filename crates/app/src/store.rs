@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use htpc_core::{reduce, AppState, Command, Msg, Playback as CorePlayback, Screen};
+use htpc_core::{reduce, AppState, Command, Msg, Playback as CorePlayback, Screen, WakeCheck};
 use htpc_ui::{
     apply_chat_image, apply_thumbnail, view_model, MainWindow, Thumbnail, Update, ViewModel,
 };
@@ -215,6 +215,8 @@ pub struct Store<P, R, S> {
     sink: S,
     tx: UnboundedSender<Msg>,
     downloads: Arc<Semaphore>,
+    /// Tells a sleep from a pause or a load in the player's health reports (`Event::DeviceWoke`).
+    wake: WakeCheck,
 }
 
 impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
@@ -258,6 +260,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             sink,
             tx,
             downloads: Arc::new(Semaphore::new(THUMBNAIL_CONCURRENCY)),
+            wake: WakeCheck::default(),
         }
     }
 
@@ -349,8 +352,20 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     }
 
     fn handle(&mut self, msg: Msg) {
+        // A gap in the single player's health reports means the device slept. The reducer hears
+        // it first, while its state still holds the last report before the gap (vod-plan.md,
+        // phase 7). The gap is measured on the wall clock, which counts through a suspend.
+        if let Some(woke) = self.wake.before(&msg, crate::live_watch::wall_ms()) {
+            tracing::info!(?woke, "the device slept");
+            self.reduce_one(woke.into());
+        }
+        self.reduce_one(msg);
+    }
+
+    fn reduce_one(&mut self, msg: Msg) {
         tracing::trace!(?msg, "reduce");
         let (next, cmds) = reduce(&self.state, msg);
+        self.wake.after(&cmds);
         self.state = next;
         self.publish();
         self.update_awake();

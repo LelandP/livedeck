@@ -195,6 +195,9 @@ export component MainWindow inherits Window {
     in property <string> playback-error: "";
     // What the player logged before failing (shown small under the error, for bug reports).
     in property <string> playback-details: "";
+    // The end card of a Twitch stream that ended (rows, focused row). Empty otherwise.
+    in property <[string]> live-end-rows: [];
+    in property <int> live-end-focus: 0;
     in property <bool> paused: false;
     // The player menu (Start while watching): open, focused row, and its rows (a live stream's,
     // a video's or a clip's).
@@ -476,6 +479,8 @@ export component MainWindow inherits Window {
         playback: root.playback;
         playback-error: root.playback-error;
         playback-details: root.playback-details;
+        end-rows: root.live-end-rows;
+        end-focus: root.live-end-focus;
         paused: root.paused;
         hud-visible: root.hud-visible;
         menu-open: root.player-menu-open;

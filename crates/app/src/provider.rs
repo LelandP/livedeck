@@ -11,9 +11,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use htpc_chat::{EmoteProvider, TwitchCdn};
 use htpc_core::{
     grid_rows, unix_from_rfc3339, Category, Channel, ChannelInfo, ChannelRef, Chapter, ChatKind,
-    ChatMessage, ChatSpan, Clip, Command, Event, FeedId, HypeTrain, PageOutcome, Paging, Platform,
-    ReplayLine, Rgb, Row, RowId, RowKind, SendProblem, Span, Stream, Tile, Video, VideoDetails,
-    VideoKind, RESUME_MIN_LIVE,
+    ChatMessage, ChatSpan, Clip, Command, Event, FeedId, HypeTrain, LiveArchive, PageOutcome,
+    Paging, Platform, ReplayLine, Rgb, Row, RowId, RowKind, SendProblem, Span, Stream, Tile, Video,
+    VideoDetails, VideoKind, RESUME_MIN_LIVE,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
@@ -906,6 +906,31 @@ impl<A: TwitchApi> ApiProvider<A> {
         }
     }
 
+    /// The past broadcast being recorded from `channel`'s live stream, stamped with the wall clock
+    /// (the reducer's "now" for *from where you joined*). Not live, no recording, an unreadable
+    /// start time and a failure are all `None`: the end card does without it.
+    async fn live_archive(&self, channel: ChannelRef) -> Event {
+        let archive = match self.api.live_archive(&channel.login).await {
+            Ok(Some(a)) => match unix_from_rfc3339(&a.stream_started_at) {
+                Some(started_at) => Some(LiveArchive {
+                    video_id: a.video_id,
+                    started_at,
+                    checked_at: unix_now(),
+                }),
+                None => {
+                    tracing::debug!(start = %a.stream_started_at, "unreadable stream start");
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(err) => {
+                tracing::debug!(channel = %channel.login, %err, "could not look up the broadcast");
+                None
+            }
+        };
+        Event::LiveArchive { channel, archive }
+    }
+
     /// A window of a video's chat replay. No lines, or a failure (Twitch refusing these requests
     /// is the one to expect), is `ChatReplayFailed`: the player decides whether that means *No
     /// chat replay for this video*.
@@ -999,6 +1024,8 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             Command::LoadChatReplay { id, offset_s } => {
                 vec![self.chat_replay(id, offset_s).await]
             }
+            Command::LoadLiveArchive { channel } if !channel.is_twitch() => Vec::new(),
+            Command::LoadLiveArchive { channel } => vec![self.live_archive(channel).await],
             Command::FetchStreamInfo { channel } if !channel.is_twitch() => Vec::new(),
             Command::FetchStreamInfo { channel } => {
                 self.stream_info(&channel.login).await.into_iter().collect()
@@ -2636,6 +2663,51 @@ mod tests {
             [Event::VideoGone { id: "1".into() }],
             "Twitch has no such video"
         );
+    }
+
+    #[tokio::test]
+    async fn the_live_broadcast_is_looked_up_and_stamped_with_the_clock() {
+        let provider = ApiProvider::new(fake_api());
+        let before = unix_now();
+        let events = provider
+            .execute(Command::LoadLiveArchive {
+                channel: ChannelRef::twitch("pixelpilgrim"),
+            })
+            .await;
+        let [Event::LiveArchive {
+            channel,
+            archive: Some(a),
+        }] = events.as_slice()
+        else {
+            panic!("{events:?}")
+        };
+        assert_eq!(channel.login, "pixelpilgrim");
+        assert_eq!(a.video_id, "9000000007");
+        assert_eq!(
+            Some(a.started_at),
+            unix_from_rfc3339("2026-11-11T18:00:00Z")
+        );
+        assert!(a.checked_at >= before);
+
+        // Offline: none. Kick: no request, no answer.
+        let events = provider
+            .execute(Command::LoadLiveArchive {
+                channel: ChannelRef::twitch("sleepy_fox"),
+            })
+            .await;
+        assert_eq!(
+            events,
+            [Event::LiveArchive {
+                channel: ChannelRef::twitch("sleepy_fox"),
+                archive: None
+            }]
+        );
+        let events = provider
+            .execute(Command::LoadLiveArchive {
+                channel: ChannelRef::kick("pixelpilgrim"),
+            })
+            .await;
+        assert!(events.is_empty());
     }
 
     #[tokio::test]

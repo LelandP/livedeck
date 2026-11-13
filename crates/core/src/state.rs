@@ -1,5 +1,6 @@
 //! Application state. Owned by the store and replaced on every `reduce`.
 
+use crate::broadcast::{Broadcast, LiveEndRow};
 use crate::chat::ChatBuffer;
 use crate::domain::{
     Channel, ChannelRef, ChatStatus, DeviceCode, Features, FeedId, HypeTrain, LoginProblem,
@@ -387,6 +388,10 @@ pub enum ToastKind {
     /// Y on a video whose chat replay Twitch would not give: *No chat replay for this video*.
     /// Once per video.
     NoChatReplay,
+    /// The device slept `away_ms` while the live stream played, and it is still live: *You were
+    /// away 2 h 10 min · X watches from where you left off*. X on the live player opens the
+    /// broadcast there while it is up.
+    Away { away_ms: u64 },
 }
 
 impl Toast {
@@ -397,7 +402,8 @@ impl Toast {
             ToastKind::OfflineSkipped(_)
             | ToastKind::SlowNetwork { .. }
             | ToastKind::Resumed { .. }
-            | ToastKind::NoChatReplay => None,
+            | ToastKind::NoChatReplay
+            | ToastKind::Away { .. } => None,
         }
     }
 }
@@ -695,6 +701,14 @@ pub struct AppState {
     /// A quiet recheck is resolving the stream. The offline screen stays up meanwhile: only the
     /// first frame replaces it, and any failure just schedules the next recheck.
     pub rechecking: bool,
+    /// What is known about the live stream's broadcast: its video, a raid turned down, where the
+    /// viewer left off before the device slept (vod-plan.md, phase 7). Read it through
+    /// `live_broadcast`, which checks it is the stream on screen's.
+    pub broadcast: Option<Broadcast>,
+    /// The end card is up instead of the offline screen (a Twitch stream on the single player
+    /// ended), focused on this row. The quiet recheck runs on behind it. `live_end_rows` lists
+    /// the rows.
+    pub end_card: Option<LiveEndRow>,
     pub paused: bool,
     /// Another app has focus (the window lost it). Starts false: the window opens in front.
     pub in_background: bool,
@@ -1027,6 +1041,40 @@ impl AppState {
     /// The single live player is up: its screen, or the channel page over it.
     pub fn on_live_player(&self) -> bool {
         self.screen == Screen::Player || self.live_covered()
+    }
+
+    /// What is known about the broadcast of the live stream (playing, ended, or parked while its
+    /// video plays). `None` for anything else, a broadcast left over from another channel
+    /// included.
+    pub fn live_broadcast(&self) -> Option<&Broadcast> {
+        let live = self.now_playing.as_ref().or(self.parked_live.as_ref())?;
+        self.broadcast
+            .as_ref()
+            .filter(|b| b.channel.is_same(&live.channel))
+    }
+
+    /// The rows the live end card has now, top to bottom (vod-plan.md section 2): the raid that
+    /// was turned down, the broadcast from where the viewer left off before a sleep, from where
+    /// they joined and from the start (once its video is known), *Channel videos* and *Back*.
+    pub fn live_end_rows(&self) -> Vec<LiveEndRow> {
+        let mut rows = Vec::new();
+        if let Some(b) = self.live_broadcast() {
+            if b.raid.is_some() {
+                rows.push(LiveEndRow::FollowRaid);
+            }
+            if b.left_off_s().is_some() {
+                rows.push(LiveEndRow::LeftOff);
+            }
+            if b.joined_s().is_some() {
+                rows.push(LiveEndRow::Joined);
+            }
+            if b.archive.is_some() {
+                rows.push(LiveEndRow::FromStart);
+            }
+        }
+        rows.push(LiveEndRow::ChannelVideos);
+        rows.push(LiveEndRow::Back);
+        rows
     }
 
     /// The feed of the current screen.

@@ -73,7 +73,8 @@ pub(super) fn save_leaving(s: &mut AppState, cmds: &mut Vec<Command>) {
     if v.length_ms > 0 {
         video.length_s = u32::try_from(v.length_ms / 1_000).unwrap_or(u32::MAX);
     }
-    let pos_s = u32::try_from(v.shown_ms() / 1_000).unwrap_or(u32::MAX);
+    // Not a place the viewer slept through (the sleep timer's warning, a wake).
+    let pos_s = u32::try_from(v.leave_ms() / 1_000).unwrap_or(u32::MAX);
     let list = remembered(&s.continue_watching, &video, pos_s, v.now);
     set(s, list, cmds);
 }

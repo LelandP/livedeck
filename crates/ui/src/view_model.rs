@@ -11,9 +11,10 @@ use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
     grid_cols, subscribe_url, AppState, ChannelPage, ChannelTab, ChatKind, ChatLayout, ChatMessage,
-    ChatSpan, ChatStatus, Feed, FeedId, HypeTrain, Key, LoginProblem, Paging, Platform, Playback,
-    PlayerMenuRow, RailEntry, Rgb, RoomMode, Row, RowKind, Screen, SearchState, SendProblem,
-    SettingsRow, Shift, Stream, Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC, TOASTS_SHOWN,
+    ChatSpan, ChatStatus, Feed, FeedId, HypeTrain, Key, LiveEndRow, LoginProblem, Paging, Platform,
+    Playback, PlayerMenuRow, RailEntry, Rgb, RoomMode, Row, RowKind, Screen, SearchState,
+    SendProblem, SettingsRow, Shift, Stream, Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC,
+    TOASTS_SHOWN,
 };
 use slint::{
     Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
@@ -290,6 +291,12 @@ pub struct ViewModel {
     /// What the player logged before the failure (the message after its first blank line), for a
     /// photo of the screen to be a useful bug report. Empty when there is nothing.
     pub playback_details: String,
+    /// The end card of a Twitch stream that ended, instead of the offline screen's "Press A or X
+    /// to try again": its rows, top to bottom (*Follow the raid to X*, *Watch from where you
+    /// joined*, ...). Empty without one.
+    pub live_end_rows: Vec<String>,
+    /// Its focused row, as an index into `live_end_rows`.
+    pub live_end_focus: i32,
     pub paused: bool,
     /// The player menu is open (Start on the Player screen).
     pub player_menu_open: bool,
@@ -1301,6 +1308,12 @@ fn toast(t: &Toast) -> ToastVm {
                 format_duration(*pos_s)
             ))
         }
+        ToastKind::Away { away_ms } => {
+            return note(format!(
+                "You were away {} · X watches from where you left off",
+                format_away(*away_ms)
+            ))
+        }
     };
     let line = match (s.title.is_empty(), s.category.is_empty()) {
         (false, false) => format!("{} · {}", s.title, s.category),
@@ -1314,6 +1327,34 @@ fn toast(t: &Toast) -> ToastVm {
         tint: s.tint,
         thumb_url: s.thumbnail.clone().unwrap_or_default(),
         note: false,
+    }
+}
+
+/// How long the device slept, to the minute: "45 min", "2 h", "2 h 10 min".
+pub fn format_away(ms: u64) -> String {
+    let min = ((ms + 30_000) / 60_000).max(1);
+    match (min / 60, min % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
+/// What the live end card's rows say (vod-plan.md section 2).
+fn live_end_row(state: &AppState, row: LiveEndRow) -> String {
+    match row {
+        LiveEndRow::FollowRaid => {
+            let name = state
+                .live_broadcast()
+                .and_then(|b| b.raid.as_ref())
+                .map_or("", |r| r.name.as_str());
+            format!("Follow the raid to {name}")
+        }
+        LiveEndRow::LeftOff => "Watch from where you left off".to_owned(),
+        LiveEndRow::Joined => "Watch from where you joined".to_owned(),
+        LiveEndRow::FromStart => "Watch it from the start".to_owned(),
+        LiveEndRow::ChannelVideos => "Channel videos".to_owned(),
+        LiveEndRow::Back => "Back".to_owned(),
     }
 }
 
@@ -1560,6 +1601,21 @@ pub fn view_model(state: &AppState) -> ViewModel {
         Playback::Offline => (PlaybackId::Offline, String::new()),
         Playback::Failed(message) => (PlaybackId::Failed, message.clone()),
     };
+    // The live end card: a Twitch stream on the single player ended.
+    let live_end = state.end_card.filter(|_| {
+        on_player
+            && state.video.is_none()
+            && state.multiview.is_none()
+            && state.playback == Playback::Offline
+    });
+    let end_rows = if live_end.is_some() {
+        state.live_end_rows()
+    } else {
+        Vec::new()
+    };
+    let live_end_focus = live_end
+        .and_then(|row| end_rows.iter().position(|r| *r == row))
+        .unwrap_or(0);
     // The player puts its recent log lines after a blank line (htpc-player's `RecentLog`).
     let (playback_error, playback_details) = match playback_error.split_once("\n\n") {
         Some((summary, details)) => (summary.to_owned(), details.trim().to_owned()),
@@ -1616,6 +1672,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
         ("Change", false)
     } else if video.end_card {
         ("Select", false)
+    } else if live_end.is_some() {
+        // X still looks for the stream at once.
+        ("Select", true)
     } else if video.scrubbing {
         // A jumps to the playhead at once.
         ("Jump here", false)
@@ -1720,6 +1779,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
         playback,
         playback_error,
         playback_details,
+        live_end_rows: end_rows.iter().map(|r| live_end_row(state, *r)).collect(),
+        live_end_focus: to_i32(live_end_focus),
         paused: state.paused,
         player_menu_open: on_player && state.player_menu.is_some(),
         player_menu_focus: to_i32(
@@ -2011,6 +2072,10 @@ impl Update {
         ui.set_playback(vm.playback as i32);
         ui.set_playback_error(vm.playback_error.into());
         ui.set_playback_details(vm.playback_details.into());
+        let end_rows: Vec<slint::SharedString> =
+            vm.live_end_rows.iter().map(|r| r.as_str().into()).collect();
+        ui.set_live_end_rows(ModelRc::new(VecModel::from(end_rows)));
+        ui.set_live_end_focus(vm.live_end_focus);
         ui.set_paused(vm.paused);
         ui.set_player_menu_open(vm.player_menu_open);
         ui.set_player_menu_focus(vm.player_menu_focus);

@@ -1,5 +1,6 @@
 //! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
 
+use crate::broadcast::LiveArchive;
 use crate::domain::{
     ChannelRef, ChatMessage, ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation,
     PlayerStats, RoomModeChange, Row, RowId, SendProblem, Stream, Tile, User,
@@ -257,6 +258,10 @@ pub enum Command {
     /// `offset_s` seconds into it, starting a little before. Answered with `Event::ChatReplay`,
     /// or `Event::ChatReplayFailed` when Twitch gives none or refuses.
     LoadChatReplay { id: String, offset_s: u32 },
+    /// Look up the past broadcast Twitch is recording from `channel`'s live stream, and when the
+    /// stream started (vod-plan.md, phase 7: the end card and the *You were away* toast).
+    /// Answered with `Event::LiveArchive`. Twitch only: a Kick channel gets no answer.
+    LoadLiveArchive { channel: ChannelRef },
     /// Kick on or off ("Show Kick"). Off, the app asks Kick nothing: no Kick row, no Kick search
     /// results. The store applies it before the commands after it, so a `LoadFeed` that follows
     /// already sees it. Sent at startup with the saved setting. There is no `Event`.
@@ -511,6 +516,20 @@ pub enum Event {
     ChatReplayFailed {
         id: String,
         offset_s: u32,
+    },
+    /// The answer to `LoadLiveArchive`: the broadcast's video, or `None` when there is none (not
+    /// live, no recording, or the lookup failed). Ignored unless `channel` is the live stream.
+    LiveArchive {
+        channel: ChannelRef,
+        archive: Option<LiveArchive>,
+    },
+    /// The device slept: two health reports of the single player came `asleep_ms` apart on the
+    /// wall clock, with nothing (a pause, a load, a stop) in between (`broadcast::WakeCheck`, run
+    /// by the store). Sent just before the report after the gap, so the state still holds the
+    /// last one before it. `before_s` is that last report's wall time, in Unix seconds.
+    DeviceWoke {
+        asleep_ms: u64,
+        before_s: u64,
     },
 }
 

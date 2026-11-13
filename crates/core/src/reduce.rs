@@ -5,6 +5,7 @@
 
 mod channel;
 mod continue_watching;
+mod end_card;
 mod favorites;
 mod multiview;
 mod network;
@@ -315,6 +316,10 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         video::intent(s, intent, cmds);
         return;
     }
+    // The end card of a stream that ended takes Up, Down and A.
+    if end_card::intent(s, intent, cmds) {
+        return;
+    }
     if s.multiview.is_some() && multiview::full_screen_intent(s, intent, cmds) {
         return;
     }
@@ -336,11 +341,12 @@ fn player_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
             Playback::Playing => toggle_pause(s, cmds),
             Playback::Idle | Playback::Loading => {}
         },
-        // X tries a failed or ended stream again. Otherwise, with chat shown, it writes in chat.
+        // X tries a failed or ended stream again. With the *You were away* toast up it watches
+        // the part slept through. Otherwise, with chat shown, it writes in chat.
         Intent::Retry => {
             if matches!(s.playback, Playback::Failed(_) | Playback::Offline) {
                 start_playback(s, cmds);
-            } else if s.chat_open {
+            } else if !end_card::away_x(s, cmds) && s.chat_open {
                 open_compose(s);
             }
         }
@@ -668,8 +674,12 @@ fn subscribe_card_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Comman
 fn raid_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
     match intent {
         Intent::Select => follow_raid(s, cmds),
-        // The countdown may still tick: its id no longer matches anything.
-        Intent::Back => s.raid = None,
+        // The countdown may still tick: its id no longer matches anything. The raid stays on
+        // offer as the end card's first row.
+        Intent::Back => {
+            end_card::declined(s);
+            s.raid = None;
+        }
         _ => {}
     }
 }
@@ -771,6 +781,10 @@ fn follow_raid(s: &mut AppState, cmds: &mut Vec<Command>) {
 fn switch_now_playing(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.player_menu = None;
     s.subscribe_card = false;
+    // The old channel's broadcast, end card and wake toast are not this one's.
+    s.end_card = None;
+    s.broadcast = None;
+    end_card::drop_away_toasts(s);
     s.chat.clear();
     s.chat_status = ChatStatus::Connecting;
     reset_chat_room(s);
@@ -874,6 +888,10 @@ fn start_sleep(s: &mut AppState, minutes: u16, cmds: &mut Vec<Command>) {
         warning: false,
     });
     cmds.push(Command::StartSleepTimer { id, minutes });
+    // Still watching: the place from the warning (if there was one) no longer counts.
+    if let Some(v) = s.video.as_mut() {
+        v.warned_ms = None;
+    }
 }
 
 /// The running sleep timer, if its id is `id`. Events of an older timer find nothing.
@@ -899,6 +917,7 @@ fn start_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.rechecking = false;
     s.paused = false;
     s.background_paused = false;
+    s.end_card = None;
     // The numbers of the last stream mean nothing for this one.
     s.stats = None;
     pulse_hud(s);
@@ -932,7 +951,8 @@ fn reload_playback(s: &mut AppState, cmds: &mut Vec<Command>) {
     push_play(s, cmds);
 }
 
-/// Shows the offline screen and schedules a quiet look for the stream coming back.
+/// Shows the offline screen (a Twitch stream's end card) and schedules a quiet look for the
+/// stream coming back.
 fn go_offline(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.playback = Playback::Offline;
     s.rechecking = false;
@@ -942,6 +962,7 @@ fn go_offline(s: &mut AppState, cmds: &mut Vec<Command>) {
     cmds.push(Command::ScheduleOfflineRecheck {
         id: s.offline_recheck,
     });
+    end_card::offline(s);
 }
 
 /// A quiet recheck failed one way or another: still offline, look again later.
@@ -1351,7 +1372,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         Event::PlaybackStarted { slot } if s.video.is_some() => video::started(s, slot, cmds),
         Event::PlaybackEnded { slot } if s.video.is_some() => video::ended(s, slot, cmds),
         Event::PlaybackError { slot, message } if s.video.is_some() => {
-            video::failed(s, slot, message);
+            video::failed(s, slot, message, cmds);
         }
         Event::QualitySettleDue(id) => multiview::settle_due(s, id, cmds),
         Event::SeekSettleDue(id) => video::settle_due(s, id, cmds),
@@ -1366,7 +1387,12 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             slot,
             at_ms,
             health,
-        } => network::health(s, slot, at_ms, health, cmds),
+        } => {
+            if slot == MAIN_SLOT {
+                end_card::ticked(s);
+            }
+            network::health(s, slot, at_ms, health, cmds);
+        }
         // Without multiview only the single player's slot has a stream on screen.
         Event::PlaybackStarted { slot }
         | Event::PlaybackEnded { slot }
@@ -1400,12 +1426,22 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 s.rechecking = false;
                 pulse_hud(s);
                 pause_in_background(s, cmds);
+                // The end card goes, and the broadcast is looked up for the next one.
+                end_card::started(s, cmds);
             }
         }
         Event::PlaybackEnded { .. } => {
             if s.on_live_player() && s.playback == Playback::Playing {
                 go_offline(s, cmds);
             }
+        }
+        // Just after a wake, an error is the sleep's doing: the stream may have ended in it.
+        Event::PlaybackError { .. }
+            if s.on_live_player()
+                && s.playback == Playback::Playing
+                && end_card::failed_on_waking(s) =>
+        {
+            go_offline(s, cmds);
         }
         Event::PlaybackError { message, .. } => {
             let active = matches!(s.playback, Playback::Loading | Playback::Playing);
@@ -1597,6 +1633,13 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             lines,
         } => replay::loaded(s, &id, offset_s, lines, cmds),
         Event::ChatReplayFailed { id, offset_s } => replay::failed(s, &id, offset_s, cmds),
+        Event::LiveArchive { channel, archive } => {
+            end_card::archive_loaded(s, &channel, archive, cmds);
+        }
+        Event::DeviceWoke {
+            asleep_ms,
+            before_s,
+        } => end_card::woke(s, asleep_ms, before_s, cmds),
         Event::WentLive(streams) => went_live(s, streams, cmds),
         Event::ToastExpired(id) => s.toasts.retain(|t| t.id != id),
         Event::SleepTimerTick { id, left_min } => {
@@ -1608,6 +1651,13 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             if let Some(timer) = sleep_timer(s, id) {
                 timer.left_min = 0;
                 timer.warning = true;
+                // A video's place from now: if the timer runs out, the viewer was probably
+                // asleep already.
+                if s.screen == Screen::Player {
+                    if let Some(v) = s.video.as_mut().filter(|v| v.end_card.is_none()) {
+                        v.warned_ms = Some(v.shown_ms());
+                    }
+                }
             }
         }
         Event::SleepTimerFired { id } => {
@@ -1619,6 +1669,11 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 if s.multiview.is_some() {
                     multiview::leave(s, cmds);
                 } else if s.screen == Screen::Player {
+                    // A broadcast's video over its parked stream: that stream is not loaded
+                    // again either.
+                    if s.video.is_some() {
+                        s.parked_live = None;
+                    }
                     back(s, cmds);
                 } else if s.live_behind().is_some() {
                     // The channel page is open over the stream: it stops, the page stays.
@@ -1890,6 +1945,8 @@ fn select_tile(s: &mut AppState, cmds: &mut Vec<Command>) {
 fn open_player(s: &mut AppState, stream: Stream, cmds: &mut Vec<Command>) {
     s.rail.focused = false;
     s.parked_live = None;
+    // A new watch: nothing is known about its broadcast yet.
+    s.broadcast = None;
     push_screen(s, Screen::Player);
     begin_stream(s, stream, cmds);
 }
@@ -1994,6 +2051,24 @@ fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
     s.chat_open = false;
     pop_screen(s);
+    resume_parked(s, cmds);
+}
+
+/// Back on the live player from a broadcast's video played over it (the end card, the *You were
+/// away* toast): its parked stream loads again. Without one (the sleep timer dropped it) there is
+/// nothing to show there, so it is one step further back.
+fn resume_parked(s: &mut AppState, cmds: &mut Vec<Command>) {
+    let empty = s.screen == Screen::Player
+        && s.video.is_none()
+        && s.now_playing.is_none()
+        && s.multiview.is_none();
+    if !empty {
+        return;
+    }
+    match s.parked_live.take() {
+        Some(stream) => begin_stream(s, stream, cmds),
+        None => pop_screen(s),
+    }
 }
 
 /// Stops the single player's live stream and forgets it (B on the Player screen).
@@ -2050,6 +2125,8 @@ fn stop_watching(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.player_menu = None;
     s.subscribe_card = false;
     s.raid = None;
+    s.end_card = None;
+    end_card::drop_away_toasts(s);
     s.stats = None;
     s.hype_train = None;
     cmds.push(Command::LeaveChat);

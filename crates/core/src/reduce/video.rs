@@ -17,6 +17,7 @@
 //! first frame, and while another quality loads behind the picture, a seek goes into the
 //! `start_ms` of a fresh `Command::PlayVideo` instead, so it is never lost.
 
+use crate::broadcast::{EARLY_END_MS, WAKE_SETTLE_MS};
 use crate::msg::{Command, Dir, Intent, MAIN_SLOT};
 use crate::netlimit::Health;
 use crate::seek::{self, Scrub, Seeking, TapRun};
@@ -97,6 +98,8 @@ fn start(s: &mut AppState, cmds: &mut Vec<Command>) {
     v.seeking = Seeking::Idle;
     v.landing = None;
     v.end_card = None;
+    // A fresh load: what the player did before a sleep no longer matters.
+    v.wake_ms = None;
     s.playback = Playback::Loading;
     s.paused = false;
     s.background_paused = false;
@@ -231,6 +234,8 @@ fn seek_to(s: &mut AppState, to_ms: u64, cmds: &mut Vec<Command>) {
     };
     let to = v.clamp(to_ms);
     v.pos_ms = to;
+    // The viewer chose a place: not the one before a sleep.
+    v.wake_ms = None;
     let play = Command::PlayVideo {
         slot: MAIN_SLOT,
         target: v.item.target(),
@@ -798,6 +803,16 @@ pub(super) fn ended(s: &mut AppState, slot: u8, cmds: &mut Vec<Command>) {
     if slot != MAIN_SLOT || s.screen != Screen::Player || s.playback != Playback::Playing {
         return;
     }
+    // Soon after a wake, well before its end: the address probably expired in the sleep.
+    let early = s.video.as_ref().is_some_and(|v| {
+        v.wake_ms.is_some()
+            && v.length_ms > 0
+            && v.pos_ms.saturating_add(EARLY_END_MS) < v.length_ms
+    });
+    if early {
+        resume_after_wake(s, cmds);
+        return;
+    }
     // Watched: it leaves *Continue watching*.
     continue_watching::finished(s, cmds);
     let Some(v) = s.video.as_mut() else {
@@ -819,11 +834,20 @@ pub(super) fn ended(s: &mut AppState, slot: u8, cmds: &mut Vec<Command>) {
 
 /// The player could not play the video (`Event::PlaybackError`): a video that was deleted, a
 /// failed resolve, a failed load. The error screen offers A to try again from where it was, and B.
-pub(super) fn failed(s: &mut AppState, slot: u8, message: String) {
+pub(super) fn failed(s: &mut AppState, slot: u8, message: String, cmds: &mut Vec<Command>) {
     if slot != MAIN_SLOT || s.screen != Screen::Player {
         return;
     }
     if !matches!(s.playback, Playback::Loading | Playback::Playing) {
+        return;
+    }
+    // The first failure after a wake: the address may have expired in the sleep. Resolved again
+    // once, from before the sleep; a second failure shows the error.
+    if s.video
+        .as_ref()
+        .is_some_and(|v| v.wake_ms.is_some() && !v.gone)
+    {
+        resume_after_wake(s, cmds);
         return;
     }
     let Some(v) = s.video.as_mut() else {
@@ -883,6 +907,12 @@ pub(super) fn health(s: &mut AppState, slot: u8, health: Health, cmds: &mut Vec<
             return;
         }
     }
+    // Played on well past the place before a sleep: mpv carried on, nothing to do.
+    if v.wake_ms
+        .is_some_and(|at| pos >= at.saturating_add(WAKE_SETTLE_MS))
+    {
+        v.wake_ms = None;
+    }
     let was_muted = v.is_muted_at(v.pos_ms);
     v.pos_ms = pos;
     if !was_muted && v.is_muted_at(pos) {
@@ -890,6 +920,36 @@ pub(super) fn health(s: &mut AppState, slot: u8, health: Health, cmds: &mut Vec<
     }
     // The chat replay follows the playhead: lines come due, the next window is asked for.
     replay::tick(s, cmds);
+}
+
+/// `Event::DeviceWoke` while a video plays: the place before the sleep is kept (the state still
+/// holds the last health report before it). If mpv carries on, nothing more happens; if it fails
+/// or ends early, the video is resolved again from there (`resume_after_wake`).
+pub(super) fn woke(s: &mut AppState) {
+    if s.screen != Screen::Player || s.playback != Playback::Playing || s.paused {
+        return;
+    }
+    let Some(v) = s.video.as_mut() else {
+        return;
+    };
+    if v.end_card.is_some() || v.load == VideoLoad::Starting {
+        return;
+    }
+    v.wake_ms = Some(v.pos_ms);
+}
+
+/// The player failed (or ended early) soon after a wake: resolve the video again and play from
+/// the last place before the sleep. Only once: `start` drops the wake, so a second failure shows
+/// the error screen.
+fn resume_after_wake(s: &mut AppState, cmds: &mut Vec<Command>) {
+    let Some(v) = s.video.as_mut() else {
+        return;
+    };
+    let Some(at) = v.wake_ms.take() else {
+        return;
+    };
+    v.pos_ms = v.clamp(at);
+    start(s, cmds);
 }
 
 /// `Event::VideoGone`: Twitch has no such video. It has no place to keep, so it leaves *Continue

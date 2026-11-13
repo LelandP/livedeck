@@ -1,0 +1,43 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- ended, the broadcast not known
+screen=Player playback=Offline select="Select" retry=true raid_open=false
+  > Channel videos
+    Back
+-- ended, the broadcast known
+screen=Player playback=Offline select="Select" retry=true raid_open=false
+  > Watch from where you joined
+    Watch it from the start
+    Channel videos
+    Back
+-- down
+screen=Player playback=Offline select="Select" retry=true raid_open=false
+    Watch from where you joined
+  > Watch it from the start
+    Channel videos
+    Back
+-- a raid: its card goes first
+screen=Player playback=Offline select="Go now" retry=false raid_open=true
+    Watch from where you joined
+  > Watch it from the start
+    Channel videos
+    Back
+-- turned down: the first row
+screen=Player playback=Offline select="Select" retry=true raid_open=false
+    Follow the raid to Next_Up
+    Watch from where you joined
+  > Watch it from the start
+    Channel videos
+    Back
+-- asleep 2 h 10 min, still live
+screen=Player more=0
+  [#1 note: You were away 2 h 10 min · X watches from where you left off]
+-- asleep, and it ended in the sleep
+screen=Player playback=Offline select="Select" retry=true raid_open=false
+  > Watch from where you left off
+    Watch from where you joined
+    Watch it from the start
+    Channel videos
+    Back

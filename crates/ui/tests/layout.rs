@@ -768,6 +768,65 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     resume_card(&ui);
     channel_page(&ui);
     video_player(&ui);
+    live_end_card(&ui);
+}
+
+/// A Twitch stream that ended with its broadcast known: the end card's rows lay out in the middle,
+/// the focused one ringed, with the hints bar kept; under a raid card the rows step aside.
+fn live_end_card(ui: &MainWindow) {
+    let ring = |p: &Rgba8Pixel| (150..185).contains(&p.r) && (130..165).contains(&p.g) && p.b > 240;
+    let a_button = |p: &Rgba8Pixel| p.g > 150 && p.r < 150 && p.b < 120;
+    let shown = |ui: &MainWindow, s: &AppState| {
+        Update::full(view_model(s)).apply(ui);
+        render(ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        render(ui)
+    };
+    let mut s = watching_a_busy_chat(ChatLayout::Side);
+    s.chat_open = false;
+    s.user = Some(htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    });
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    let s = reduce(
+        &s,
+        Event::LiveArchive {
+            channel: ChannelRef::twitch("chan"),
+            archive: Some(htpc_core::LiveArchive {
+                video_id: "500".into(),
+                started_at: 1_794_300_000,
+                checked_at: 1_794_300_600,
+            }),
+        },
+    )
+    .0;
+    let (ended, _) = reduce(&s, Event::PlaybackEnded { slot: 0 });
+    assert_eq!(view_model(&ended).live_end_rows.len(), 4);
+    let image = shown(ui, &ended);
+    // The focused row is the first, in the upper middle (the raid card goes lower down).
+    assert!(
+        count(&image, 300..980, 150..440, ring) > 500,
+        "the end card's focused row is not drawn"
+    );
+    assert!(count(&image, 0..WIDTH, HINTS_TOP..HEIGHT, a_button) > 0);
+
+    let (raided, _) = reduce(
+        &ended,
+        Event::Raided {
+            from_login: "chan".into(),
+            to_login: "next_up".into(),
+            to_name: "Next_Up".into(),
+            viewers: 30,
+        },
+    );
+    assert!(raided.raid.is_some());
+    let image = shown(ui, &raided);
+    assert_eq!(
+        count(&image, 300..980, 150..440, ring),
+        0,
+        "the end card's rows show under the raid card"
+    );
 }
 
 /// A video on the Player screen: the HUD and seek bar lay out (no binding loop) with the played

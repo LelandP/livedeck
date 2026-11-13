@@ -599,8 +599,9 @@ fn a_stream_that_went_offline_behind_the_page_shows_the_offline_screen_on_return
     assert!(cmds.is_empty());
     assert_eq!(back.screen, Screen::Player);
     assert_eq!(back.playback, Playback::Offline);
-    // A on it tries again, as on any offline stream.
-    let (_, cmds) = reduce(&back, Intent::Select);
+    // A Twitch stream's end card (phase 7). X tries again, as on any offline stream.
+    assert!(back.end_card.is_some());
+    let (_, cmds) = reduce(&back, Intent::Retry);
     assert!(cmds.iter().any(|c| matches!(c, Command::Play { .. })));
 }
 

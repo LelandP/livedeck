@@ -830,6 +830,10 @@ export component PlayerScreen inherits Rectangle {
     in property <string> playback-error: "";
     // The player's last log lines before the failure, one per line.
     in property <string> playback-details: "";
+    // The end card of a Twitch stream that ended: its rows and the focused one. Empty for the
+    // plain offline screen (Kick).
+    in property <[string]> end-rows: [];
+    in property <int> end-focus: 0;
     in property <bool> paused: false;
     in property <bool> hud-visible: true;
     // The player menu (Start): open, its focused row and its rows (built per mode in Rust: a live
@@ -992,11 +996,44 @@ export component PlayerScreen inherits Rectangle {
                         }
                     }
                 }
-                Text {
+                if root.end-rows.length == 0 : Text {
                     text: "Press A or X to try again  ·  B to go back";
                     color: Theme.accent-light;
                     font-size: Theme.fs-body;
                     horizontal-alignment: center;
+                }
+                // A Twitch stream that ended: the end card's rows instead (vod-plan.md section 2).
+                // Up and Down pick one, A runs it. Hidden under the raid card, which goes first.
+                if root.end-rows.length > 0 && !root.raid-open : HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 560px;
+                        height: end-layout.preferred-height;
+                        border-radius: 12px;
+                        border-width: 1px;
+                        border-color: Theme.surface-high;
+                        background: #18181bf2;
+                        end-layout := VerticalLayout {
+                            padding: 16px;
+                            spacing: 6px;
+                            for row[i] in root.end-rows : Rectangle {
+                                height: 50px;
+                                border-radius: 8px;
+                                background: i == root.end-focus ? Theme.surface-high : transparent;
+                                border-width: 2px;
+                                border-color: i == root.end-focus ? Theme.accent-light : transparent;
+                                animate border-color, background { duration: Theme.t-fast; }
+                                Text {
+                                    x: 16px;
+                                    text: row;
+                                    color: Theme.text;
+                                    font-size: Theme.fs-body;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

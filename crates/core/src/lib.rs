@@ -4,6 +4,7 @@
 //! `Command` and feeds the result back as an `Event`. This crate has no UI, network or IO
 //! dependencies, so everything here is unit-testable.
 
+pub mod broadcast;
 pub mod chat;
 pub mod domain;
 pub mod keyboard;
@@ -19,6 +20,10 @@ pub mod settings;
 pub mod state;
 pub mod video;
 
+pub use broadcast::{
+    Broadcast, LiveArchive, LiveEndRow, RaidTarget, WakeCheck, EARLY_END_MS, LIVE_BEHIND_S,
+    WAKE_GAP_MS, WAKE_SETTLE_MS,
+};
 pub use chat::{ChatBuffer, CHAT_CAPACITY};
 pub use domain::{
     grid_cols, grid_rows, grid_rows_on, Category, Channel, ChannelRef, ChatKind, ChatMessage,

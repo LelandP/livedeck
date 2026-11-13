@@ -270,6 +270,14 @@ pub struct VideoSession {
     /// The chat replay (phase 6): what was fetched and is not due yet, and what is on its way.
     /// The lines shown are in `AppState::chat`.
     pub replay: ReplayChat,
+    /// The device slept while it played (`Event::DeviceWoke`): where it was at the last health
+    /// report before the sleep. The place to save if it is left soon, and to start from again,
+    /// once, if the player fails or ends early (its address may have expired). Dropped once it
+    /// has played on `broadcast::WAKE_SETTLE_MS` past it, or on a jump.
+    pub wake_ms: Option<u64>,
+    /// The sleep timer's *Still watching?* came up here. If the timer runs out, this is the place
+    /// saved: the viewer was probably asleep by then.
+    pub warned_ms: Option<u64>,
 }
 
 impl VideoSession {
@@ -297,7 +305,17 @@ impl VideoSession {
             menu_chapter: 0,
             now,
             replay: ReplayChat::default(),
+            wake_ms: None,
+            warned_ms: None,
         }
+    }
+
+    /// The place to save when the video is left: where *Still watching?* came up, or where it was
+    /// before the device slept, or else where the playhead is drawn.
+    pub fn leave_ms(&self) -> u64 {
+        self.warned_ms
+            .or(self.wake_ms)
+            .unwrap_or_else(|| self.shown_ms())
     }
 
     /// The furthest a seek goes: a little before the end. No limit while the length is unknown.

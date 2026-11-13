@@ -267,6 +267,98 @@ fn player_loading_playing_paused_offline_and_failed() {
     insta::assert_snapshot!(out);
 }
 
+fn end_card_lines(vm: &ViewModel) -> String {
+    let mut out = format!(
+        "screen={:?} playback={:?} select={:?} retry={} raid_open={}\n",
+        vm.screen, vm.playback, vm.select_label, vm.can_retry, vm.raid_open
+    );
+    for (i, row) in vm.live_end_rows.iter().enumerate() {
+        let mark = if i as i32 == vm.live_end_focus {
+            ">"
+        } else {
+            " "
+        };
+        out += &format!("  {mark} {row}\n");
+    }
+    out
+}
+
+/// The live end card (vod-plan.md, phase 7): a stream that ended, its broadcast known, a raid
+/// over it turned down; and the *You were away* toast after a wake while it was still live.
+#[test]
+fn live_end_card_and_the_away_toast() {
+    let user = htpc_core::User {
+        login: "viewer".into(),
+        can_chat: true,
+    };
+    let s = reduce(&home_loaded(), Event::SignedIn(user)).0;
+    let (s, _) = reduce(&s, Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    let archive = |checked_at| Event::LiveArchive {
+        channel: ChannelRef::twitch("grandmaster_k"),
+        archive: Some(htpc_core::LiveArchive {
+            video_id: "500".into(),
+            started_at: 1_794_300_000,
+            checked_at,
+        }),
+    };
+    let s = reduce(&s, archive(1_794_300_600)).0;
+    let playing = s.clone();
+
+    let mut out = String::from("-- ended, the broadcast not known\n");
+    let (unknown, _) = reduce(&home_loaded(), Intent::Select);
+    let unknown = reduce(&unknown, Event::PlaybackStarted { slot: 0 }).0;
+    let unknown = reduce(&unknown, Event::PlaybackEnded { slot: 0 }).0;
+    out += &end_card_lines(&view_model(&unknown));
+
+    out += "-- ended, the broadcast known\n";
+    let s = reduce(&s, Event::PlaybackEnded { slot: 0 }).0;
+    out += &end_card_lines(&view_model(&s));
+    out += "-- down\n";
+    let s = send(&s, &[Intent::Down]);
+    out += &end_card_lines(&view_model(&s));
+    out += "-- a raid: its card goes first\n";
+    let s = reduce(
+        &s,
+        Event::Raided {
+            from_login: "grandmaster_k".into(),
+            to_login: "next_up".into(),
+            to_name: "Next_Up".into(),
+            viewers: 300,
+        },
+    )
+    .0;
+    out += &end_card_lines(&view_model(&s));
+    out += "-- turned down: the first row\n";
+    let s = send(&s, &[Intent::Back]);
+    out += &end_card_lines(&view_model(&s));
+
+    out += "-- asleep 2 h 10 min, still live\n";
+    let s = reduce(
+        &playing,
+        Event::DeviceWoke {
+            asleep_ms: 7_800_000,
+            before_s: 1_794_301_200,
+        },
+    )
+    .0;
+    let s = reduce(&s, archive(1_794_309_000)).0;
+    out += &toast_lines(&view_model(&s));
+    out += "-- asleep, and it ended in the sleep\n";
+    let s = reduce(&s, Event::PlaybackEnded { slot: 0 }).0;
+    out += &end_card_lines(&view_model(&s));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn time_away_reads_to_the_minute() {
+    assert_eq!(htpc_ui::format_away(10_000), "1 min");
+    assert_eq!(htpc_ui::format_away(45 * 60_000), "45 min");
+    assert_eq!(htpc_ui::format_away(2 * 3_600_000), "2 h");
+    assert_eq!(htpc_ui::format_away(7_800_000), "2 h 10 min");
+    assert_eq!(htpc_ui::format_away(7_829_000), "2 h 10 min");
+}
+
 fn menu_lines(vm: &ViewModel) -> String {
     let values: Vec<&String> = vm.player_menu_rows.iter().map(|r| &r.value).collect();
     let mut out = format!(

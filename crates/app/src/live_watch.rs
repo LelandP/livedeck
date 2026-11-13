@@ -82,9 +82,15 @@ impl LiveDiff {
 
 /// Seconds since the Unix epoch on the wall clock, which keeps counting while the device sleeps.
 fn wall_secs() -> u64 {
+    wall_ms() / 1_000
+}
+
+/// The same in milliseconds. The store's wake check (`htpc_core::WakeCheck`) measures the gaps
+/// between the player's health reports with it, as the polls' gaps are measured here.
+pub fn wall_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 #[derive(Default)]
