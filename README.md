@@ -1,3 +1,4 @@
+[![CI](https://github.com/LelandP/livedeck/actions/workflows/ci.yml/badge.svg)](https://github.com/LelandP/livedeck/actions/workflows/ci.yml)[![Release](https://github.com/LelandP/livedeck/actions/workflows/release.yml/badge.svg)](https://github.com/LelandP/livedeck/actions/workflows/release.yml)
 # LiveDeck: an unofficial Twitch client for Steam Deck, SteamOS and Windows, made for a TV and a controller
 
 LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: browse live streams and categories, watch with chat, and sign in to see who you follow and write in chat. It is built for the couch and for SteamOS Game Mode on the **Steam Deck**, and it also runs on **Windows** (and Linux) with a controller or keyboard. Written in Rust with [Slint](https://slint.dev), [libmpv](https://mpv.io) and [Streamlink](https://streamlink.github.io).
