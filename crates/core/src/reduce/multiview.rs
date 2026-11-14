@@ -1071,13 +1071,17 @@ pub(super) fn reload_stale(s: &mut AppState, cmds: &mut Vec<Command>) {
     }
 }
 
-/// Whether some stream of `tier` on screen can still go a rendition lower.
-pub(super) fn has_room(s: &AppState, tier: Tier) -> bool {
+/// How many renditions lower the streams of `tier` on screen can still go: the most of any of
+/// them, 0 when none can.
+pub(super) fn room(s: &AppState, tier: Tier) -> u8 {
     let Some(mv) = &s.multiview else {
-        return false;
+        return 0;
     };
     mv.occupied()
-        .any(|p| self::tier(mv, p) == tier && wanted(s, p).rendition > Rendition::P160)
+        .filter(|p| self::tier(mv, *p) == tier)
+        .map(|p| wanted(s, p).rendition.above_lowest())
+        .max()
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------------------------

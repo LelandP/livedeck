@@ -3,13 +3,18 @@
 //! were taken, and the answer is whether the limit moved.
 //!
 //! - **Struggling:** a stream stalled, or its buffer stayed under [`LOW_BUFFER_MS`] for
-//!   [`LOW_FOR_MS`]. The limit then goes one step down, at most every [`STEP_GAP_MS`], lowering
-//!   the first [`Tier`] that can still go lower: muted small tiles, then muted big ones, then the
-//!   stream with sound. So the stream being listened to keeps its quality the longest.
+//!   [`LOW_FOR_MS`]. The limit then goes down, lowering the first [`Tier`] that can still go
+//!   lower: muted small tiles, then muted big ones, then the stream with sound. So the stream
+//!   being listened to keeps its quality the longest. A low buffer lowers one step; a stall two
+//!   at once where the tier has room, so one reload replaces two (plan 14).
 //! - **Calm:** after [`CALM_MS`] of healthy reports (no stall, every buffer at least
 //!   [`LOW_BUFFER_MS`]), one step comes back, the stream with sound first. A struggle within
 //!   [`RELAPSE_MS`] of rising drops that step again at once and doubles the wait, up to
 //!   [`CALM_MAX_MS`]. A rise that lasts brings the wait back to [`CALM_MS`].
+//! - **The hold:** two changes are at least [`STEP_GAP_MS`] apart, and each change the rule makes
+//!   doubles that gap for the next one, up to [`HOLD_MAX_MS`], so a quality that keeps changing
+//!   is held longer. [`HOLD_RESET_MS`] without a change brings it back to [`STEP_GAP_MS`], and so
+//!   does a quality picked by hand ([`NetLimit::picked`]). Only the relapse drop above ignores it.
 //! - The limit lasts as long as the app runs (it lives in `AppState`).
 //!
 //! Not used: mpv's download speed (`cache-speed`). On live HLS it read about twice the real rate
@@ -68,8 +73,15 @@ impl Tier {
 pub const LOW_BUFFER_MS: u32 = 1_000;
 /// A stream struggles once its buffer has been low this long without a break.
 pub const LOW_FOR_MS: u64 = 5_000;
-/// The shortest time between two steps, so each reload can settle before the next judgement.
+/// The shortest time between two changes, so each reload can settle before the next judgement.
+/// Each change the rule makes doubles it for the next one, up to [`HOLD_MAX_MS`].
 pub const STEP_GAP_MS: u64 = 10_000;
+/// The longest the gap between two changes grows to.
+pub const HOLD_MAX_MS: u64 = 300_000;
+/// This long without a change brings the gap back to [`STEP_GAP_MS`].
+pub const HOLD_RESET_MS: u64 = 600_000;
+/// The most steps one stall lowers a tier by at once.
+pub const STALL_STEPS: u8 = 2;
 /// Healthy reports for this long bring one step back.
 pub const CALM_MS: u64 = 120_000;
 /// The longest the wait for a step back grows to.
@@ -80,7 +92,8 @@ pub const RELAPSE_MS: u64 = 30_000;
 /// was watched. A low-buffer spell, or a calm spell, starts again.
 pub const REPORT_GAP_MS: u64 = 2_500;
 
-/// The limit moved one step.
+/// The limit moved: a tier went down (one step, or two on a stall: see [`NetLimit::steps`]) or one
+/// step up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Change {
     Lowered(Tier),
@@ -104,8 +117,11 @@ pub struct NetLimit {
     low: [Option<Spell>; MAX_STREAMS],
     /// The latest report of any player.
     last_report: Option<u64>,
-    /// When the limit last moved.
+    /// When the limit last moved, or a quality was picked by hand.
     last_change: Option<u64>,
+    /// The changes the rule made one after the other, each within [`HOLD_RESET_MS`] of the one
+    /// before, since the last pick by hand: what the gap after the latest has grown to.
+    streak: u32,
     /// Since when every report has been healthy.
     calm_since: Option<u64>,
     /// The latest step back, until it has lasted `RELAPSE_MS`.
@@ -121,6 +137,7 @@ impl Default for NetLimit {
             low: [None; MAX_STREAMS],
             last_report: None,
             last_change: None,
+            streak: 0,
             calm_since: None,
             rose: None,
             calm_needed: CALM_MS,
@@ -144,14 +161,33 @@ impl NetLimit {
         self.calm_needed
     }
 
-    /// Takes the report of the player on `slot`, taken at `at`. `room` says whether a tier has a
-    /// stream on screen that can still go lower. Returns the step the limit moved, if it did.
+    /// The shortest gap after the latest change before the rule makes another (a relapse drop
+    /// aside): [`STEP_GAP_MS`], doubled for each change the rule made since the hold was last
+    /// reset, up to [`HOLD_MAX_MS`].
+    pub fn hold_ms(&self) -> u64 {
+        let doublings = self.streak.saturating_sub(1).min(16);
+        (STEP_GAP_MS << doublings).min(HOLD_MAX_MS)
+    }
+
+    /// A quality was picked by hand. It loads at once whatever the hold, and resets the hold: the
+    /// rule's next change waits [`STEP_GAP_MS`] from now (the latest report), so the new stream
+    /// can settle, and the gaps grow from there again.
+    pub fn picked(&mut self) {
+        self.streak = 0;
+        if let Some(at) = self.last_report {
+            self.moved(at);
+        }
+    }
+
+    /// Takes the report of the player on `slot`, taken at `at`. `room` says how many renditions
+    /// lower the streams of a tier on screen can still go (the most of any of them; 0 when none
+    /// can). Returns how the limit moved, if it did.
     pub fn report(
         &mut self,
         slot: Slot,
         health: Health,
         at: u64,
-        room: impl Fn(Tier) -> bool,
+        room: impl Fn(Tier) -> u8,
     ) -> Option<Change> {
         let i = usize::from(slot);
         if i >= MAX_STREAMS {
@@ -179,7 +215,7 @@ impl NetLimit {
         let long_low = spell.is_some_and(|s| at.saturating_sub(s.since) >= LOW_FOR_MS);
 
         if health.stalled || long_low {
-            return self.struggle(at, room);
+            return self.struggle(at, health.stalled, room);
         }
         if low {
             // Not a struggle yet, but not calm either.
@@ -189,23 +225,25 @@ impl NetLimit {
         self.calm(at)
     }
 
-    fn struggle(&mut self, at: u64, room: impl Fn(Tier) -> bool) -> Option<Change> {
+    fn struggle(&mut self, at: u64, stalled: bool, room: impl Fn(Tier) -> u8) -> Option<Change> {
         self.calm_since = Some(at);
         if let Some((rose_at, tier)) = self.rose.take() {
             if at.saturating_sub(rose_at) < RELAPSE_MS {
-                // The step back was too soon: drop it again now, and wait longer next time.
+                // The step back was too soon: drop it again now, whatever the hold, and wait
+                // longer next time.
                 self.calm_needed = (self.calm_needed * 2).min(CALM_MAX_MS);
-                return Some(self.lower(tier, at));
+                return Some(self.lower(tier, 1, at));
             }
         }
-        if self
-            .last_change
-            .is_some_and(|t| at.saturating_sub(t) < STEP_GAP_MS)
-        {
+        if self.held(at) {
             return None;
         }
-        let tier = Tier::LOWERED_FIRST.into_iter().find(|t| room(*t))?;
-        Some(self.lower(tier, at))
+        let (tier, room) = Tier::LOWERED_FIRST
+            .into_iter()
+            .map(|t| (t, room(t)))
+            .find(|(_, room)| *room > 0)?;
+        let steps = if stalled { room.min(STALL_STEPS) } else { 1 };
+        Some(self.lower(tier, steps, at))
     }
 
     fn calm(&mut self, at: u64) -> Option<Change> {
@@ -217,7 +255,7 @@ impl NetLimit {
             }
         }
         let since = *self.calm_since.get_or_insert(at);
-        if at.saturating_sub(since) < self.calm_needed {
+        if at.saturating_sub(since) < self.calm_needed || self.held(at) {
             return None;
         }
         let tier = Tier::LOWERED_FIRST
@@ -226,18 +264,38 @@ impl NetLimit {
             .find(|t| self.steps(*t) > 0)?;
         self.lowered[tier.index()] -= 1;
         self.rose = Some((at, tier));
-        self.moved(at);
+        self.changed(at);
         Some(Change::Raised(tier))
     }
 
-    fn lower(&mut self, tier: Tier, at: u64) -> Change {
-        let steps = &mut self.lowered[tier.index()];
-        *steps = steps.saturating_add(1);
-        self.moved(at);
+    /// The latest change was less than the hold ago: the rule must not change anything yet.
+    fn held(&self, at: u64) -> bool {
+        self.last_change
+            .is_some_and(|t| at.saturating_sub(t) < self.hold_ms())
+    }
+
+    fn lower(&mut self, tier: Tier, steps: u8, at: u64) -> Change {
+        let lowered = &mut self.lowered[tier.index()];
+        *lowered = lowered.saturating_add(steps);
+        self.changed(at);
         Change::Lowered(tier)
     }
 
-    /// The limit moved at `at`: streams reload, so spells start again.
+    /// The rule changed the limit at `at`: the hold doubles, unless the last change was so long
+    /// ago that it starts again.
+    fn changed(&mut self, at: u64) {
+        if self
+            .last_change
+            .is_some_and(|t| at.saturating_sub(t) >= HOLD_RESET_MS)
+        {
+            self.streak = 0;
+        }
+        self.streak = self.streak.saturating_add(1);
+        self.moved(at);
+    }
+
+    /// The streams reload at `at` (the limit moved, or a quality was picked), so spells start
+    /// again.
     fn moved(&mut self, at: u64) {
         self.last_change = Some(at);
         self.calm_since = Some(at);

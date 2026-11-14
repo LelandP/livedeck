@@ -2,7 +2,7 @@
 //! URL to the slot's player in the `PlayerPool`. Player events come back as core `Event`s carrying
 //! the slot. Slot 0 (`MAIN_SLOT`) is the single player; multiview's tiles use the others too.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,6 +73,9 @@ pub struct Playback<R> {
     /// latency or sound only, or back to live) while it plays goes through the slot's spare player,
     /// so the picture never stops (`PlayerPool::spare`).
     loaded: std::sync::Mutex<[Option<Loaded>; SLOTS]>,
+    /// Whether what each slot last loaded is on the clock its other renditions share (see
+    /// [`on_shared_clock`]): a new quality of it then takes over at the old picture's moment.
+    clocked: [AtomicBool; SLOTS],
     /// The video each slot plays or is loading, and its speed: set by `PlayVideo` (a new video
     /// starts at normal speed), cleared by `Play` and `StopPlayback`. Kept here, not only in the
     /// player, so a quality change, which loads in a fresh spare player, keeps the speed.
@@ -119,6 +122,7 @@ impl<R: StreamResolver> Playback<R> {
             resolves: tokio::sync::Semaphore::new(RESOLVES_AT_ONCE),
             generations: std::array::from_fn(|_| AtomicU64::new(0)),
             loaded: std::sync::Mutex::default(),
+            clocked: std::array::from_fn(|_| AtomicBool::new(false)),
             speeds: std::sync::Mutex::default(),
             tap: MainTap::default(),
         }
@@ -463,16 +467,28 @@ impl<R: StreamResolver> Playback<R> {
 
     /// The player to load `what` into `slot`, noting it as loaded. The stream on screen again, at
     /// another quality, goes to the spare: the old one plays until the new one's first frame.
-    /// Anything else replaces it at once.
-    fn loader(&self, slot: Slot, what: Loaded) -> Arc<dyn htpc_player::Player> {
+    /// Anything else replaces it at once. `clocked`: `what` is on its renditions' shared clock
+    /// ([`on_shared_clock`]); if the old one was too, the spare takes over at the old picture's
+    /// moment, so the swap never skips forward (plan 14). Otherwise it swaps at its first frame,
+    /// near the live edge.
+    fn loader(&self, slot: Slot, what: Loaded, clocked: bool) -> Arc<dyn htpc_player::Player> {
         let before = self.set_loaded(slot, Some(what.clone()));
+        let was_clocked = self.clocked[usize::from(slot)].swap(clocked, Ordering::SeqCst);
         let again = before.is_some_and(|b| b.is_same(&what));
         let spare = (again && self.pool.is_playing(slot))
             .then(|| self.pool.spare(slot))
             .flatten();
         match spare {
             Some(spare) => {
-                tracing::debug!(slot, "loading the new quality behind the old one");
+                let clock = (clocked && was_clocked)
+                    .then(|| self.pool.clock(slot))
+                    .flatten();
+                if let Some(clock) = clock {
+                    tracing::debug!(slot, "loading the new quality at the old one's moment");
+                    spare.take_over(clock);
+                } else {
+                    tracing::debug!(slot, "loading the new quality behind the old one");
+                }
                 spare
             }
             None => self.pool.fresh(slot),
@@ -499,7 +515,8 @@ impl<R: StreamResolver> Playback<R> {
                     Latency::Low => htpc_player::Latency::Low,
                     Latency::Normal => htpc_player::Latency::Normal,
                 };
-                let player = self.loader(slot, Loaded::Live(channel.clone()));
+                let clocked = on_shared_clock(stream);
+                let player = self.loader(slot, Loaded::Live(channel.clone()), clocked);
                 // Before the load, as mpv reads it when the file opens. Without an audio
                 // rendition Streamlink falls back to video, which is then still not decoded.
                 let video = !matches!(stream, StreamKind::AudioOnly);
@@ -552,7 +569,9 @@ impl<R: StreamResolver> Playback<R> {
                 let milli = self.speeds()[usize::from(slot)]
                     .as_ref()
                     .map_or(NORMAL_SPEED, |s| s.milli);
-                let player = self.loader(slot, Loaded::Video(video.clone()));
+                // Twitch's videos and clips: their renditions share the position's clock.
+                let clocked = on_shared_clock(stream);
+                let player = self.loader(slot, Loaded::Video(video.clone()), clocked);
                 let picture = !matches!(stream, StreamKind::AudioOnly);
                 player.set_option(htpc_player::PlayerOption::Video(picture));
                 player.set_option(htpc_player::PlayerOption::Speed(milli));
@@ -631,6 +650,16 @@ fn unresolved(channel: ChannelRef, err: ResolveError) -> Vec<Event> {
 /// (captions-plan.md, section 1). Not a multiview tile. Kick's renditions are not checked yet.
 fn tappable(channel: &ChannelRef, stream: StreamKind) -> bool {
     channel.is_twitch() && matches!(stream, StreamKind::Video(_))
+}
+
+/// Whether `stream` is on the clock all its renditions share, so a new quality can take over at
+/// the old picture's moment (plan 14). Twitch's video renditions are (the captions spike: 160p30
+/// and 1080p60 within 0.2 s), and so are Kick's: `quality_swap_probe clock` lined up their audio
+/// at 0 ms (480p, 720p60) and −43 ms (160p, 1080p60, the same as Twitch's pair), 2026-11-14.
+/// Twitch's `audio_only` rendition runs on another clock (captions-plan.md, section 1), so sound
+/// only, either way, swaps at its first frame as before.
+fn on_shared_clock(stream: StreamKind) -> bool {
+    !matches!(stream, StreamKind::AudioOnly)
 }
 
 /// The resolver's name for a platform.
@@ -1299,6 +1328,7 @@ mod tests {
         assert_eq!(
             spare[1..],
             [
+                PlayerCall::TakeOver(None),
                 VIDEO_ON,
                 fast.clone(),
                 PlayerCall::Load("u".into(), LoadOptions::video(65_000))
@@ -1309,6 +1339,84 @@ mod tests {
         pb.execute(play_video("43", 0)).await;
         let calls = fakes.calls(MAIN_SLOT);
         assert_eq!(calls[calls.len() - 2], NORMAL);
+    }
+
+    /// The calls of the spare loading on the single player's slot.
+    fn spare_calls(fakes: &FakePool) -> Vec<PlayerCall> {
+        fakes.spare(MAIN_SLOT).expect("a spare").calls()
+    }
+
+    fn quality(channel: ChannelRef, stream: StreamKind) -> Command {
+        Command::Play {
+            slot: MAIN_SLOT,
+            channel,
+            stream,
+            latency: Latency::Low,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_quality_is_seeked_to_the_old_pictures_moment() {
+        let (pb, MainPlayer(fakes)) = playback(FakeResolver::playing("u"));
+        pb.execute(play("chan")).await;
+        fakes.emit(MAIN_SLOT, PlayerEvent::Playing);
+        let old = fakes.player(MAIN_SLOT).unwrap();
+        old.set_clock(Some(3_600_250));
+
+        // A lower quality: the spare is told the old player's clock before it loads.
+        let lower = StreamKind::Tile {
+            rendition: Rendition::P360,
+            rate: FrameRate::Smooth,
+        };
+        pb.execute(quality(ChannelRef::twitch("chan"), lower)).await;
+        assert_eq!(
+            spare_calls(&fakes)[1..],
+            [
+                PlayerCall::TakeOver(Some(3_600_250)),
+                VIDEO_ON,
+                PlayerCall::Load("u".into(), LoadOptions::default())
+            ]
+        );
+        assert_eq!(old.calls().len(), 2, "the old one plays on");
+
+        // A video goes by its position the same way.
+        let (pb, MainPlayer(fakes)) = playback(FakeResolver::playing("u"));
+        pb.execute(play_video("42", 0)).await;
+        fakes.emit(MAIN_SLOT, PlayerEvent::Playing);
+        fakes.player(MAIN_SLOT).unwrap().set_clock(Some(65_400));
+        pb.execute(play_video("42", 65_000)).await;
+        assert_eq!(spare_calls(&fakes)[1], PlayerCall::TakeOver(Some(65_400)));
+    }
+
+    #[tokio::test]
+    async fn kick_takes_over_too_but_sound_only_swaps_at_the_first_frame_as_before() {
+        let has_take_over =
+            |calls: &[PlayerCall]| calls.iter().any(|c| matches!(c, PlayerCall::TakeOver(_)));
+        let lower = StreamKind::Video(Quality::P480);
+
+        // Kick: its renditions share a clock as well.
+        let kick = ChannelRef::new(Platform::Kick, "chan");
+        let (pb, MainPlayer(fakes)) = playback(FakeResolver::playing("u"));
+        pb.execute(quality(kick.clone(), StreamKind::Video(Quality::P720)))
+            .await;
+        fakes.emit(MAIN_SLOT, PlayerEvent::Playing);
+        fakes.player(MAIN_SLOT).unwrap().set_clock(Some(10_000));
+        pb.execute(quality(kick, lower)).await;
+        assert_eq!(spare_calls(&fakes)[1], PlayerCall::TakeOver(Some(10_000)));
+
+        // Twitch's sound only is on another clock, both ways.
+        let twitch = ChannelRef::twitch("chan");
+        let (pb, MainPlayer(fakes)) = playback(FakeResolver::playing("u"));
+        pb.execute(play("chan")).await;
+        fakes.emit(MAIN_SLOT, PlayerEvent::Playing);
+        fakes.player(MAIN_SLOT).unwrap().set_clock(Some(10_000));
+        pb.execute(quality(twitch.clone(), StreamKind::AudioOnly))
+            .await;
+        assert!(!has_take_over(&spare_calls(&fakes)));
+        fakes.spare(MAIN_SLOT).unwrap().emit(PlayerEvent::Playing);
+        fakes.player(MAIN_SLOT).unwrap().set_clock(Some(12_000));
+        pb.execute(quality(twitch, lower)).await;
+        assert!(!has_take_over(&spare_calls(&fakes)));
     }
 
     #[tokio::test]

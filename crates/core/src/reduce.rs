@@ -598,6 +598,8 @@ fn change_player_option(
         PlayerMenuRow::Quality if s.audio_only => {}
         PlayerMenuRow::Quality => {
             s.session.quality = Some(s.quality().cycled(forward));
+            // Picked by hand: at once, and the slow-network rule's hold starts again.
+            s.net.picked();
             reload_playback(s, cmds);
         }
         PlayerMenuRow::Latency => {

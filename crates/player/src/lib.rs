@@ -14,7 +14,9 @@
 //! Several streams play at once through a [`PlayerPool`]: one player per [`Slot`], made on demand.
 //! Slot 0 ([`MAIN_SLOT`]) is the single player. With `mpv`, `VideoOutputs` draws every slot's
 //! frames from the window's one rendering notifier. A new quality of the stream on screen loads in
-//! a hidden spare player and takes over at its first frame ([`PlayerPool::spare`]).
+//! a hidden spare player and takes over at its first frame ([`PlayerPool::spare`]). Where the
+//! renditions share a clock, the spare first finds the old picture's moment
+//! ([`Player::take_over`], [`PlayerClock`]), so the swap never skips forward (plan 14).
 //!
 //! An [`AudioTaps`] starts audio taps for captions: `AudioTap` (feature `mpv`) is a second,
 //! headless libmpv that turns a stream's audio into 16 kHz mono [`PcmChunk`]s on the stream's own
@@ -26,6 +28,9 @@
 mod fake;
 mod pace;
 mod pool;
+// The take-over rule is only driven by `MpvPlayer`; its tests run either way.
+#[cfg_attr(not(feature = "mpv"), allow(dead_code))]
+mod sync;
 mod tap;
 
 #[cfg(feature = "mpv")]
@@ -52,6 +57,7 @@ pub use mpv::{encode_file, MpvPlayer};
 pub use output::{VideoOutput, VideoOutputs};
 pub use pace::RefreshRate;
 pub use pool::{FakePool, PlayerPool, Report, Seat, IDLE_DROP};
+pub use sync::{ClockReading, ClockWatch, PlayerClock};
 pub use tap::{
     AudioTaps, FakeTaps, NoTaps, PcmChunk, Splice, Spliced, TapEvent, TapHandle, TapOptions,
     TapPace, TapSink, LOOKAHEAD_S, TAP_RATE,
@@ -237,4 +243,18 @@ pub trait Player: Send + Sync + 'static {
     fn fade_out(&self, duration: std::time::Duration);
     /// Stops a fade and sets the volume back to full.
     fn restore_volume(&self);
+    /// Where this player's picture is, for a player taking over from it ([`Player::take_over`]).
+    /// `None` if it cannot tell.
+    fn clock(&self) -> Option<PlayerClock> {
+        None
+    }
+    /// The next [`Player::load`] takes over from the player whose picture `from` tells, on the
+    /// same clock (another rendition of the same stream): it loads paused (a live stream a few
+    /// segments further back), seeks to that player's moment plus the time the seek takes, and
+    /// reports [`PlayerEvent::Playing`] on a frame at or just before the old picture, never ahead
+    /// of it. If it cannot reach the moment it plays from behind. A paused old player is not
+    /// waited for. A player that cannot do this loads as usual.
+    fn take_over(&self, from: PlayerClock) {
+        let _ = from;
+    }
 }

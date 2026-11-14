@@ -4,10 +4,20 @@
 //! The display is never reported here, so it counts as the Deck's 1280x800: grid tiles want 360p.
 
 use htpc_core::netlimit::{
-    Change, CALM_MAX_MS, CALM_MS, LOW_FOR_MS, RELAPSE_MS, REPORT_GAP_MS, STEP_GAP_MS,
+    Change, CALM_MAX_MS, CALM_MS, HOLD_MAX_MS, HOLD_RESET_MS, LOW_FOR_MS, RELAPSE_MS,
+    REPORT_GAP_MS, STEP_GAP_MS,
 };
 use htpc_core::*;
 use Tier::{MutedBig, MutedSmall, Sound};
+
+/// When the rule may change the limit again and again from 0, as the gap doubles: 0, 10 s, 30 s,
+/// 70 s, 150 s, 310 s, then 5 min apart.
+const CHANGES_AT: [u64; 8] = [
+    0, 10_000, 30_000, 70_000, 150_000, 310_000, 610_000, 910_000,
+];
+
+/// Every tier has room for many steps.
+const ROOM: u8 = 4;
 
 // ---------------------------------------------------------------------------------------------
 // NetLimit
@@ -40,13 +50,13 @@ type Report = (u64, Slot, Health);
 
 /// Feeds `script` to `net` with every tier having room, and returns each change with its time.
 fn feed(net: &mut NetLimit, script: &[Report]) -> Vec<(u64, Change)> {
-    feed_with_room(net, script, |_| true)
+    feed_with_room(net, script, |_| ROOM)
 }
 
 fn feed_with_room(
     net: &mut NetLimit,
     script: &[Report],
-    room: impl Fn(Tier) -> bool + Copy,
+    room: impl Fn(Tier) -> u8 + Copy,
 ) -> Vec<(u64, Change)> {
     script
         .iter()
@@ -60,10 +70,15 @@ fn feed_until(net: &mut NetLimit, script: &[Report], steps: u8) -> Vec<(u64, Cha
         .iter()
         .filter_map(|(at, slot, h)| {
             let before = net.clone();
-            net.report(*slot, *h, *at, |t| before.steps(t) < steps)
+            net.report(*slot, *h, *at, |t| steps.saturating_sub(before.steps(t)))
                 .map(|c| (*at, c))
         })
         .collect()
+}
+
+/// The steps of each tier, muted small first.
+fn steps(net: &NetLimit) -> [u8; 3] {
+    [net.steps(MutedSmall), net.steps(MutedBig), net.steps(Sound)]
 }
 
 /// `slot` reporting `health` every second from `from` ms up to and including `to` ms.
@@ -84,27 +99,20 @@ fn healthy_reports_change_nothing() {
 #[test]
 fn a_stall_lowers_muted_small_then_muted_big_then_the_sound() {
     let mut net = NetLimit::default();
-    let script = [
-        (0, 1, STALL),
-        (STEP_GAP_MS, 1, STALL),
-        (2 * STEP_GAP_MS, 1, STALL),
-        (3 * STEP_GAP_MS, 1, STALL),
-    ];
+    let script: Vec<Report> = CHANGES_AT[..4].iter().map(|at| (*at, 1, STALL)).collect();
     // Each tier can go one rendition lower: they go in turn, and then nothing is left.
     assert_eq!(
         feed_until(&mut net, &script, 1),
         [
-            (0, Change::Lowered(MutedSmall)),
-            (STEP_GAP_MS, Change::Lowered(MutedBig)),
-            (2 * STEP_GAP_MS, Change::Lowered(Sound)),
+            (CHANGES_AT[0], Change::Lowered(MutedSmall)),
+            (CHANGES_AT[1], Change::Lowered(MutedBig)),
+            (CHANGES_AT[2], Change::Lowered(Sound)),
         ]
     );
-    assert_eq!(
-        [net.steps(MutedSmall), net.steps(MutedBig), net.steps(Sound)],
-        [1, 1, 1]
-    );
+    assert_eq!(steps(&net), [1, 1, 1]);
 
-    // The muted small tiles go as low as they can before the next tier is touched.
+    // The muted small tiles go as low as they can before the next tier is touched: two steps at
+    // a stall, then the one left.
     let mut net = NetLimit::default();
     let lowered: Vec<Change> = feed_until(&mut net, &script, 3)
         .into_iter()
@@ -115,18 +123,18 @@ fn a_stall_lowers_muted_small_then_muted_big_then_the_sound() {
         [
             Change::Lowered(MutedSmall),
             Change::Lowered(MutedSmall),
-            Change::Lowered(MutedSmall),
+            Change::Lowered(MutedBig),
             Change::Lowered(MutedBig),
         ]
     );
-    assert_eq!(net.steps(Sound), 0);
+    assert_eq!(steps(&net), [3, 3, 0]);
 }
 
 #[test]
 fn a_tier_without_room_is_skipped_and_with_none_nothing_moves() {
     // A grid: no muted tile is bigger than another, so there are no muted big ones.
     let mut net = NetLimit::default();
-    let grid = |t: Tier| t != MutedBig;
+    let grid = |t: Tier| if t == MutedBig { 0 } else { ROOM };
     let script = [(0, 1, STALL), (STEP_GAP_MS, 1, STALL)];
     assert_eq!(
         feed_with_room(&mut net, &script, grid),
@@ -138,22 +146,108 @@ fn a_tier_without_room_is_skipped_and_with_none_nothing_moves() {
     // The single player: only the sound.
     let mut net = NetLimit::default();
     assert_eq!(
-        feed_with_room(&mut net, &[(0, 0, STALL)], |t| t == Sound),
+        feed_with_room(&mut net, &[(0, 0, STALL)], |t| if t == Sound {
+            ROOM
+        } else {
+            0
+        }),
         [(0, Change::Lowered(Sound))]
     );
     // Everything at 160p already.
     let mut net = NetLimit::default();
-    assert!(feed_with_room(&mut net, &[(0, 0, STALL)], |_| false).is_empty());
+    assert!(feed_with_room(&mut net, &[(0, 0, STALL)], |_| 0).is_empty());
     assert!(!net.is_limited());
 }
 
 #[test]
-fn steps_are_at_least_ten_seconds_apart() {
+fn the_gap_between_changes_doubles_from_ten_seconds_up_to_five_minutes() {
+    // Stalling every second for 16 minutes: a change whenever the hold allows.
     let mut net = NetLimit::default();
-    let script = every_second(2, STALL, 0, 25_000);
-    let changes = feed(&mut net, &script);
+    let script = every_second(2, STALL, 0, 960_000);
+    let changes = feed_until(&mut net, &script, u8::MAX);
     let times: Vec<u64> = changes.iter().map(|(at, _)| *at).collect();
-    assert_eq!(times, [0, STEP_GAP_MS, 2 * STEP_GAP_MS]);
+    assert_eq!(times, CHANGES_AT);
+    let gaps: Vec<u64> = times.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(
+        gaps,
+        [
+            10_000,
+            20_000,
+            40_000,
+            80_000,
+            160_000,
+            HOLD_MAX_MS,
+            HOLD_MAX_MS
+        ]
+    );
+    assert_eq!(net.hold_ms(), HOLD_MAX_MS);
+}
+
+#[test]
+fn ten_minutes_without_a_change_bring_the_gap_back_to_ten_seconds() {
+    // Four changes: the next waits 80 s after the last, at 70 s.
+    let held = || {
+        let mut net = NetLimit::default();
+        let script: Vec<Report> = CHANGES_AT[..4].iter().map(|at| (*at, 1, STALL)).collect();
+        assert_eq!(feed(&mut net, &script).len(), 4);
+        assert_eq!(net.hold_ms(), 80_000);
+        net
+    };
+    let last = CHANGES_AT[3];
+
+    // Nothing is watched for ten minutes. The next stall lowers, and the one after waits only
+    // 10 s.
+    let mut net = held();
+    let back = last + HOLD_RESET_MS;
+    let changes = feed(&mut net, &every_second(1, STALL, back, back + 60_000));
+    let times: Vec<u64> = changes.iter().map(|(at, _)| *at).collect();
+    assert_eq!(times, [back, back + STEP_GAP_MS, back + 3 * STEP_GAP_MS]);
+
+    // Back a little sooner: the gaps go on growing (160 s after that stall).
+    let mut net = held();
+    let back = last + HOLD_RESET_MS - 10_000;
+    let changes = feed(&mut net, &every_second(1, STALL, back, back + 170_000));
+    let times: Vec<u64> = changes.iter().map(|(at, _)| *at).collect();
+    assert_eq!(times, [back, back + 160_000]);
+}
+
+#[test]
+fn a_stall_drops_two_steps_at_once_and_a_low_buffer_one() {
+    // A stall: two renditions at once, so the tiles reload once instead of twice.
+    let mut net = NetLimit::default();
+    assert_eq!(
+        feed(&mut net, &[(0, 1, STALL)]),
+        [(0, Change::Lowered(MutedSmall))]
+    );
+    assert_eq!(steps(&net), [2, 0, 0]);
+
+    // Only one where the tier has room for one: the second step is not taken from another tier.
+    let mut net = NetLimit::default();
+    feed_until(&mut net, &[(0, 1, STALL)], 1);
+    assert_eq!(steps(&net), [1, 0, 0]);
+
+    // A buffer that stays low (no stall): one step.
+    let mut net = NetLimit::default();
+    let changes = feed(&mut net, &every_second(1, LOW, 0, LOW_FOR_MS));
+    assert_eq!(changes, [(LOW_FOR_MS, Change::Lowered(MutedSmall))]);
+    assert_eq!(steps(&net), [1, 0, 0]);
+}
+
+#[test]
+fn a_quality_picked_by_hand_resets_the_hold() {
+    let mut net = NetLimit::default();
+    let script: Vec<Report> = CHANGES_AT[..4].iter().map(|at| (*at, 1, STALL)).collect();
+    feed(&mut net, &script);
+    assert_eq!(net.hold_ms(), 80_000);
+
+    // Picked at 75 s (the latest report): the rule waits 10 s from there, not 80 s from 70 s,
+    // and its gaps grow from 10 s again.
+    feed(&mut net, &[(75_000, 1, OK)]);
+    net.picked();
+    assert_eq!(net.hold_ms(), STEP_GAP_MS);
+    let changes = feed(&mut net, &every_second(1, STALL, 76_000, 120_000));
+    let times: Vec<u64> = changes.iter().map(|(at, _)| *at).collect();
+    assert_eq!(times, [85_000, 95_000, 115_000]);
 }
 
 #[test]
@@ -202,25 +296,21 @@ fn a_low_buffer_spell_is_per_player_and_breaks_on_a_gap() {
 #[test]
 fn two_calm_minutes_raise_one_step_the_sound_first() {
     let mut net = NetLimit::default();
-    let stalls = [
-        (0, 1, STALL),
-        (STEP_GAP_MS, 1, STALL),
-        (2 * STEP_GAP_MS, 1, STALL),
-    ];
+    let stalls: Vec<Report> = CHANGES_AT[..3].iter().map(|at| (*at, 1, STALL)).collect();
     feed_until(&mut net, &stalls, 1);
-    assert!(net.steps(Sound) == 1 && net.steps(MutedBig) == 1 && net.steps(MutedSmall) == 1);
+    assert_eq!(steps(&net), [1, 1, 1]);
 
-    let start = 2 * STEP_GAP_MS;
-    let changes = feed(
-        &mut net,
-        &every_second(1, OK, start + 1_000, start + 3 * CALM_MS),
-    );
+    // Three changes so far: the hold is 40 s, then 80 s, then 160 s, which outlasts the calm
+    // wait before the last step back.
+    let start = CHANGES_AT[2];
+    let last = start + 2 * CALM_MS + 160_000;
+    let changes = feed(&mut net, &every_second(1, OK, start + 1_000, last));
     assert_eq!(
         changes,
         [
             (start + CALM_MS, Change::Raised(Sound)),
             (start + 2 * CALM_MS, Change::Raised(MutedBig)),
-            (start + 3 * CALM_MS, Change::Raised(MutedSmall)),
+            (last, Change::Raised(MutedSmall)),
         ]
     );
     assert!(!net.is_limited());
@@ -593,9 +683,11 @@ fn the_single_player_lowers_its_stream_and_says_so() {
     let ceiling = Rendition::ceiling(s.quality());
     assert_eq!(s.stream_kind(), StreamKind::Video(s.quality()));
 
+    // A stall: two renditions lower in one reload.
     let (s, cmds) = run(&s, vec![health(MAIN_SLOT, 0, STALL).into()]);
+    assert!(ceiling.above_lowest() >= 2);
     let want = StreamKind::Tile {
-        rendition: ceiling.lowered(1),
+        rendition: ceiling.lowered(2),
         rate: FrameRate::Smooth,
     };
     assert_eq!(played(&cmds), [(MAIN_SLOT, want)]);
@@ -603,6 +695,28 @@ fn the_single_player_lowers_its_stream_and_says_so() {
     assert_eq!(s.playback, Playback::Playing);
     assert_eq!(s.toasts[0].kind, ToastKind::SlowNetwork { muted: false });
     assert_eq!(s.stream_kind(), want);
+}
+
+#[test]
+fn picking_a_quality_in_the_player_menu_resets_the_hold() {
+    let mut s = watching();
+    // A low buffer for 5 s, twice: one step each, the second 10 s after the first.
+    for (from, to) in [(0, LOW_FOR_MS), (STEP_GAP_MS, STEP_GAP_MS + LOW_FOR_MS)] {
+        let reports = every_second(MAIN_SLOT, LOW, from, to)
+            .into_iter()
+            .map(|(at, slot, h)| health(slot, at, h).into())
+            .collect();
+        s = run(&s, reports).0;
+        s = reduce(&s, Event::PlaybackStarted { slot: MAIN_SLOT }).0;
+    }
+    assert_eq!(s.net.steps(Tier::Sound), 2);
+    assert_eq!(s.net.hold_ms(), 2 * STEP_GAP_MS);
+
+    let (s, _) = reduce(&s, Intent::Menu);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
+    let (s, cmds) = reduce(&s, Intent::Left);
+    assert_eq!(played(&cmds).len(), 1, "the pick loads at once");
+    assert_eq!(s.net.hold_ms(), STEP_GAP_MS);
 }
 
 #[test]

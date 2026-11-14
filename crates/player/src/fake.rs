@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::{LoadOptions, Player, PlayerEvent, PlayerOption};
+use crate::{ClockReading, LoadOptions, Player, PlayerClock, PlayerEvent, PlayerOption};
 
 /// One call to a [`FakePlayer`]. A load's start position and a speed change are in its
 /// [`LoadOptions`] and [`PlayerOption`].
@@ -18,15 +18,20 @@ pub enum PlayerCall {
     SetStats(bool),
     FadeOut(Duration),
     RestoreVolume,
+    /// [`Player::take_over`]: where the clock it takes over from read at the call (`None`: it
+    /// had no reading). The player would seek there.
+    TakeOver(Option<u64>),
 }
 
 type Listener = Box<dyn Fn(PlayerEvent) + Send + Sync>;
 
-/// Records every call. Tests send events with [`FakePlayer::emit`].
+/// Records every call. Tests send events with [`FakePlayer::emit`], and set where its picture is
+/// with [`FakePlayer::set_clock`].
 #[derive(Clone, Default)]
 pub struct FakePlayer {
     calls: Arc<Mutex<Vec<PlayerCall>>>,
     listener: Arc<Mutex<Option<Listener>>>,
+    clock: PlayerClock,
 }
 
 impl FakePlayer {
@@ -48,6 +53,17 @@ impl FakePlayer {
 
     pub fn calls(&self) -> Vec<PlayerCall> {
         self.calls.lock().expect("calls lock").clone()
+    }
+
+    /// Pretends its picture is at `ms` on the stream's clock, playing (`None`: nothing plays).
+    pub fn set_clock(&self, ms: Option<u64>) {
+        self.clock.publish(ms.map(|ms| ClockReading {
+            ms,
+            at: std::time::Instant::now(),
+            paused: false,
+            frozen: false,
+            ahead_ms: 4_000,
+        }));
     }
 
     fn record(&self, call: PlayerCall) {
@@ -86,6 +102,14 @@ impl Player for FakePlayer {
 
     fn restore_volume(&self) {
         self.record(PlayerCall::RestoreVolume);
+    }
+
+    fn clock(&self) -> Option<PlayerClock> {
+        Some(self.clock.clone())
+    }
+
+    fn take_over(&self, from: PlayerClock) {
+        self.record(PlayerCall::TakeOver(from.read().map(|r| r.ms)));
     }
 }
 

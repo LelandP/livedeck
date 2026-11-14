@@ -16,12 +16,36 @@ use libmpv2::{mpv_end_file_reason, Mpv};
 
 use crate::output::VideoOutput;
 use crate::recent::RecentLog;
+use crate::sync::{next_lead_ms, sync_step, ClockWatch, SyncStep, SyncView, SEEK_LEAD_MS};
 use crate::{
-    Latency, LoadOptions, Player, PlayerEvent, PlayerHealth, PlayerOption, PlayerStats, Zoom,
+    ClockReading, Latency, LoadOptions, Player, PlayerClock, PlayerEvent, PlayerHealth,
+    PlayerOption, PlayerStats, Zoom,
 };
 
 /// How often the control thread looks for mpv events when no command arrives.
 const POLL: Duration = Duration::from_millis(50);
+
+/// The same while a load takes over from another player, or another player takes over from
+/// this one: the swap lands within this of its moment.
+const SYNC_POLL: Duration = Duration::from_millis(10);
+
+/// How long a load that takes over waits for the old player's first reading, which says how far
+/// back to start.
+const READING_WAIT: Duration = Duration::from_millis(300);
+
+/// A seek this old that has not finished ends the take-over: the spare goes from where it is.
+const SEEK_MAX: Duration = Duration::from_secs(3);
+
+/// A live load that takes over starts this much further back than the old picture, so it can
+/// seek forward to it (a segment).
+const TAKE_OVER_MARGIN_MS: u32 = 2_000;
+
+/// How far behind the live edge the old picture is taken to be when it has not said: a low
+/// latency stream's 4 to 5 s, with room.
+const TAKE_OVER_GUESS_MS: u32 = 6_000;
+
+/// The furthest back a live load that takes over starts, in segments. Twitch's playlists hold 14.
+const TAKE_OVER_MAX_BACK: u32 = 12;
 
 /// How often stats are read while they are on.
 const STATS_EVERY: Duration = Duration::from_secs(1);
@@ -95,6 +119,8 @@ enum Control {
     FadeOut(Duration),
     /// End a fade: full volume again.
     RestoreVolume,
+    /// The next load takes over from the player of this clock.
+    TakeOver(PlayerClock),
 }
 
 /// mpv's normal volume (its `volume` property is a percentage).
@@ -117,6 +143,8 @@ fn set_volume(mpv: &Mpv, volume: f64) {
 
 pub struct MpvPlayer {
     tx: Mutex<Sender<Control>>,
+    /// Where its picture is, while someone watches (a player taking over from it).
+    clock: PlayerClock,
     /// Lives as long as the player. Its `VideoOutput` holds a weak reference, so the renderer
     /// frees the render context once the player is dropped (see `VideoOutputs`).
     _alive: Arc<()>,
@@ -187,9 +215,11 @@ impl MpvPlayer {
         // Headless, nothing waits for a render context.
         let ready = Arc::new(AtomicBool::new(headless));
         let can_show = Arc::clone(&ready);
+        let clock = PlayerClock::new();
+        let publish = clock.clone();
         std::thread::Builder::new()
             .name("mpv-control".into())
-            .spawn(move || control_loop(&core, &rx, &can_show, &on_event))
+            .spawn(move || control_loop(&core, &rx, &can_show, &publish, &on_event))
             .map_err(|e| format!("could not start the mpv thread: {e}"))?;
 
         let alive = Arc::new(());
@@ -197,6 +227,7 @@ impl MpvPlayer {
         Ok((
             Self {
                 tx: Mutex::new(tx),
+                clock,
                 _alive: alive,
             },
             output,
@@ -243,6 +274,14 @@ impl Player for MpvPlayer {
 
     fn restore_volume(&self) {
         self.send(Control::RestoreVolume);
+    }
+
+    fn clock(&self) -> Option<PlayerClock> {
+        Some(self.clock.clone())
+    }
+
+    fn take_over(&self, from: PlayerClock) {
+        self.send(Control::TakeOver(from));
     }
 }
 
@@ -310,11 +349,143 @@ fn latency_value(option: &str, latency: Latency) -> &'static str {
 /// lavf's options for a live load `delay_ms` behind the edge: the latency's own, plus a start
 /// enough segments back for that buffer. Twitch's playlists hold 14 segments (28 s).
 fn delayed_lavf_options(latency: Latency, delay_ms: u32) -> String {
-    let back = (delay_ms + START_BACK_SHORT_MS).div_ceil(SEGMENT_MS);
+    lavf_start_back(
+        latency,
+        (delay_ms + START_BACK_SHORT_MS).div_ceil(SEGMENT_MS),
+    )
+}
+
+/// lavf's options for a live load `back` segments behind the edge, with the latency's own.
+fn lavf_start_back(latency: Latency, back: u32) -> String {
     let start = format!("live_start_index=-{back}");
     match latency_value("demuxer-lavf-o", latency) {
         "" => start,
         own => format!("{own},{start}"),
+    }
+}
+
+/// How many segments back a live load that takes over starts: a segment or so behind the old
+/// picture, which is about its buffer (`ahead_ms`, or a guess) or the live delay behind the edge,
+/// so the new one seeks forward to it rather than waits.
+fn take_over_back(ahead_ms: Option<u32>, delay_ms: Option<u32>) -> u32 {
+    let behind = ahead_ms
+        .unwrap_or(TAKE_OVER_GUESS_MS)
+        .max(delay_ms.unwrap_or(0));
+    (behind + START_BACK_SHORT_MS + TAKE_OVER_MARGIN_MS)
+        .div_ceil(SEGMENT_MS)
+        .clamp(2, TAKE_OVER_MAX_BACK)
+}
+
+/// Sets up the next load to take over from another player: a live one `back` segments behind
+/// the edge, and either reading far enough ahead to seek to the old picture within its buffer.
+fn apply_take_over_to_load(mpv: &Mpv, latency: Latency, back: Option<u32>) {
+    let lavf = back.map(|back| lavf_start_back(latency, back));
+    let options = lavf
+        .as_deref()
+        .map(|lavf| ("demuxer-lavf-o", lavf))
+        .into_iter()
+        .chain([("demuxer-readahead-secs", DELAY_READAHEAD_S)]);
+    for (name, value) in options {
+        if let Err(e) = mpv.set_property(name, value) {
+            tracing::warn!(option = name, value, %e, "mpv take-over option not applied");
+        }
+    }
+}
+
+/// Where the picture is on the clock a take-over compares by: the stream's own for a live stream
+/// ([`stream_ms`]), the position for a video (the app's `pos_ms`).
+fn clock_ms(mpv: &Mpv, video: bool) -> Option<u64> {
+    if video {
+        number(mpv, "time-pos").map(millis)
+    } else {
+        stream_ms(mpv)
+    }
+}
+
+/// Seeks exactly to `ms` on the clock of [`clock_ms`].
+fn seek_to_clock(mpv: &Mpv, video: bool, ms: u64) {
+    let start = if video {
+        0.0
+    } else {
+        mpv.get_property::<f64>("demuxer-start-time")
+            .ok()
+            .filter(|s| s.is_finite())
+            .unwrap_or(0.0)
+    };
+    let to = (ms as f64 / 1000.0 - start).max(0.0);
+    if let Err(e) = mpv.command("seek", &[format!("{to:.3}").as_str(), "absolute+exact"]) {
+        tracing::warn!(%e, ms, "could not seek to the old player's moment");
+    }
+}
+
+/// This player's picture for its clock: where it is, and whether it moves.
+fn read_clock(mpv: &Mpv, video: bool, user_paused: bool, held: bool) -> Option<ClockReading> {
+    let ms = clock_ms(mpv, video)?;
+    let ahead_ms = buffered_ms(mpv);
+    let flag = |name| mpv.get_property::<bool>(name).unwrap_or(false);
+    let frozen =
+        held || flag("paused-for-cache") || flag("seeking") || (!video && ahead_ms < DRY_BUFFER_MS);
+    Some(ClockReading {
+        ms,
+        at: Instant::now(),
+        paused: user_paused,
+        frozen,
+        ahead_ms,
+    })
+}
+
+/// A load taking over from another player ([`Player::take_over`]), from its load to the moment
+/// it goes.
+struct TakeOver {
+    from: PlayerClock,
+    /// Keeps `from` published.
+    _watch: ClockWatch,
+    /// Its first frame came, paused, at this moment.
+    ready_since: Option<Instant>,
+    /// A seek to the old picture runs, since then.
+    seeking: Option<Instant>,
+    seeks: u8,
+    /// How far ahead of the old picture the next seek aims.
+    lead_ms: u64,
+}
+
+impl TakeOver {
+    fn new(from: PlayerClock, watch: ClockWatch) -> Self {
+        Self {
+            from,
+            _watch: watch,
+            ready_since: None,
+            seeking: None,
+            seeks: 0,
+            lead_ms: SEEK_LEAD_MS,
+        }
+    }
+
+    /// What to do now: `own` is where the paused picture is and `buffered_ms` its buffer ahead.
+    fn step(&self, now: Instant, own: Option<u64>, buffered_ms: u32, video: bool) -> SyncStep {
+        let Some(ready) = self.ready_since else {
+            return SyncStep::Wait;
+        };
+        if let Some(at) = self.seeking {
+            return if now.saturating_duration_since(at) < SEEK_MAX {
+                SyncStep::Wait
+            } else {
+                SyncStep::Go
+            };
+        }
+        let Some(own) = own else {
+            return SyncStep::Go;
+        };
+        sync_step(&SyncView {
+            own_ms: own,
+            cached_until_ms: own + u64::from(buffered_ms),
+            old: self.from.read(),
+            now,
+            seek_anywhere: video,
+            seeks: self.seeks,
+            ready_for: now.saturating_duration_since(ready),
+            lead_ms: self.lead_ms,
+        })
     }
 }
 
@@ -589,6 +760,7 @@ fn control_loop(
     mpv: &Mpv,
     rx: &Receiver<Control>,
     can_show: &AtomicBool,
+    clock: &PlayerClock,
     on_event: &impl Fn(PlayerEvent),
 ) {
     // True from `Load` until the first frame, so `Playing` is reported once per stream.
@@ -612,14 +784,28 @@ fn control_loop(
     // The user's pause. mpv is paused while this or the delay's hold is on.
     let mut user_paused = false;
     let mut delay = Delay::default();
+    // The next load takes over from this clock's player (`Player::take_over`), which publishes
+    // while it is watched.
+    let mut follow: Option<(PlayerClock, ClockWatch)> = None;
+    // The load doing so, paused until it goes.
+    let mut sync: Option<TakeOver> = None;
     loop {
         let mut load = None;
-        match rx.recv_timeout(POLL) {
+        let poll = if sync.is_some() || clock.is_watched() {
+            SYNC_POLL
+        } else {
+            POLL
+        };
+        match rx.recv_timeout(poll) {
             // Held until the render context exists (see `RENDER_WAIT`). A newer load replaces it.
             Ok(Control::Load(url, options)) => waiting = Some((url, options, Instant::now())),
+            Ok(Control::TakeOver(from)) => {
+                let watch = from.watch();
+                follow = Some((from, watch));
+            }
             Ok(Control::Pause(paused)) => {
                 user_paused = paused;
-                let paused = paused || delay.held_since.is_some();
+                let paused = paused || delay.held_since.is_some() || sync.is_some();
                 if let Err(e) = mpv.set_property("pause", paused) {
                     tracing::warn!(%e, "could not change the pause state");
                 }
@@ -637,6 +823,8 @@ fn control_loop(
                 health_due = None;
                 live = false;
                 delay.held_since = None;
+                follow = None;
+                sync = None;
                 if let Err(e) = mpv.command("stop", &[]) {
                     tracing::warn!(%e, "could not stop mpv");
                 }
@@ -644,8 +832,9 @@ fn control_loop(
             Ok(Control::Option(PlayerOption::LiveDelay(ms))) => {
                 let was = std::mem::replace(&mut delay.ms, ms);
                 delay.gave_up = false;
-                if was == ms || !live {
-                    // Nothing plays to change: the next load reads it.
+                if was == ms || !live || sync.is_some() {
+                    // Nothing plays to change: the next load reads it (a take-over, once it
+                    // goes, follows the old player, which gets the same change).
                 } else if ms.is_some() {
                     // Read up to the live edge; the check below holds the picture until the
                     // buffer is long enough.
@@ -688,7 +877,13 @@ fn control_loop(
         }
 
         if waiting.as_ref().is_some_and(|(_, _, since)| {
-            can_show.load(Ordering::SeqCst) || since.elapsed() >= RENDER_WAIT
+            let shown = can_show.load(Ordering::SeqCst) || since.elapsed() >= RENDER_WAIT;
+            // Taking over: the old player's first reading says how far back to start.
+            let read = follow
+                .as_ref()
+                .is_none_or(|(from, _)| from.read().is_some())
+                || since.elapsed() >= READING_WAIT;
+            shown && read
         }) {
             load = waiting.take();
         }
@@ -714,11 +909,18 @@ fn control_loop(
             delay.restarted = false;
             delay.gave_up = false;
             user_paused = false;
-            if let (Some(ms), true) = (delay.ms, live) {
+            sync = None;
+            if let Some((from, watch)) = follow.take() {
+                // Taking over: paused, from behind the old picture, until it reaches it. The
+                // delay comes with it, as the old picture is that far behind.
+                let back = live.then(|| take_over_back(from.read().map(|r| r.ahead_ms), delay.ms));
+                apply_take_over_to_load(mpv, latency, back);
+                sync = Some(TakeOver::new(from, watch));
+            } else if let (Some(ms), true) = (delay.ms, live) {
                 apply_delay_to_load(mpv, latency, ms);
                 delay.held_since = Some(Instant::now());
             }
-            let _ = mpv.set_property("pause", delay.held_since.is_some());
+            let _ = mpv.set_property("pause", delay.held_since.is_some() || sync.is_some());
             // A fade only quietens the stream it ran on.
             fade = None;
             set_volume(mpv, FULL_VOLUME);
@@ -727,6 +929,7 @@ fn control_loop(
                 Err(e) => {
                     live = false;
                     delay.held_since = None;
+                    sync = None;
                     on_event(PlayerEvent::Failed(
                         recent.report(&format!("loadfile failed: {}", describe(&e))),
                     ));
@@ -736,6 +939,16 @@ fn control_loop(
 
         while let Some(event) = mpv.wait_event(0.0) {
             match event {
+                // Taking over: the paused picture is ready (the first frame, or a seek's).
+                Ok(Event::PlaybackRestart) if starting && sync.is_some() => {
+                    if let Some(s) = sync.as_mut() {
+                        let now = Instant::now();
+                        if let Some(at) = s.seeking.take() {
+                            s.lead_ms = next_lead_ms(now.saturating_duration_since(at));
+                        }
+                        s.ready_since.get_or_insert(now);
+                    }
+                }
                 // Held for the delay: `Playing` comes when the hold ends (`end_hold`).
                 Ok(Event::PlaybackRestart) if starting && delay.held_since.is_some() => {
                     delay.restarted = true;
@@ -750,6 +963,7 @@ fn control_loop(
                     health_due = None;
                     live = false;
                     delay.held_since = None;
+                    sync = None;
                     on_event(PlayerEvent::Ended);
                 }
                 // `Stop` and `Redirect` are our own doing (a new load or `stop`).
@@ -771,8 +985,45 @@ fn control_loop(
                     health_due = None;
                     live = false;
                     delay.held_since = None;
+                    sync = None;
                     tracing::warn!(%e, "mpv could not play the stream");
                     on_event(PlayerEvent::Failed(recent.report(&describe(&e))));
+                }
+            }
+        }
+
+        // Taking over: wait, seek, or go once the old picture reaches this one's.
+        if let Some(s) = sync.as_mut() {
+            let now = Instant::now();
+            let own = clock_ms(mpv, video);
+            match s.step(now, own, buffered_ms(mpv), video) {
+                SyncStep::Wait => {}
+                SyncStep::Seek(to) => {
+                    tracing::debug!(own, to, lead = s.lead_ms, "seeking to the old picture");
+                    seek_to_clock(mpv, video, to);
+                    s.seeks += 1;
+                    s.seeking = Some(now);
+                }
+                SyncStep::Go => {
+                    let old = s.from.now_ms();
+                    let behind = old
+                        .zip(own)
+                        .map(|(old, own)| i128::from(old) - i128::from(own));
+                    tracing::debug!(?behind, seeks = s.seeks, "taking over from the old player");
+                    sync = None;
+                    let readahead = if live && delay.ms.is_some() {
+                        DELAY_READAHEAD_S
+                    } else {
+                        latency_value("demuxer-readahead-secs", latency)
+                    };
+                    let _ = mpv.set_property("demuxer-readahead-secs", readahead);
+                    let _ = mpv.set_property("pause", user_paused);
+                    starting = false;
+                    health_due = Some(now + HEALTH_EVERY);
+                    if clock.is_watched() {
+                        clock.publish(read_clock(mpv, video, user_paused, false));
+                    }
+                    on_event(PlayerEvent::Playing);
                 }
             }
         }
@@ -836,6 +1087,17 @@ fn control_loop(
                 }
                 health_due = Some(now + HEALTH_EVERY);
             }
+        }
+
+        // A player taking over from this one is watching: where the picture is, every pass.
+        if clock.is_watched() {
+            let playing = !starting && health_due.is_some();
+            let held = delay.held_since.is_some();
+            clock.publish(
+                playing
+                    .then(|| read_clock(mpv, video, user_paused, held))
+                    .flatten(),
+            );
         }
     }
     tracing::debug!("mpv control thread finished");
@@ -909,6 +1171,22 @@ mod tests {
             latency_value("demuxer-readahead-secs", Latency::Normal),
             "10"
         );
+    }
+
+    #[test]
+    fn a_take_over_starts_a_segment_or_so_behind_the_old_picture() {
+        // 4.5 s buffered (low latency): 4 segments, about 6.5 s behind the edge.
+        assert_eq!(take_over_back(Some(4_500), None), 4);
+        assert_eq!(
+            lavf_start_back(Latency::Low, 4),
+            "fflags=+nobuffer,live_start_index=-4"
+        );
+        // Delayed for captions: behind the delay, whatever the buffer says.
+        assert_eq!(take_over_back(Some(3_000), Some(12_500)), 8);
+        // No reading: a guess. Never further back than the playlist holds.
+        assert_eq!(take_over_back(None, None), 5);
+        assert_eq!(take_over_back(Some(60_000), None), TAKE_OVER_MAX_BACK);
+        assert_eq!(take_over_back(Some(0), None), 2);
     }
 
     #[test]

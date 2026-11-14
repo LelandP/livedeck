@@ -20,13 +20,15 @@ pub(super) fn health(
     if !counts(s, slot) {
         return;
     }
-    let room: Vec<(Tier, bool)> = Tier::LOWERED_FIRST
+    let room: Vec<(Tier, u8)> = Tier::LOWERED_FIRST
         .into_iter()
-        .map(|t| (t, has_room(s, t)))
+        .map(|t| (t, room(s, t)))
         .collect();
     let single_before = s.stream_kind();
     let Some(change) = s.net.report(slot, health, at_ms, |t| {
-        room.iter().any(|(tier, room)| *tier == t && *room)
+        room.iter()
+            .find(|(tier, _)| *tier == t)
+            .map_or(0, |(_, room)| *room)
     }) else {
         return;
     };
@@ -74,16 +76,20 @@ fn counts(s: &AppState, slot: Slot) -> bool {
     }
 }
 
-/// Whether a stream of `tier` on screen can still go a rendition lower. The single player's
-/// stream is the only one of its tier `Sound`.
-fn has_room(s: &AppState, tier: Tier) -> bool {
+/// How many renditions lower the streams of `tier` on screen can still go (the most of any). The
+/// single player's stream is the only one of its tier `Sound`.
+fn room(s: &AppState, tier: Tier) -> u8 {
     if s.multiview.is_some() {
-        return multiview::has_room(s, tier);
+        return multiview::room(s, tier);
     }
     let now = match s.stream_kind() {
-        StreamKind::AudioOnly => return false,
+        StreamKind::AudioOnly => return 0,
         StreamKind::Tile { rendition, .. } => rendition,
         StreamKind::Video(quality) => Rendition::ceiling(quality),
     };
-    tier == Tier::Sound && now > Rendition::P160
+    if tier == Tier::Sound {
+        now.above_lowest()
+    } else {
+        0
+    }
 }

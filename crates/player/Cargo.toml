@@ -53,3 +53,7 @@ required-features = ["mpv"]
 [[example]]
 name = "vod_tap_probe"
 required-features = ["mpv"]
+
+[[example]]
+name = "quality_swap_probe"
+required-features = ["mpv"]

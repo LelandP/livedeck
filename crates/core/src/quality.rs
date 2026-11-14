@@ -82,6 +82,12 @@ impl Rendition {
         Self::ALL[at.saturating_sub(usize::from(steps))]
     }
 
+    /// How many renditions lower this one can go: 0 for the lowest.
+    pub fn above_lowest(self) -> u8 {
+        let at = Self::ALL.iter().position(|r| *r == self).unwrap_or(0);
+        u8::try_from(at).unwrap_or(u8::MAX)
+    }
+
     /// The Streamlink fallback list for this rendition: each height from this one down, in every
     /// spelling Twitch and Kick use, then `worst`. For example `480p30,480p,480p60,360p30,...`.
     pub fn streamlink_list(self, rate: FrameRate) -> String {

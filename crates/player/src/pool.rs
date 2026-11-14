@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use crate::{
-    FakePlayer, LoadOptions, Player, PlayerEvent, PlayerOption, Slot, UnavailablePlayer, MAIN_SLOT,
-    SLOTS,
+    FakePlayer, LoadOptions, Player, PlayerClock, PlayerEvent, PlayerOption, Slot,
+    UnavailablePlayer, MAIN_SLOT, SLOTS,
 };
 
 /// How long a stopped player is kept for a quick restart before it is dropped. An mpv player holds
@@ -237,6 +237,12 @@ impl PlayerPool {
                 None
             }
         }
+    }
+
+    /// Where the picture of `slot`'s player is, for a spare to take over from at the same moment
+    /// ([`Player::take_over`]). `None` without a player, or if it cannot tell.
+    pub fn clock(&self, slot: Slot) -> Option<PlayerClock> {
+        self.existing(slot).and_then(|p| p.clock())
     }
 
     /// The player of `slot` if it has one. Never makes one.
@@ -532,6 +538,10 @@ impl Player for SlotPlayer {
     fn restore_volume(&self) {
         self.existing(|p| p.restore_volume());
     }
+
+    fn clock(&self) -> Option<PlayerClock> {
+        self.pool.clock(self.slot)
+    }
 }
 
 /// Reaches the [`FakePlayer`]s of a pool made by [`PlayerPool::fake`].
@@ -800,6 +810,34 @@ mod tests {
         old.emit(PlayerEvent::Ended);
         assert_eq!(fakes.events().len(), 2);
         assert!(pool.is_playing(2));
+    }
+
+    #[test]
+    fn the_slots_clock_is_its_main_players_and_follows_a_swap() {
+        let (pool, fakes) = playing_slot();
+        assert!(pool.clock(4).is_none(), "no player, no clock");
+        let old = fakes.player(2).unwrap();
+        old.set_clock(Some(3_600_250));
+        let clock = pool.clock(2).expect("a clock");
+        assert_eq!(clock.read().map(|r| r.ms), Some(3_600_250));
+        // The spare takes over from it, then the slot's clock is the spare's.
+        let spare = pool.spare(2).unwrap();
+        spare.take_over(clock);
+        spare.load("new", LoadOptions::default());
+        let fake_spare = fakes.spare(2).unwrap();
+        assert_eq!(
+            fake_spare.calls()[1..],
+            [
+                PlayerCall::TakeOver(Some(3_600_250)),
+                PlayerCall::Load("new".into(), LoadOptions::default()),
+            ]
+        );
+        fake_spare.emit(PlayerEvent::Playing);
+        assert!(pool
+            .clock(2)
+            .unwrap()
+            .is(&spare.clock().expect("the spare's clock")));
+        assert!(pool.handle(2).clock().unwrap().is(&pool.clock(2).unwrap()));
     }
 
     #[test]
