@@ -27,8 +27,8 @@ use crate::video::{
 };
 
 use super::{
-    back, channel, continue_watching, pause_in_background, pop_screen, pulse_hud, push_screen,
-    push_toast, replay, toggle_pause,
+    back, captions, channel, continue_watching, pause_in_background, pop_screen, pulse_hud,
+    push_screen, push_toast, replay, toggle_pause,
 };
 
 /// Plays `item` from `start_ms` on the Player screen, over the current screen (the channel page),
@@ -918,6 +918,9 @@ pub(super) fn health(s: &mut AppState, slot: u8, health: Health, cmds: &mut Vec<
     if !was_muted && v.is_muted_at(pos) {
         pulse_hud(s);
     }
+    // Captions follow the playhead too. Only reports that have landed, so the clock never
+    // hears of the place before a seek.
+    captions::health(s, &health, cmds);
     // The chat replay follows the playhead: lines come due, the next window is asked for.
     replay::tick(s, cmds);
 }

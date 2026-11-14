@@ -10,6 +10,12 @@ publish = false
 # See crates/player/README.md for the setup.
 default = []
 mpv = ["htpc-player/mpv"]
+# Generated captions with whisper.cpp (captions-plan.md). Needs CMake and a C++ compiler to build.
+# Off by default: without it the player menu's Captions row says "Captions unavailable" (--mock
+# still has scripted captions).
+captions = ["htpc-captions/whisper"]
+# whisper.cpp on the GPU through Vulkan (Linux, the Steam Deck): the menu offers the Best quality.
+vulkan = ["captions", "htpc-captions/vulkan"]
 
 [dependencies]
 htpc-core.workspace = true
@@ -21,6 +27,7 @@ htpc-resolver.workspace = true
 htpc-player.workspace = true
 htpc-chat.workspace = true
 htpc-kick-api.workspace = true
+htpc-captions.workspace = true
 # `unstable-winit-030` for the window's focus events (pausing when another app is in front).
 # It pins the exact Slint version through the workspace's `slint = "1.18.1"`.
 slint = { workspace = true, features = ["unstable-winit-030"] }
@@ -32,6 +39,19 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 open.workspace = true
+# The captions' speech models are downloaded on first use and checked with their SHA-256.
+reqwest.workspace = true
+sha2.workspace = true
+
+[[example]]
+# Live captions' timing against a delayed live picture (captions-plan.md, phase 3b).
+name = "caption_timing_probe"
+required-features = ["mpv", "captions"]
+
+[[example]]
+# A video's captions against its picture, and after a seek (captions-plan.md, phase 5).
+name = "caption_video_probe"
+required-features = ["mpv", "captions"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
@@ -40,4 +60,5 @@ zbus.workspace = true
 # Paused time, for the sleep timer tests.
 tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
+tempfile.workspace = true
 serde_json.workspace = true

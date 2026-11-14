@@ -42,10 +42,17 @@ export global Theme {
     out property <length> chat-pad: 20px;
     out property <length> chat-overlay-w: 460px;
     // Player menu (Start while watching) and the stats box over the video.
-    out property <length> menu-w: 460px;
-    // Ten rows plus the help text fit above the HUD at 800 px.
-    out property <length> menu-row-h: 40px;
+    // Wide enough for "Download failed - A to retry" between the arrows.
+    out property <length> menu-w: 520px;
+    // Thirteen rows plus the help text fit above the HUD at 800 px.
+    out property <length> menu-row-h: 32px;
     out property <length> stats-w: 440px;
+    // Generated captions over the bottom of the video: the text size (readable from the couch),
+    // the padding of each line's dark box and the gap between the two lines.
+    out property <length> caption-fs: 30px;
+    out property <length> caption-pad-x: 18px;
+    out property <length> caption-pad-y: 6px;
+    out property <length> caption-gap: 6px;
     // The hype train's compact badge, while the player's HUD is hidden.
     out property <length> hype-badge: 64px;
     // Writing in chat: the keyboard (keys like Search's) with the quick messages above it. In the

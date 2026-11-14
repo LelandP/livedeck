@@ -25,4 +25,6 @@ menu_open=true focus=0 select="Change"
     Audio only = "Off"
     Sleep timer = "Off"
     Channel videos = "" (action)
+    Captions = "Off"
+    Caption quality = "Standard"
   help: Picture quality. Lower uses less data and battery. Reloads the video where it is.

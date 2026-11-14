@@ -652,6 +652,19 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
         "the Write in chat row is not drawn"
     );
 
+    // The thirteenth row (Delay video for caption sync, the last) fits too.
+    let delay = (0..4).fold(last, |s, _| reduce(&s, Intent::Down).0);
+    assert_eq!(
+        delay.player_menu,
+        Some(htpc_core::PlayerMenuRow::CaptionDelay)
+    );
+    Update::full(view_model(&delay)).apply(&ui);
+    let image = render(&ui);
+    assert!(
+        count(&image, 0..560, 300..HINTS_TOP, accent) > 0,
+        "the caption delay row is not drawn"
+    );
+
     // Writing in chat. Side layout: the video shrinks to the top, the keyboard sits under it with
     // its focused key (`Theme.accent`) on `a`, the box at the bottom of the chat panel has its
     // focus border (`Theme.accent-light`), and the hints bar stays. Overlay: the video keeps its
@@ -769,6 +782,187 @@ fn a_busy_chat_lays_out_and_keeps_the_newest_line_in_view() {
     channel_page(&ui);
     video_player(&ui);
     live_end_card(&ui);
+    captions(&ui);
+}
+
+/// Generated captions over the live player: pure white text (nothing else on this screen is that
+/// white) centred at the bottom of the picture, above the HUD while it shows and above the hints
+/// bar once it fades, never under the hints bar and never in the chat's column, in either layout.
+fn captions(ui: &MainWindow) {
+    let white = |p: &Rgba8Pixel| p.r > 250 && p.g > 250 && p.b > 250;
+    let shown = |ui: &MainWindow, s: &AppState| {
+        Update::full(view_model(s)).apply(ui);
+        render(ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        render(ui)
+    };
+    // The rows (top to bottom) with white text in them, within `xs`.
+    let white_rows =
+        |image: &SharedPixelBuffer<Rgba8Pixel>, xs: std::ops::Range<u32>| -> Vec<u32> {
+            (0..HEIGHT)
+                .filter(|&y| count(image, xs.clone(), y..y + 1, white) > 0)
+                .collect()
+        };
+    let at = |s: &AppState, ms: u64| {
+        reduce(
+            s,
+            Event::PlayerHealth {
+                slot: 0,
+                at_ms: 0,
+                health: htpc_core::Health {
+                    stream_ms: Some(ms),
+                    ..Default::default()
+                },
+            },
+        )
+        .0
+    };
+    let say = |s: &AppState, start_ms: u64, text: &str| {
+        reduce(
+            s,
+            Event::Caption {
+                start_ms,
+                end_ms: start_ms + 5_000,
+                text: text.into(),
+                words: Vec::new(),
+            },
+        )
+        .0
+    };
+    // The columns with white text in them, between rows `ys`.
+    let white_cols =
+        |image: &SharedPixelBuffer<Rgba8Pixel>, ys: std::ops::Range<u32>| -> Vec<u32> {
+            (0..WIDTH)
+                .filter(|&x| count(image, x..x + 1, ys.clone(), white) > 0)
+                .collect()
+        };
+
+    for (n, layout) in [ChatLayout::Side, ChatLayout::Overlay]
+        .into_iter()
+        .enumerate()
+    {
+        let mut s = watching_a_busy_chat(layout);
+        s.chat_open = false;
+        s.settings.captions = true;
+        // A button press: the HUD comes back (it faded in the round before).
+        s.hud_pulse = 5_000 + n as u32;
+        let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+        let s = at(&s, 10_000);
+        let none = shown(ui, &s);
+        if count(&none, 0..WIDTH, 0..HEIGHT, white) != 0 {
+            eprintln!("{layout:?}: pure white is not rare here, skipping the captions checks");
+            continue;
+        }
+
+        // One line, HUD up: above the HUD band (the bottom 190 px). Its words are all out (the
+        // clock moves on a second at a time, as the reports do).
+        let walk = |s: &AppState, to_ms: u64| {
+            let from = s.captions.clock_ms.unwrap_or(0);
+            (from..=to_ms)
+                .step_by(1_000)
+                .chain([to_ms])
+                .fold(s.clone(), |s, ms| at(&s, ms))
+        };
+        let one = say(&s, 10_000, "Welcome back, everyone.");
+        let one = walk(&one, 15_000);
+        assert_eq!(view_model(&one).caption_lines.len(), 1);
+        let image = shown(ui, &one);
+        let rows = white_rows(&image, 0..WIDTH);
+        if rows.is_empty() {
+            eprintln!("{layout:?}: no text was rendered (no fonts?), skipping the captions checks");
+            continue;
+        }
+        let (top, bottom) = (rows[0], *rows.last().unwrap());
+        assert!(
+            bottom < HEIGHT - 190,
+            "{layout:?}: the caption runs into the HUD: rows {top}..={bottom}"
+        );
+        assert!(
+            bottom > HEIGHT - 190 - 80,
+            "{layout:?}: it floats too high: {bottom}"
+        );
+        // A short line starts where a full one would: left of the middle, so it does not move
+        // as it fills word by word.
+        let one_left = white_cols(&image, top..bottom + 1)[0];
+        assert!(
+            one_left < 560,
+            "{layout:?}: a short line is not at the block's left edge ({one_left})"
+        );
+        let one_extent = bottom - top;
+
+        // The next caption fills the line, and the rest starts a second one: taller, still above
+        // the HUD, the newest at the bottom, the full line centred, both from one left edge.
+        let two = say(&one, 15_000, "Today we try out captions.");
+        let two = walk(&two, 20_000);
+        assert_eq!(
+            view_model(&two).caption_lines,
+            ["Welcome back, everyone. Today we try out", "captions."]
+        );
+        let image = shown(ui, &two);
+        let rows = white_rows(&image, 0..WIDTH);
+        assert!(
+            *rows.last().unwrap() < HEIGHT - 190,
+            "{layout:?}: two lines run into the HUD"
+        );
+        assert!(
+            rows.last().unwrap() - rows[0] > one_extent + 20,
+            "{layout:?}: the second line is not drawn above the first"
+        );
+        let full = white_cols(&image, rows[0]..rows[0] + one_extent + 1);
+        let middle = (full[0] + *full.last().unwrap()) / 2;
+        assert!(
+            (500..780).contains(&middle),
+            "{layout:?}: the caption is not centred in the picture ({middle})"
+        );
+        let last = white_cols(
+            &image,
+            rows.last().unwrap() - one_extent..*rows.last().unwrap() + 1,
+        );
+        assert!(
+            full[0].abs_diff(one_left) <= 6 && last[0].abs_diff(one_left) <= 6,
+            "{layout:?}: the lines do not start at one left edge ({one_left}, {}, {})",
+            full[0],
+            last[0]
+        );
+
+        // The HUD fades after 4 s: the lines settle down above the hints bar.
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_secs(5));
+        render(ui);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(500));
+        let image = render(ui);
+        let rows = white_rows(&image, 0..WIDTH);
+        assert!(
+            *rows.last().unwrap() < HINTS_TOP && *rows.last().unwrap() > HINTS_TOP - 40,
+            "{layout:?}: without the HUD the caption is not just above the hints bar: {:?}",
+            rows.last()
+        );
+
+        // Chat open: the lines stay out of its column (the side panel narrows the picture, the
+        // overlay's column is kept free).
+        let mut chatty = two.clone();
+        chatty.chat_open = true;
+        let image = shown(ui, &chatty);
+        let column = (WIDTH - if layout == ChatLayout::Side { 380 } else { 460 })..WIDTH;
+        assert_eq!(
+            count(&image, column, 0..HEIGHT, white),
+            0,
+            "{layout:?}: the caption reaches into the chat"
+        );
+        assert!(
+            !white_rows(&image, 0..WIDTH).is_empty(),
+            "{layout:?}: the caption is gone with the chat open"
+        );
+
+        // Off the picture: none while the stream is not playing (here: it ended).
+        let ended = reduce(&two, Event::PlaybackEnded { slot: 0 }).0;
+        assert!(view_model(&ended).caption_lines.is_empty());
+        let image = shown(ui, &ended);
+        assert_eq!(
+            count(&image, 0..WIDTH, 0..HEIGHT - 100, white),
+            0,
+            "{layout:?}: captions over the offline screen"
+        );
+    }
 }
 
 /// A Twitch stream that ended with its broadcast known: the end card's rows lay out in the middle,
@@ -852,6 +1046,7 @@ fn video_player(ui: &MainWindow) {
             buffer_ms: 60_000,
             pos_ms: Some(pos_ms),
             length_ms: Some(3_600_000),
+            stream_ms: None,
         },
     };
 

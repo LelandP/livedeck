@@ -1,0 +1,17 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- off: the rows are in the video's menu
+menu_open=false row="Off" caption_lines=[]
+rows=["Quality", "Speed", "Chapters", "Start over", "Hardware decoding", "Zoom", "Stats", "Audio only", "Sleep timer", "Channel videos", "Captions", "Caption quality"]
+-- on, from the menu: no delay row, nothing said yet
+menu_open=false row="On" caption_lines=[]
+-- 20 s ahead of the playhead: waiting
+menu_open=false row="On" caption_lines=[]
+-- word by word as the video gets there
+menu_open=false row="On" caption_lines=["Here"]
+menu_open=false row="On" caption_lines=["Here is"]
+menu_open=false row="On" caption_lines=["Here is the second boss."]
+-- a seek (RB, the next chapter) clears them
+menu_open=false row="On" caption_lines=[]

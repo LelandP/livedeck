@@ -496,7 +496,8 @@ export component Hint inherits TouchArea {
             }
             glyph-text := Text {
                 visible: !root.view-icon;
-                text: root.keys ? root.key-name : root.glyph;
+                // The two arrows get a space between them, or they read as one shape.
+                text: root.keys ? root.key-name : (root.glyph == "◀▶" ? "◀ ▶" : root.glyph);
                 color: root.keys ? Theme.text : root.button-color;
                 font-size: Theme.fs-small;
                 font-weight: 700;

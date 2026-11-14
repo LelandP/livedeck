@@ -445,6 +445,288 @@ fn player_audio_only() {
     insta::assert_snapshot!(out);
 }
 
+fn caption_view(vm: &ViewModel) -> String {
+    let row = vm
+        .player_menu_rows
+        .iter()
+        .find(|r| r.title == "Captions")
+        .map_or("(no row)", |r| r.value.as_str());
+    format!(
+        "menu_open={} row={:?} caption_lines={:?}\n",
+        vm.player_menu_open, row, vm.caption_lines
+    )
+}
+
+fn at_stream_ms(ms: u64) -> Event {
+    Event::PlayerHealth {
+        slot: 0,
+        at_ms: 0,
+        health: htpc_core::Health {
+            stream_ms: Some(ms),
+            ..Default::default()
+        },
+    }
+}
+
+/// The player's reports from where the clock is to `to_ms`, a second apart, as they come.
+fn walk(s: &htpc_core::AppState, to_ms: u64) -> htpc_core::AppState {
+    let from = s.captions.clock_ms.unwrap_or(0);
+    (from..=to_ms)
+        .step_by(1_000)
+        .chain([to_ms])
+        .fold(s.clone(), |s, ms| reduce(&s, at_stream_ms(ms)).0)
+}
+
+/// A caption whose words are spread over it.
+fn caption(start_ms: u64, end_ms: u64, text: &str) -> Event {
+    Event::Caption {
+        start_ms,
+        end_ms,
+        text: text.into(),
+        words: Vec::new(),
+    }
+}
+
+/// A caption with its words' own times.
+fn timed(start_ms: u64, end_ms: u64, words: &[(u64, &str)]) -> Event {
+    let text: Vec<&str> = words.iter().map(|(_, w)| *w).collect();
+    Event::Caption {
+        start_ms,
+        end_ms,
+        text: text.join(" "),
+        words: words
+            .iter()
+            .map(|(ms, w)| htpc_core::CaptionWord::new(*ms, *w))
+            .collect(),
+    }
+}
+
+#[test]
+fn captions_off_on_one_line_two_lines_and_with_the_hud() {
+    let (s, _) = reduce(&home_loaded(), Intent::Select);
+    let mut s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    // Words at their start (no `SHOW_AFTER_MS`), so the steps read in Whisper's times.
+    s.captions.show_after = Some(0);
+    let mut out = String::from("-- off\n");
+    out += &caption_view(&view_model(&s));
+    // Lines that arrive while off are not kept.
+    let ignored = reduce(
+        &reduce(&s, at_stream_ms(1_000)).0,
+        caption(1_000, 2_000, "no"),
+    )
+    .0;
+    out += &caption_view(&view_model(&ignored));
+
+    // On, from the last row of the menu.
+    out += "-- on, the menu open, nothing said yet\n";
+    let s = send(&s, &[Intent::Menu]);
+    let s = send(&s, &[Intent::Down; 10]);
+    let s = send(&s, &[Intent::Right]);
+    out += &caption_view(&view_model(&s));
+    let s = send(&s, &[Intent::Back]);
+    let s = reduce(&s, at_stream_ms(10_000)).0;
+    out += &caption_view(&view_model(&s));
+
+    out += "-- word by word, as the stream gets to each\n";
+    let s = reduce(
+        &s,
+        timed(
+            11_000,
+            14_000,
+            &[
+                (11_000, "Welcome"),
+                (11_800, "back,"),
+                (12_600, "everyone."),
+            ],
+        ),
+    )
+    .0;
+    out += &caption_view(&view_model(&s));
+    let mut s = s;
+    for ms in [11_000, 12_000, 12_600] {
+        s = reduce(&s, at_stream_ms(ms)).0;
+        out += &caption_view(&view_model(&s));
+    }
+
+    out += "-- the line fills, then a second one starts\n";
+    let s = reduce(&s, caption(13_000, 16_000, "Today we try out captions.")).0;
+    let s = walk(&s, 16_000);
+    out += &caption_view(&view_model(&s));
+
+    out += "-- a third line scrolls the oldest off\n";
+    let s = reduce(
+        &s,
+        caption(
+            16_500,
+            19_000,
+            "They run on this device, word by word, and roll up.",
+        ),
+    )
+    .0;
+    let s = walk(&s, 19_000);
+    out += &caption_view(&view_model(&s));
+
+    out += "-- the HUD (the menu) up over them\n";
+    let hud = view_model(&send(&s, &[Intent::Menu]));
+    out += &caption_view(&hud);
+
+    out += "-- cleared after 3 s with no new word\n";
+    let s = reduce(&s, at_stream_ms(21_999)).0;
+    out += &caption_view(&view_model(&s));
+    let s = reduce(&s, at_stream_ms(22_000)).0;
+    out += &caption_view(&view_model(&s));
+
+    out += "-- off the Player screen\n";
+    let s = reduce(&s, caption(40_000, 41_000, "x")).0;
+    let s = send(&s, &[Intent::Back]);
+    out += &format!("lines={:?}\n", view_model(&s).caption_lines);
+    insta::assert_snapshot!(out);
+}
+
+/// The video's report: at `pos_ms`, whose clock is 62.05 s ahead (a Twitch video's start time).
+fn video_at(pos_ms: u64) -> Event {
+    Event::PlayerHealth {
+        slot: 0,
+        at_ms: 0,
+        health: htpc_core::Health {
+            stalled: false,
+            buffer_ms: 60_000,
+            pos_ms: Some(pos_ms),
+            length_ms: Some(15_128_000),
+            stream_ms: Some(pos_ms + 62_050),
+        },
+    }
+}
+
+#[test]
+fn captions_on_a_video_come_from_its_clock_and_a_seek_clears_them() {
+    let mut out = String::from("-- off: the rows are in the video's menu\n");
+    let mut s = video_playing();
+    // Words at their start (no `SHOW_AFTER_MS`), so the steps read in Whisper's times.
+    s.captions.show_after = Some(0);
+    out += &caption_view(&view_model(&s));
+    let rows: Vec<String> = view_model(&s)
+        .player_menu_rows
+        .iter()
+        .map(|r| r.title.clone())
+        .collect();
+    out += &format!("rows={rows:?}\n");
+
+    out += "-- on, from the menu: no delay row, nothing said yet\n";
+    let s = send(&s, &[Intent::Menu]);
+    let s = send(&s, &[Intent::Down; 10]);
+    let s = send(&s, &[Intent::Right, Intent::Back]);
+    let s = reduce(&s, video_at(4_360_000)).0;
+    out += &caption_view(&view_model(&s));
+
+    out += "-- 20 s ahead of the playhead: waiting\n";
+    let now = 4_360_000 + 62_050;
+    let s = reduce(
+        &s,
+        timed(
+            now + 20_000,
+            now + 23_000,
+            &[
+                (now + 20_000, "Here"),
+                (now + 20_600, "is"),
+                (now + 21_200, "the"),
+                (now + 21_800, "second"),
+                (now + 22_400, "boss."),
+            ],
+        ),
+    )
+    .0;
+    out += &caption_view(&view_model(&s));
+    out += "-- word by word as the video gets there\n";
+    let mut s = s;
+    for pos in [4_380_000, 4_380_600, 4_382_400] {
+        s = reduce(&s, video_at(pos)).0;
+        out += &caption_view(&view_model(&s));
+    }
+
+    out += "-- a seek (RB, the next chapter) clears them\n";
+    let s = send(&s, &[Intent::PageRight]);
+    out += &caption_view(&view_model(&s));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn the_captions_row_says_why_it_cannot_be_changed() {
+    let mut out = String::new();
+    let row = |s: &htpc_core::AppState| {
+        let s = send(s, &[Intent::Menu]);
+        let s = send(&s, &[Intent::Down; 10]);
+        caption_view(&view_model(&s))
+    };
+    let (playing, _) = reduce(&home_loaded(), Intent::Select);
+    let playing = reduce(&playing, Event::PlaybackStarted { slot: 0 }).0;
+    out += &format!("twitch: {}", row(&playing));
+
+    let mut none = playing.clone();
+    none.captions_unavailable = true;
+    out += &format!("no engine: {}", row(&none));
+
+    let mut audio = playing.clone();
+    audio.audio_only = true;
+    out += &format!("sound only: {}", row(&audio));
+
+    let mut kick = playing.clone();
+    kick.now_playing.as_mut().unwrap().channel = htpc_core::ChannelRef::kick("awa");
+    out += &format!("kick: {}", row(&kick));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn the_captions_rows_follow_the_model_download_and_the_quality() {
+    use htpc_core::{CaptionsQuality, ModelState};
+
+    let rows = |s: &htpc_core::AppState| {
+        let vm = view_model(s);
+        let value = |title: &str| {
+            vm.player_menu_rows
+                .iter()
+                .find(|r| r.title == title)
+                .map(|r| r.value.clone())
+                .unwrap_or_default()
+        };
+        format!(
+            "Captions={:?} Caption quality={:?} Delay={:?}\n",
+            value("Captions"),
+            value("Caption quality"),
+            value("Delay video for caption sync")
+        )
+    };
+    let (playing, _) = reduce(&home_loaded(), Intent::Select);
+    let mut s = send(
+        &reduce(&playing, Event::PlaybackStarted { slot: 0 }).0,
+        &[Intent::Menu],
+    );
+    let mut out = format!("off: {}", rows(&s));
+
+    s.settings.captions = true;
+    out += &format!("on: {}", rows(&s));
+    for state in [
+        ModelState::Downloading(0),
+        ModelState::Downloading(34),
+        ModelState::Failed,
+        ModelState::Ready,
+    ] {
+        s.captions_models = state;
+        out += &format!("{state:?}: {}", rows(&s));
+    }
+
+    for quality in CaptionsQuality::ALL {
+        s.settings.captions_quality = quality;
+        out += &format!("cpu {quality:?}: {}", rows(&s));
+    }
+    s.captions_gpu = true;
+    out += &format!("gpu Best: {}", rows(&s));
+    s.settings.caption_delay = false;
+    out += &format!("delay off: {}", rows(&s));
+    s.captions_unavailable = true;
+    out += &format!("no engine: {}", rows(&s));
+    insta::assert_snapshot!(out);
+}
 fn sleep_lines(vm: &ViewModel) -> String {
     format!(
         "screen={:?} sleep_label={:?} warning={} menu_value={:?}\n",
@@ -1922,6 +2204,7 @@ fn video_health(pos_ms: u64) -> Event {
             buffer_ms: 60_000,
             pos_ms: Some(pos_ms),
             length_ms: Some(15_128_000),
+            stream_ms: None,
         },
     }
 }

@@ -105,6 +105,7 @@ fn health(pos_ms: u64) -> Event {
             buffer_ms: 60_000,
             pos_ms: Some(pos_ms),
             length_ms: Some(15_128_000),
+            stream_ms: None,
         },
     }
 }

@@ -5,6 +5,7 @@
 //! dependencies, so everything here is unit-testable.
 
 pub mod broadcast;
+pub mod captions;
 pub mod chat;
 pub mod domain;
 pub mod keyboard;
@@ -24,6 +25,7 @@ pub use broadcast::{
     Broadcast, LiveArchive, LiveEndRow, RaidTarget, WakeCheck, EARLY_END_MS, LIVE_BEHIND_S,
     WAKE_GAP_MS, WAKE_SETTLE_MS,
 };
+pub use captions::{CaptionWord, Captions, CaptionsRow, ModelState};
 pub use chat::{ChatBuffer, CHAT_CAPACITY};
 pub use domain::{
     grid_cols, grid_rows, grid_rows_on, Category, Channel, ChannelRef, ChatKind, ChatMessage,
@@ -44,7 +46,10 @@ pub use quality::{FrameRate, Rendition};
 pub use reduce::{init, reduce, PREFETCH_DISTANCE};
 pub use replay::{ReplayChat, ReplayLine, LOOKAHEAD_MS};
 pub use seek::{Scrub, Seeking, TapRun};
-pub use settings::{ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom};
+pub use settings::{
+    CaptionsQuality, ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom,
+    DEFAULT_CAPTIONS_QUALITY,
+};
 pub use state::{
     default_quick_messages, subscribe_url, AppState, CategoryFeed, ChannelPage, ChannelTab,
     Compose, Feed, Focus, Playback, PlayerMenuRow, RaidOffer, RailEntry, RailState, Screen,

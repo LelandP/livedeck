@@ -1084,6 +1084,10 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             | Command::ExpireToast { .. }
             | Command::ScheduleOfflineRecheck { .. }
             | Command::SetKick(_)
+            | Command::SetCaptions(_)
+            | Command::SetCaptionsQuality(_)
+            | Command::CaptionTick { .. }
+            | Command::SetLiveDelay(_)
             | Command::Quit => Vec::new(),
         }
     }

@@ -1,0 +1,21 @@
+[package]
+name = "htpc-captions"
+description = "Speech to timed caption lines: a Transcriber trait, a VAD chunker, a worker thread, and a Whisper engine (whisper feature)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Off by default so the workspace builds without CMake or a C++ toolchain.
+default = []
+# whisper.cpp through whisper-rs. Needs CMake and a C++ compiler (see the crate README).
+whisper = ["dep:whisper-rs"]
+# GPU build of whisper.cpp for Linux and the Steam Deck. Not testable on the Windows dev box.
+vulkan = ["whisper", "whisper-rs/vulkan"]
+
+[dependencies]
+tracing.workspace = true
+# `raw-api`: whisper.cpp's and ggml's log callbacks (`install_logging`), which whisper-rs only maps
+# at their own levels (whisper.cpp logs every VAD call at info).
+whisper-rs = { version = "0.16.0", optional = true, features = ["raw-api"] }

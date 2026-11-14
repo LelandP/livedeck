@@ -1,6 +1,7 @@
 //! Application state. Owned by the store and replaced on every `reduce`.
 
 use crate::broadcast::{Broadcast, LiveEndRow};
+use crate::captions::{Captions, ModelState};
 use crate::chat::ChatBuffer;
 use crate::domain::{
     Channel, ChannelRef, ChatStatus, DeviceCode, Features, FeedId, HypeTrain, LoginProblem,
@@ -176,11 +177,21 @@ pub enum PlayerMenuRow {
     Chapters,
     /// An action row: the video from 0:00. Videos and clips.
     StartOver,
+    /// Generated captions, on or off (`Settings::captions`, the one row of this menu that is
+    /// saved). Live streams, videos and clips.
+    Captions,
+    /// Which speech model captions use: *Fast*, *Standard* or *Best* (`Settings::captions_quality`,
+    /// saved). Next to *Captions*, in live streams, videos and clips.
+    CaptionsQuality,
+    /// *Delay video for caption sync*, on or off (`Settings::caption_delay`, saved): the picture
+    /// and chat run behind so captions are on time. Under the two caption rows, live only: a
+    /// video is transcribed ahead of the playhead instead.
+    CaptionDelay,
 }
 
 impl PlayerMenuRow {
     /// The live player's rows, in order.
-    pub const ALL: [PlayerMenuRow; 10] = [
+    pub const ALL: [PlayerMenuRow; 13] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Hwdec,
         PlayerMenuRow::Latency,
@@ -191,10 +202,14 @@ impl PlayerMenuRow {
         PlayerMenuRow::Subscribe,
         PlayerMenuRow::WriteChat,
         PlayerMenuRow::ChannelVideos,
+        PlayerMenuRow::Captions,
+        PlayerMenuRow::CaptionsQuality,
+        PlayerMenuRow::CaptionDelay,
     ];
 
-    /// A video's rows (vod-plan.md section 2): Latency, Subscribe and Write in chat are hidden.
-    pub const VIDEO: [PlayerMenuRow; 10] = [
+    /// A video's rows (vod-plan.md section 2): Latency, Subscribe, Write in chat and the caption
+    /// delay are hidden.
+    pub const VIDEO: [PlayerMenuRow; 12] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Speed,
         PlayerMenuRow::Chapters,
@@ -205,10 +220,12 @@ impl PlayerMenuRow {
         PlayerMenuRow::AudioOnly,
         PlayerMenuRow::SleepTimer,
         PlayerMenuRow::ChannelVideos,
+        PlayerMenuRow::Captions,
+        PlayerMenuRow::CaptionsQuality,
     ];
 
     /// A clip's rows: a video's, without chapters.
-    pub const CLIP: [PlayerMenuRow; 9] = [
+    pub const CLIP: [PlayerMenuRow; 11] = [
         PlayerMenuRow::Quality,
         PlayerMenuRow::Speed,
         PlayerMenuRow::StartOver,
@@ -218,6 +235,8 @@ impl PlayerMenuRow {
         PlayerMenuRow::AudioOnly,
         PlayerMenuRow::SleepTimer,
         PlayerMenuRow::ChannelVideos,
+        PlayerMenuRow::Captions,
+        PlayerMenuRow::CaptionsQuality,
     ];
 
     /// A runs it, Left and Right do nothing. The other rows are values that A, Left and Right
@@ -786,6 +805,17 @@ pub struct AppState {
     /// at startup, and saved again whenever a running session changes (`Command::SaveMultiview`).
     /// Leaving multiview keeps it; nothing clears it.
     pub last_multiview: Option<SavedSet>,
+    /// Generated captions waiting for their time and on screen (captions-plan.md, phase 3).
+    pub captions: Captions,
+    /// Captions cannot run in this build or without models: the menu row says so and does
+    /// nothing. Set once at startup by the app.
+    pub captions_unavailable: bool,
+    /// The speech model of the chosen quality: downloading, failed or fine (`Event::CaptionsModel`).
+    /// Only matters while captions are on.
+    pub captions_models: ModelState,
+    /// This build can run the speech model on a GPU, so *Best* is offered. Set once at startup
+    /// by the app.
+    pub captions_gpu: bool,
     /// The slow-network limit (plan.md, section 4): how far the network lowered each kind of
     /// stream. It lasts while the app runs, so leaving and resuming multiview keeps it.
     pub net: NetLimit,

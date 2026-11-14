@@ -8,12 +8,22 @@ use crate::domain::{ChatMessage, Moderation};
 /// Chat lines kept in state. Older ones fall off the front.
 pub const CHAT_CAPACITY: usize = 200;
 
+/// Chat lines held back at most, while chat runs behind the picture (a long pause). More drops
+/// the oldest.
+pub const HELD_CAPACITY: usize = 500;
+
 /// The most recent chat lines of the channel on screen, oldest first. Holds at most
 /// [`CHAT_CAPACITY`] lines (or the capacity it was built with): pushing past that drops the oldest.
+///
+/// Lines can also be held back, each until a moment on the stream clock (captions' delay keeps
+/// chat in step with the delayed picture): [`ChatBuffer::hold`], then [`ChatBuffer::release`]
+/// as the clock moves on. Clearing and moderation reach the held lines too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatBuffer {
     lines: VecDeque<ChatMessage>,
     capacity: usize,
+    /// Held lines in arrival order, each with the stream time it is due at.
+    held: VecDeque<(u64, ChatMessage)>,
 }
 
 impl Default for ChatBuffer {
@@ -45,7 +55,41 @@ impl ChatBuffer {
         Self {
             lines: VecDeque::with_capacity(capacity),
             capacity,
+            held: VecDeque::new(),
         }
+    }
+
+    /// Holds `line` back until the stream clock reaches `due_ms`. Lines come out in the order
+    /// they were held, so a line never overtakes an older one.
+    pub fn hold(&mut self, due_ms: u64, line: ChatMessage) {
+        if self.held.len() == HELD_CAPACITY {
+            self.held.pop_front();
+        }
+        self.held.push_back((due_ms, line));
+    }
+
+    /// Shows the held lines whose time has come by `now_ms`, oldest first. Returns how many.
+    pub fn release(&mut self, now_ms: u64) -> usize {
+        let mut n = 0;
+        while self.held.front().is_some_and(|(due, _)| *due <= now_ms) {
+            if let Some((_, line)) = self.held.pop_front() {
+                self.push(line);
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Shows every held line at once (chat is no longer held back).
+    pub fn release_all(&mut self) {
+        while let Some((_, line)) = self.held.pop_front() {
+            self.push(line);
+        }
+    }
+
+    /// Lines held back, waiting for their time.
+    pub fn held_len(&self) -> usize {
+        self.held.len()
     }
 
     pub fn capacity(&self) -> usize {
@@ -65,8 +109,10 @@ impl ChatBuffer {
         self.lines.iter()
     }
 
+    /// Empties it, the held lines too.
     pub fn clear(&mut self) {
         self.lines.clear();
+        self.held.clear();
     }
 
     /// Adds a line as the newest, dropping the oldest if the buffer is full.
@@ -84,15 +130,16 @@ impl ChatBuffer {
     }
 
     /// Applies a moderator action: a cleared chat, a timed-out or banned user, a deleted line.
+    /// Held lines are edited the same way.
     pub fn moderate(&mut self, action: &Moderation) {
-        match action {
-            Moderation::ClearAll => self.lines.clear(),
-            Moderation::ClearUser(login) => {
-                self.lines.retain(|m| !m.login.eq_ignore_ascii_case(login))
-            }
+        let keep = |m: &ChatMessage| match action {
+            Moderation::ClearAll => false,
+            Moderation::ClearUser(login) => !m.login.eq_ignore_ascii_case(login),
             // Notices have an empty id and must never match.
-            Moderation::Delete(id) => self.lines.retain(|m| m.id.is_empty() || m.id != *id),
-        }
+            Moderation::Delete(id) => m.id.is_empty() || m.id != *id,
+        };
+        self.lines.retain(|m| keep(m));
+        self.held.retain(|(_, m)| keep(m));
     }
 }
 
@@ -150,6 +197,46 @@ mod tests {
         let b = ChatBuffer::from((0..CHAT_CAPACITY + 1).map(line).collect::<Vec<_>>());
         assert_eq!(b.len(), CHAT_CAPACITY);
         assert_eq!(b[0].id, "id1");
+    }
+
+    #[test]
+    fn held_lines_come_out_in_order_when_their_time_comes() {
+        let mut b = ChatBuffer::new(10);
+        b.hold(5_000, line(0));
+        b.hold(7_000, line(1));
+        // A later line due earlier (the delay shrank) waits for the one before it.
+        b.hold(6_000, line(2));
+        assert!(b.is_empty());
+        assert_eq!(b.held_len(), 3);
+        assert_eq!(b.release(4_999), 0);
+        assert_eq!(b.release(6_500), 1);
+        assert_eq!(b[0].id, "id0");
+        assert_eq!(b.release(7_000), 2);
+        let ids: Vec<_> = b.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["id0", "id1", "id2"]);
+        assert_eq!(b.held_len(), 0);
+    }
+
+    #[test]
+    fn held_lines_are_capped_moderated_cleared_and_released_at_once() {
+        let mut b = ChatBuffer::new(10);
+        for n in 0..HELD_CAPACITY + 2 {
+            b.hold(1_000, line(n));
+        }
+        assert_eq!(b.held_len(), HELD_CAPACITY);
+        // user0 wrote every third line.
+        b.moderate(&Moderation::ClearUser("user0".into()));
+        b.moderate(&Moderation::Delete(format!("id{}", HELD_CAPACITY + 1)));
+        b.release_all();
+        assert_eq!(b.held_len(), 0);
+        assert!(b.iter().all(|m| m.login != "user0"));
+        assert!(b.iter().all(|m| m.id != format!("id{}", HELD_CAPACITY + 1)));
+        b.hold(1, line(1));
+        b.clear();
+        assert_eq!(b.held_len(), 0);
+        b.hold(1, line(1));
+        b.moderate(&Moderation::ClearAll);
+        assert_eq!(b.held_len(), 0);
     }
 
     #[test]

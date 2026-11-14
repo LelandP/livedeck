@@ -34,6 +34,10 @@ pub struct Health {
     /// How long a video or clip is, in milliseconds. `None` for a live stream, and while the
     /// player cannot tell. The slow-network rule ignores it.
     pub length_ms: Option<u64>,
+    /// Where the stream is on its own raw clock, in milliseconds: the clock the captions' audio
+    /// is stamped with (`PlayerHealth::stream_ms`, captions-plan.md). `None` while the player
+    /// cannot tell. The slow-network rule ignores it.
+    pub stream_ms: Option<u64>,
 }
 
 /// Which streams a step lowers, in the order they are lowered.

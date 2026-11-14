@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twitch", "crates/storage", "crates/resolver", "crates/player", "crates/chat", "crates/kick"]
+members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twitch", "crates/storage", "crates/resolver", "crates/player", "crates/chat", "crates/kick", "crates/captions"]
 
 [workspace.package]
 version = "0.6.0"
@@ -22,6 +22,7 @@ htpc-resolver = { path = "crates/resolver", version = "0.6.0" }
 htpc-player = { path = "crates/player", version = "0.6.0" }
 htpc-chat = { path = "crates/chat", version = "0.6.0" }
 htpc-kick-api = { path = "crates/kick", version = "0.6.0" }
+htpc-captions = { path = "crates/captions", version = "0.6.0" }
 
 # UI
 slint = "1.18.1"
@@ -41,6 +42,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "query"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# SHA-256 of the downloaded speech models (already in the tree through keyring)
+sha2 = "0.11.1"
 toml = "1.2"
 
 # Storage

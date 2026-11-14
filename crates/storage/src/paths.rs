@@ -21,6 +21,7 @@ const FAVORITES_FILE: &str = "favorites.toml";
 const MULTIVIEW_FILE: &str = "multiview.toml";
 const CONTINUE_FILE: &str = "continue.toml";
 const IMAGE_DIR: &str = "images";
+const MODELS_DIR: &str = "models";
 
 /// The three base folders. Nothing is created until something is written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,12 @@ impl Paths {
         self.data_dir.join(CONTINUE_FILE)
     }
 
+    /// The speech models of the captions, downloaded the first time they are used (tens to a
+    /// couple of hundred megabytes, so not in the config folder, and not a cache to clear).
+    pub fn models_dir(&self) -> PathBuf {
+        self.data_dir.join(MODELS_DIR)
+    }
+
     pub fn image_cache_dir(&self) -> PathBuf {
         self.cache_dir.join(IMAGE_DIR)
     }
@@ -93,6 +100,7 @@ mod tests {
         assert_eq!(p.favorites_file(), Path::new("/r/data/favorites.toml"));
         assert_eq!(p.multiview_file(), Path::new("/r/data/multiview.toml"));
         assert_eq!(p.continue_file(), Path::new("/r/data/continue.toml"));
+        assert_eq!(p.models_dir(), Path::new("/r/data/models"));
         assert_eq!(p.image_cache_dir(), Path::new("/r/cache/images"));
     }
 

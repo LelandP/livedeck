@@ -1,6 +1,7 @@
 //! Messages into the reducer (`Intent`, `Event`) and side effects out of it (`Command`).
 
 use crate::broadcast::LiveArchive;
+use crate::captions::{CaptionWord, ModelState};
 use crate::domain::{
     ChannelRef, ChatMessage, ChatStatus, DeviceCode, FeedId, HypeTrain, LoginProblem, Moderation,
     PlayerStats, RoomModeChange, Row, RowId, SendProblem, Stream, Tile, User,
@@ -9,7 +10,7 @@ use crate::multiview::SavedSet;
 use crate::netlimit::Health;
 use crate::quality::{FrameRate, Rendition};
 use crate::replay::ReplayLine;
-use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
+use crate::settings::{CaptionsQuality, Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
 use crate::video::{ChannelInfo, Progress, VideoDetails, VideoTarget};
 
@@ -266,6 +267,25 @@ pub enum Command {
     /// results. The store applies it before the commands after it, so a `LoadFeed` that follows
     /// already sees it. Sent at startup with the saved setting. There is no `Event`.
     SetKick(bool),
+    /// Captions on or off (captions-plan.md): with them on, the app makes the speech engine and
+    /// feeds it the stream's audio, and answers with `Event::Caption`s; off, it stops both. Sent
+    /// at startup with the saved setting and whenever the player menu changes it. Whether the
+    /// stream on screen gets captions is the app's call (Twitch pictures on the single player);
+    /// the reducer only shows what arrives. There is no `Event`.
+    SetCaptions(bool),
+    /// The quality of the captions model, set before the `SetCaptions(true)` that follows when
+    /// captions are on: the app loads that model instead (downloading it first if needed). Sent
+    /// whenever the player menu changes it. There is no `Event`.
+    SetCaptionsQuality(CaptionsQuality),
+    /// Send `Event::CaptionTickDue(id)` in `ms` milliseconds: the stream clock of the captions
+    /// moves on (`captions.rs`).
+    CaptionTick { id: u32, ms: u64 },
+    /// Hold the single player's live stream at least `ms` behind its live edge, so captions are
+    /// ready before the picture gets to them (`Some`, captions-plan.md phase 3b), or let it go back
+    /// to live (`None`). Kept for later loads of slot 0, a new quality's spare player too. A load
+    /// starts that far back; a stream already playing is held (`Event::PlayerHeld`) until it is.
+    /// Sent when captions with the delay start or stop applying to the stream. No answer.
+    SetLiveDelay(Option<u32>),
     /// Close the window and end the app (confirmed on the quit prompt).
     Quit,
 }
@@ -531,6 +551,28 @@ pub enum Event {
         asleep_ms: u64,
         before_s: u64,
     },
+    /// A line of captions: `text` was spoken from `start_ms` to `end_ms` on the stream clock of
+    /// the single player (`Health::stream_ms`), each of `words` from its own time (empty: spread
+    /// over the line). Each word shows when the player gets there. Ignored unless captions are
+    /// showing (`AppState::captions_live`), and when it is too late already.
+    Caption {
+        start_ms: u64,
+        end_ms: u64,
+        text: String,
+        words: Vec<CaptionWord>,
+    },
+    /// The player of `slot` stopped (`true`) or went on (`false`) to hold its live stream behind
+    /// the live edge (`Command::SetLiveDelay`). The captions' clock stands still meanwhile.
+    PlayerHeld {
+        slot: Slot,
+        held: bool,
+    },
+    /// The `Command::CaptionTick` timer `id` ran out. Ignored unless it is the latest.
+    CaptionTickDue(u32),
+    /// How the download of the captions model is going (captions-plan.md, phase 4): sent by the
+    /// app while captions are on, once per percent and when it ends (`Ready` once the model is
+    /// on disk and loading). Ignored while captions are off.
+    CaptionsModel(ModelState),
 }
 
 /// Anything the reducer accepts.

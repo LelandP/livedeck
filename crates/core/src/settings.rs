@@ -204,6 +204,57 @@ impl Zoom {
     }
 }
 
+/// How good the generated captions are, and so how big the speech model is (captions-plan.md,
+/// section 2). The app maps each to a model file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionsQuality {
+    /// whisper tiny.en: the smallest and fastest, with wrong words now and then.
+    Fast,
+    /// whisper base.en, quantised: the default.
+    #[default]
+    Standard,
+    /// whisper small, quantised, multilingual. Needs a GPU build to keep up.
+    Best,
+}
+
+/// The quality new installs start with. Phase 0b (the Deck run) may change it.
+pub const DEFAULT_CAPTIONS_QUALITY: CaptionsQuality = CaptionsQuality::Standard;
+
+impl CaptionsQuality {
+    pub const ALL: [CaptionsQuality; 3] = [
+        CaptionsQuality::Fast,
+        CaptionsQuality::Standard,
+        CaptionsQuality::Best,
+    ];
+
+    /// Stable name used in the config file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaptionsQuality::Fast => "fast",
+            CaptionsQuality::Standard => "standard",
+            CaptionsQuality::Best => "best",
+        }
+    }
+
+    /// Text for the player menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            CaptionsQuality::Fast => "Fast",
+            CaptionsQuality::Standard => "Standard",
+            CaptionsQuality::Best => "Best",
+        }
+    }
+
+    /// The next (or previous) quality among `offered`, wrapping around. A quality that is not
+    /// offered steps to the first of them.
+    pub fn cycled_in(self, offered: &[CaptionsQuality], forward: bool) -> Self {
+        if offered.is_empty() {
+            return self;
+        }
+        cycle(offered, self, if forward { 1 } else { -1 })
+    }
+}
+
 /// A value that is not one of the known setting names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownSetting(pub String);
@@ -236,6 +287,14 @@ impl FromStr for ChatLayout {
 }
 
 impl FromStr for Quality {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for CaptionsQuality {
     type Err = UnknownSetting;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -280,6 +339,18 @@ pub struct Settings {
     /// Kick next to Twitch: a Top Live on Kick row on Home and Kick channels in Search. Off, the
     /// app makes no Kick requests at all.
     pub show_kick: bool,
+    /// Generated captions on a Twitch stream, made on the device (captions-plan.md). Changed in
+    /// the player menu and saved. Only does anything where the build and the models allow it
+    /// (`AppState::captions_unavailable`).
+    pub captions: bool,
+    /// The speech model captions use (`captions_quality` in `config.toml`). Changing it loads the
+    /// other model, downloading it first if it is missing.
+    pub captions_quality: CaptionsQuality,
+    /// With captions on, the picture and chat run far enough behind the speech for every caption
+    /// to be ready before its moment (captions-plan.md, phase 3b; `caption_delay` in
+    /// `config.toml`, the player menu's *Delay video for caption sync*). Off: live latency, and
+    /// captions come a few seconds late.
+    pub caption_delay: bool,
 }
 
 impl Default for Settings {
@@ -291,6 +362,9 @@ impl Default for Settings {
             background_play: false,
             // Kick is read through an unofficial API that can break, so it is opt-in.
             show_kick: false,
+            captions: false,
+            captions_quality: DEFAULT_CAPTIONS_QUALITY,
+            caption_delay: true,
         }
     }
 }
@@ -342,6 +416,37 @@ mod tests {
     #[test]
     fn background_play_is_off_by_default() {
         assert!(!Settings::default().background_play);
+    }
+
+    #[test]
+    fn captions_quality_names_round_trip_and_standard_is_the_default() {
+        for v in CaptionsQuality::ALL {
+            assert_eq!(v.as_str().parse::<CaptionsQuality>(), Ok(v));
+            assert!(!v.label().is_empty());
+        }
+        assert_eq!(DEFAULT_CAPTIONS_QUALITY, CaptionsQuality::Standard);
+        assert_eq!(
+            Settings::default().captions_quality,
+            DEFAULT_CAPTIONS_QUALITY
+        );
+    }
+
+    #[test]
+    fn captions_quality_cycles_through_what_is_offered() {
+        use CaptionsQuality::*;
+        assert_eq!(Fast.cycled_in(&CaptionsQuality::ALL, true), Standard);
+        assert_eq!(Best.cycled_in(&CaptionsQuality::ALL, true), Fast);
+        assert_eq!(Fast.cycled_in(&CaptionsQuality::ALL, false), Best);
+        // Without a GPU: Best is not offered, and one saved as Best steps into the list.
+        let cpu = [Fast, Standard];
+        assert_eq!(Standard.cycled_in(&cpu, true), Fast);
+        assert_eq!(Fast.cycled_in(&cpu, false), Standard);
+        assert_eq!(Best.cycled_in(&cpu, true), Standard);
+    }
+
+    #[test]
+    fn captions_are_off_by_default() {
+        assert!(!Settings::default().captions);
     }
 
     #[test]

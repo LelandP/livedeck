@@ -1,7 +1,9 @@
 # htpc-player
 
 Video behind the `Player` trait. `MpvPlayer` (feature `mpv`) renders libmpv into an OpenGL
-texture that Slint shows. `FakePlayer` and `UnavailablePlayer` need no libmpv.
+texture that Slint shows. `FakePlayer` and `UnavailablePlayer` need no libmpv. `AudioTap`
+(feature `mpv`) taps a stream's audio as 16 kHz PCM for captions; `FakeTaps` and `NoTaps` need no
+libmpv.
 
 Without the `mpv` feature the crate, and `cargo build/clippy/test --workspace`, never need libmpv.
 

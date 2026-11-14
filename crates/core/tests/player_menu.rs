@@ -89,10 +89,10 @@ fn start_opens_the_menu_and_b_or_start_closes_it() {
 fn up_and_down_move_between_rows_and_stop_at_the_ends() {
     let (s, _) = run(&playing(), &[Intent::Menu, Intent::Up]);
     assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
-    let (s, _) = run(&s, &[Intent::Down; 12]);
-    assert_eq!(s.player_menu, Some(PlayerMenuRow::ChannelVideos));
+    let (s, _) = run(&s, &[Intent::Down; 14]);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::CaptionDelay));
     let (s, _) = reduce(&s, Intent::Up);
-    assert_eq!(s.player_menu, Some(PlayerMenuRow::WriteChat));
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::CaptionsQuality));
 }
 
 #[test]
@@ -218,6 +218,19 @@ fn nothing_in_the_menu_ever_saves() {
         ],
     );
     no_saves(&cmds);
+}
+
+#[test]
+fn captions_are_the_menu_rows_that_save() {
+    let (s, _) = run(&playing(), &[Intent::Menu]);
+    let (s, _) = run(&s, &[Intent::Down; 10]);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::Captions));
+    let (s, cmds) = reduce(&s, Intent::Right);
+    assert!(s.settings.captions);
+    assert!(
+        cmds.contains(&Command::SaveSettings(s.settings)),
+        "{cmds:?}"
+    );
 }
 
 /// Opens the menu and turns the stats box on.

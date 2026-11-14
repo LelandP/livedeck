@@ -56,6 +56,8 @@ struct Entry {
     muted: bool,
     /// Stats are on for the slot ([`PlayerPool::set_stats`]), so a spare that takes over gets them.
     stats: bool,
+    /// The slot's [`PlayerOption::LiveDelay`]: its players, a spare too, get it when made.
+    live_delay: Option<u32>,
 }
 
 struct Inner {
@@ -153,6 +155,9 @@ impl PlayerPool {
         for option in &inner.shared {
             player.set_option(*option);
         }
+        if let Some(ms) = inner.slots[index(slot)].live_delay {
+            player.set_option(PlayerOption::LiveDelay(Some(ms)));
+        }
         Ok(Held { id, player })
     }
 
@@ -247,6 +252,27 @@ impl PlayerPool {
     pub fn set_muted(&self, slot: Slot, muted: bool) {
         self.lock().slots[index(slot)].muted = muted;
         self.player(slot).set_option(PlayerOption::Muted(muted));
+    }
+
+    /// Sets how far behind its live edge `slot` plays ([`PlayerOption::LiveDelay`]), for its
+    /// player, its spare and the players made for it later. A spare loading a new quality builds
+    /// the delay before it takes over.
+    pub fn set_live_delay(&self, slot: Slot, ms: Option<u32>) {
+        let spare = {
+            let mut inner = self.lock();
+            let entry = &mut inner.slots[index(slot)];
+            if entry.live_delay == ms {
+                return;
+            }
+            entry.live_delay = ms;
+            entry.spare.as_ref().map(|h| Arc::clone(&h.player))
+        };
+        if let Some(spare) = spare {
+            spare.set_option(PlayerOption::LiveDelay(ms));
+        }
+        if let Some(player) = self.existing(slot) {
+            player.set_option(PlayerOption::LiveDelay(ms));
+        }
     }
 
     /// Turns the stats reports of `slot` on or off, for its player and a spare that takes over.
@@ -655,6 +681,27 @@ mod tests {
             ]
         );
         assert_eq!(fakes.calls(0).len(), 3);
+    }
+
+    #[test]
+    fn a_live_delay_reaches_the_slots_player_its_spare_and_later_ones() {
+        let delay = |ms| PlayerCall::SetOption(PlayerOption::LiveDelay(ms));
+        let (pool, fakes) = PlayerPool::fake();
+        // Before the slot has a player: kept for the one made later.
+        pool.set_live_delay(0, Some(11_500));
+        assert!(pool.existing(0).is_none());
+        pool.player(0);
+        assert_eq!(fakes.calls(0), [delay(Some(11_500))]);
+        // A spare gets it too, and a change reaches both. The same again is no call.
+        pool.spare(0);
+        pool.set_live_delay(0, Some(11_500));
+        pool.set_live_delay(0, None);
+        assert_eq!(fakes.calls(0), [delay(Some(11_500)), delay(None)]);
+        let spare = fakes.spare(0).unwrap().calls();
+        assert!(spare.contains(&delay(Some(11_500))) && spare.ends_with(&[delay(None)]));
+        // Another slot is not touched.
+        pool.player(1);
+        assert!(fakes.calls(1).is_empty());
     }
 
     #[test]

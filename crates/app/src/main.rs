@@ -10,12 +10,15 @@
 
 mod awake;
 mod browser;
+mod captions;
+mod captions_tap;
 mod chat;
 mod chat_limit;
 mod hype_train;
 mod kick;
 mod live_watch;
 mod mock;
+mod models;
 mod playback;
 mod power;
 mod provider;
@@ -95,6 +98,25 @@ CHAT:
   player menu) writes in chat with the on-screen keyboard, through Helix (user:write:chat).
   quick_messages in config.toml lists the ready-made messages offered there.
 
+CAPTIONS:
+  Captions made on the device from the speech of a Twitch live stream, video or clip (picture
+  only), turned on in the player menu and saved as `captions` in config.toml. A video is
+  transcribed up to 30 s ahead of the playhead, so its captions come on time, apart from the
+  first seconds after the start or a jump. They need a build with
+  `--features captions` (whisper.cpp: CMake and a C++ compiler). The first time they are turned
+  on, the speech model is downloaded into the data folder (models/): Standard (60 MB) by
+  default, or Fast (78 MB) or Best (190 MB, offered in GPU builds) as `captions_quality` in
+  config.toml or the menu's Caption quality row. While captions are on, the picture and chat
+  run about 10 s further behind live so every caption is ready in time, word by word: the
+  menu's Delay video for caption sync (`caption_delay` in config.toml, on by default) turns
+  that off. For development, these use files you have
+  instead and download nothing:
+  HTPC_CAPTIONS_MODEL      A ggml Whisper model, e.g. ggml-base.en-q5_1.bin
+  HTPC_CAPTIONS_VAD_MODEL  A ggml Silero VAD model, e.g. ggml-silero-v5.1.2.bin
+  HTPC_CAPTION_OFFSET_MS   How long after it is spoken each word shows (default 500)
+  Without the feature the menu's Captions row says \"Captions unavailable\". --mock shows made-up
+  lines instead (with video support, they follow the test stream's tone).
+
 RAIDS:
   Signed in, the channel on screen is watched for raids over Twitch EventSub
   (eventsub.wss.twitch.tv). A raid opens a 10-second countdown to follow it.
@@ -111,7 +133,13 @@ CONFIG:
   favorites.toml (the starred channels, written by the app) is in the data folder
   (Linux: ~/.local/share/livedeck, Windows: %APPDATA%\\livedeck\\data).
 
-Logging: set RUST_LOG, e.g. RUST_LOG=livedeck=debug
+LOGGING:
+  RUST_LOG   What to log, e.g. RUST_LOG=livedeck=debug (default: info). The captions'
+             timing (how late each caption is, how far the picture trails the audio) is
+             RUST_LOG=livedeck::captions=debug.
+  HTPC_LOG   Write the log to this file instead of the terminal (a release build on
+             Windows has no terminal unless started from one), panics included.
+             whisper.cpp's own log lines are in it at trace level (target `whisper`).
 ";
 
 const ENV_CLIENT_ID: &str = "TWITCH_CLIENT_ID";
@@ -148,10 +176,36 @@ fn parse_args() -> Result<Option<Args>> {
     Ok(Some(parsed))
 }
 
+/// The env var naming a file for the log, instead of stderr (which a release build on Windows,
+/// a GUI program, does not have when it is not started from a terminal).
+const ENV_LOG_FILE: &str = "HTPC_LOG";
+
 fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let file = env_var(ENV_LOG_FILE).and_then(|path| match std::fs::File::create(&path) {
+        Ok(file) => Some(file),
+        Err(err) => {
+            eprintln!("{ENV_LOG_FILE}: cannot write {path}: {err}");
+            None
+        }
+    });
+    match file {
+        Some(file) => {
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file))
+                .init();
+            // A panic's message goes to stderr, which the file does not see: log it there too.
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                tracing::error!("{info}");
+                default_hook(info);
+            }));
+        }
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
 }
 
 /// A non-empty env var, or `None`.
@@ -251,6 +305,7 @@ fn load_storage() -> Storage {
                 multiview_store: None,
                 continue_watching: Vec::new(),
                 continue_store: None,
+                models_dir: None,
             };
         }
     };
@@ -311,6 +366,7 @@ fn load_storage() -> Storage {
         multiview_store: Some(multiview_store),
         continue_watching,
         continue_store: Some(continue_store),
+        models_dir: Some(paths.models_dir()),
     }
 }
 
@@ -335,6 +391,8 @@ struct Storage {
     continue_watching: Vec<htpc_core::Progress>,
     /// Where it is written when a video is left.
     continue_store: Option<htpc_storage::ContinueStore>,
+    /// Where the captions' speech models are kept. Without it captions are unavailable.
+    models_dir: Option<std::path::PathBuf>,
 }
 
 /// Saves *Continue watching* into `continue.toml`. A place saved without a time (the reducer has
@@ -631,6 +689,8 @@ struct Wiring {
     continue_watching: Vec<htpc_core::Progress>,
     /// Writes it when a video is left. `None` in `--mock`.
     save_continue: Option<SaveContinue>,
+    /// Makes the captions' speech engine. `None`: captions are unavailable in this run.
+    captions: Option<captions::Engine>,
 }
 
 /// The real raid watch: EventSub with the session's token.
@@ -684,6 +744,7 @@ fn run_app<P: Provider, R: StreamResolver>(
         save_multiview,
         continue_watching,
         save_continue,
+        captions,
     } = wiring;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -731,6 +792,19 @@ fn run_app<P: Provider, R: StreamResolver>(
     state.last_multiview = last_multiview;
     state.continue_watching = continue_watching;
     state.can_open_browser = browser::can_open_browser();
+    // Captions: the menu row says so when there is no engine, and the saved setting starts it.
+    state.captions_gpu = captions.as_ref().is_some_and(|e| e.gpu);
+    let captions = Arc::new(captions::Captions::with_engine(
+        captions,
+        state.captions_quality(),
+    ));
+    state.captions_unavailable = !captions.available();
+    state.captions.show_after = std::env::var("HTPC_CAPTION_OFFSET_MS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok());
+    if settings.captions && captions.available() {
+        startup.push(htpc_core::Command::SetCaptions(true));
+    }
     // The account is in place before the first load, so Home already has its Followed row. A
     // token from the environment wins over a stored login.
     state.user = match env_token {
@@ -766,10 +840,14 @@ fn run_app<P: Provider, R: StreamResolver>(
     });
     let sleep = Sleep::new(pool.handle(MAIN_SLOT), power, tx.clone());
     let playback = Playback::new(resolver, pool);
+    // Captions' audio tap: off until captions are turned on (`Playback::set_captions_feed`).
+    #[cfg(feature = "mpv")]
+    let playback = playback.with_taps(Arc::new(htpc_player::MpvTaps));
     let chat = Chat::new(chat, kick_chat, tx.clone());
     let raids = Raids::new(raid_connect, tx.clone());
     let mut store = Store::new(state, provider, playback, chat, session, ui.as_weak(), tx)
         .with_sleep(sleep)
+        .with_captions(captions)
         .with_raids(raids)
         .with_quit_signal(quit_saved);
     if let Some(save) = save_settings {
@@ -964,6 +1042,7 @@ fn main() -> Result<()> {
         multiview_store,
         continue_watching,
         continue_store,
+        models_dir,
     } = load_storage();
     let settings = config.settings;
     let save_settings = settings_saver(&config, config_store);
@@ -1030,6 +1109,8 @@ fn main() -> Result<()> {
             // And for what was left part-way: kept for the session, never written.
             continue_watching: Vec::new(),
             save_continue: None,
+            // Scripted captions, so the overlay can be seen without models.
+            captions: Some(captions::mock_engine()),
         };
         // Chat is scripted too: a few lines at once, then a new one every couple of seconds.
         let chat = Arc::new(mock::fake_chat(true));
@@ -1085,6 +1166,7 @@ fn main() -> Result<()> {
         save_multiview,
         continue_watching,
         save_continue,
+        captions: models_dir.and_then(captions::whisper_engine),
     };
     // Chat is anonymous and read-only, so it works signed out.
     run_app(

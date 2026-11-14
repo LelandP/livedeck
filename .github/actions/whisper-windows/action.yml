@@ -1,0 +1,39 @@
+name: whisper.cpp build setup (Windows)
+description: >
+  What the `captions` feature needs on a Windows runner: CMake, LLVM (libclang, so whisper-rs-sys
+  generates its own bindings: the bundled ones are Linux-only) and the ggml speed flags. Without
+  the flags ggml builds with no AVX and no /O2 and inference is about 8 times slower. Run it after
+  `ilammy/msvc-dev-cmd` (bindgen and CMake need the MSVC environment). It exports to later steps and
+  leaves `WHISPER_DONT_GENERATE_BINDINGS` unset.
+
+runs:
+  using: composite
+  steps:
+    - name: Install CMake and LLVM if the runner has none
+      shell: pwsh
+      run: |
+        if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
+          "C:\Program Files\CMake\bin" >> $env:GITHUB_PATH
+        }
+        $llvm = 'C:\Program Files\LLVM\bin'
+        if (-not (Test-Path "$llvm\libclang.dll")) {
+          choco install llvm -y --no-progress
+        }
+        if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
+        "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+
+    - name: ggml speed flags
+      shell: pwsh
+      # whisper-rs-sys forwards every GGML_* and CMAKE_* environment variable to CMake. Not native:
+      # the package must run on any x86-64 PC with AVX2, not only the CPU of the build machine.
+      run: |
+        @(
+          'GGML_NATIVE=OFF'
+          'GGML_AVX=ON'
+          'GGML_AVX2=ON'
+          'GGML_FMA=ON'
+          'GGML_F16C=ON'
+          'CMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /MD'
+          'CMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /MD'
+        ) >> $env:GITHUB_ENV

@@ -2075,6 +2075,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48ce8546b993eaf241d69ded33b1be6d205dd9857ec879d9d18bd05d3676e144"
 
 [[package]]
+name = "htpc-captions"
+version = "0.6.0"
+dependencies = [
+ "tracing",
+ "whisper-rs",
+]
+
+[[package]]
 name = "htpc-chat"
 version = "0.6.0"
 dependencies = [
@@ -2127,12 +2135,14 @@ name = "htpc-player"
 version = "0.6.0"
 dependencies = [
  "glow",
+ "htpc-resolver",
  "libmpv2",
  "reqwest",
  "serde_json",
  "slint",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3266,6 +3276,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "futures-util",
+ "htpc-captions",
  "htpc-chat",
  "htpc-core",
  "htpc-input",
@@ -3277,8 +3288,11 @@ dependencies = [
  "htpc-ui",
  "open",
  "pico-args",
+ "reqwest",
  "serde_json",
+ "sha2",
  "slint",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -6586,6 +6600,29 @@ dependencies = [
  "naga-types",
  "raw-window-handle",
  "static_assertions",
+]
+
+[[package]]
+name = "whisper-rs"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
+dependencies = [
+ "libc",
+ "whisper-rs-sys",
+]
+
+[[package]]
+name = "whisper-rs-sys"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
+dependencies = [
+ "bindgen",
+ "cfg-if",
+ "cmake",
+ "fs_extra",
+ "semver",
 ]
 
 [[package]]

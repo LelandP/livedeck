@@ -143,6 +143,7 @@ fn health(pos_ms: u64) -> Event {
             buffer_ms: 60_000,
             pos_ms: Some(pos_ms),
             length_ms: Some(15_128_000),
+            stream_ms: None,
         },
     }
 }
@@ -289,6 +290,7 @@ fn clips_are_never_saved() {
                 buffer_ms: 1,
                 pos_ms: Some(15_000),
                 length_ms: Some(28_000),
+                stream_ms: None,
             },
         },
     )
@@ -306,11 +308,14 @@ fn the_end_cards_channel_videos_saves_too() {
     let s = playing_at(&page(Vec::new()), 900);
     let (s, cmds) = press(&s, &[Intent::Menu]);
     assert!(s.player_menu.is_some());
-    // The menu's last row, *Channel videos*.
+    // The menu's *Channel videos* row (the caption rows come after it).
     let rows = s.player_menu_rows();
-    let last = rows.len() - 1;
+    let row = rows
+        .iter()
+        .position(|r| *r == PlayerMenuRow::ChannelVideos)
+        .expect("a video's menu has the row");
     let mut s = s;
-    for _ in 0..last {
+    for _ in 0..row {
         s = reduce(&s, Intent::Down).0;
     }
     let (s, cmds2) = reduce(&s, Intent::Select);

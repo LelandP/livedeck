@@ -16,12 +16,20 @@
 //! frames from the window's one rendering notifier. A new quality of the stream on screen loads in
 //! a hidden spare player and takes over at its first frame ([`PlayerPool::spare`]).
 //!
+//! An [`AudioTaps`] starts audio taps for captions: `AudioTap` (feature `mpv`) is a second,
+//! headless libmpv that turns a stream's audio into 16 kHz mono [`PcmChunk`]s on the stream's own
+//! clock, the one [`PlayerHealth::stream_ms`] reports (captions-plan.md). A video's tap starts at
+//! a position and reads no more than [`LOOKAHEAD_S`] beyond the playhead ([`TapOptions`]).
+//!
 //! This crate does not depend on `htpc-core`. The app maps its types.
 
 mod fake;
 mod pace;
 mod pool;
+mod tap;
 
+#[cfg(feature = "mpv")]
+mod audio_tap;
 #[cfg(feature = "mpv")]
 mod gl_state;
 #[cfg(feature = "mpv")]
@@ -35,6 +43,8 @@ mod recent;
 #[cfg(feature = "mpv")]
 mod target;
 
+#[cfg(feature = "mpv")]
+pub use audio_tap::{AudioTap, MpvTaps, ROTATE_AFTER};
 pub use fake::{FakePlayer, PlayerCall, UnavailablePlayer};
 #[cfg(feature = "mpv")]
 pub use mpv::{encode_file, MpvPlayer};
@@ -42,6 +52,10 @@ pub use mpv::{encode_file, MpvPlayer};
 pub use output::{VideoOutput, VideoOutputs};
 pub use pace::RefreshRate;
 pub use pool::{FakePool, PlayerPool, Report, Seat, IDLE_DROP};
+pub use tap::{
+    AudioTaps, FakeTaps, NoTaps, PcmChunk, Splice, Spliced, TapEvent, TapHandle, TapOptions,
+    TapPace, TapSink, LOOKAHEAD_S, TAP_RATE,
+};
 
 /// Which of the pool's players: 0 is the single player, 1 to 8 the other multiview tiles.
 pub type Slot = u8;
@@ -65,9 +79,13 @@ pub enum PlayerEvent {
     Paused(bool),
     /// About once a second while stats are on (see [`Player::set_stats`]).
     Stats(PlayerStats),
-    /// About once a second from the first frame of a stream until it stops, except while paused:
-    /// a paused video sends none, so its last position is the one from before the pause.
+    /// About once a second from the first frame of a stream until it stops, except while paused
+    /// (or held): a paused video sends none, so its last position is the one from before the pause.
     Health(PlayerHealth),
+    /// The picture of a live stream stopped (`true`) or went on (`false`) to keep the delay of
+    /// [`PlayerOption::LiveDelay`]. Only after the stream's first frame: a load builds its delay
+    /// before it reports [`PlayerEvent::Playing`].
+    Held(bool),
 }
 
 /// How well the stream keeps up: the slow-network rule's input (plan.md, section 4). For a video,
@@ -85,6 +103,11 @@ pub struct PlayerHealth {
     /// How long a video or clip is (`duration`), in milliseconds. `None` for a live stream, and
     /// while mpv cannot tell (a broadcast still being recorded may have none).
     pub length_ms: Option<u64>,
+    /// Where the picture is on the stream's own clock (`time-pos` + `demuxer-start-time`, which
+    /// undoes mpv's rebasing), in milliseconds: what an audio tap's [`PcmChunk::start_s`] is
+    /// timed by. Live and video alike. On live Twitch it equals `time-pos` (the start time is 0).
+    /// `None` while mpv cannot tell.
+    pub stream_ms: Option<u64>,
 }
 
 /// How the picture fills a screen of another shape.
@@ -113,6 +136,13 @@ pub enum PlayerOption {
     /// Thousandths keep the option `Eq`. Kept for the videos loaded after it, but a live stream
     /// always loads at normal speed.
     Speed(u32),
+    /// `Some(ms)`: play a live stream at least this far behind the newest part it can get (its
+    /// buffer ahead), so captions made from an audio tap at the live edge are ready before the
+    /// picture gets there (captions-plan.md, phase 3b). A load starts that far back; a stream
+    /// already playing holds its picture until the buffer is that long ([`PlayerEvent::Held`]).
+    /// `None`: back to the latency's own buffers, jumping ahead to near the live edge without a
+    /// reload. Kept for later loads; videos ignore it. Per slot: [`PlayerPool::set_live_delay`].
+    LiveDelay(Option<u32>),
 }
 
 /// [`PlayerOption::Speed`]'s normal speed.

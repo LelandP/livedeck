@@ -53,8 +53,12 @@ jobs:
           "STREAMLINK_DIR=$($sl.FullName)" >> $env:GITHUB_ENV
           "MPV_LIB_DIR=$((Resolve-Path deps\mpv).Path)" >> $env:GITHUB_ENV
 
+      # CMake, LLVM/libclang and the ggml speed flags for the captions feature (whisper.cpp).
+      - uses: ./.github/actions/whisper-windows
+
       - name: Build
-        run: cargo build --release --locked -p livedeck --features mpv
+        # CPU only on Windows. The speech models are downloaded by the app, not packaged.
+        run: cargo build --release --locked -p livedeck --features mpv,captions
 
       - name: Package
         shell: pwsh
@@ -117,7 +121,7 @@ jobs:
           fixed=$(printf '%s\n' "$bodies" | sed -n 's/^[[:space:]]*Fixed:[[:space:]]*/- /p')
           {
             cat <<'EOF'
-          **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Windows may show a SmartScreen warning because the program is not code-signed.
+          **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Captions download their speech model the first time you turn them on. Windows may show a SmartScreen warning because the program is not code-signed.
 
           **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. To update, open the new file in Discover (or GNOME Software), or run the same command with `--reinstall`. Settings and sign-in are kept. This build is new and untested on a Deck.
 

@@ -210,6 +210,8 @@ export component MainWindow inherits Window {
     in property <bool> audio-only: false;
     // The stats box over the video, one fact per line. Empty while it is off.
     in property <string> stats-text: "";
+    // Generated captions over the video, oldest line first, at most two.
+    in property <[string]> caption-lines: [];
     // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
     in property <int> hud-pulse: 0;
     // The "Quit LiveDeck?" prompt (B on a root screen). A quits, B cancels.
@@ -489,6 +491,7 @@ export component MainWindow inherits Window {
         hud: root.video-hud;
         audio-only: root.audio-only;
         stats-text: root.stats-text;
+        caption-lines: root.caption-lines;
         sleep-label: root.sleep-label;
         subscribe-open: root.subscribe-open;
         subscribe-qr: root.subscribe-qr;

@@ -83,6 +83,7 @@ fn health_at(pos_ms: u64) -> Event {
             buffer_ms: 60_000,
             pos_ms: Some(pos_ms),
             length_ms: None,
+            stream_ms: None,
         },
     }
 }

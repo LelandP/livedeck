@@ -18,6 +18,7 @@ use tokio::sync::Semaphore;
 use htpc_resolver::StreamResolver;
 
 use crate::awake::KeepAwake;
+use crate::captions::Captions;
 use crate::chat::Chat;
 use crate::hype_train::HypeWatch;
 use crate::live_watch::LiveWatch;
@@ -149,12 +150,13 @@ impl<T: Send + 'static> LatestWriter<T> {
     }
 }
 
-/// A video's seek timer command: how long to wait, and the event to send then. `None` for any
-/// other command.
+/// A pure timer command (a video's seek timers, the captions' clock tick): how long to wait, and
+/// the event to send then. `None` for any other command.
 fn seek_timer(cmd: &Command) -> Option<(u64, htpc_core::Event)> {
     use htpc_core::seek::{HOLD_AFTER_MS, SCRUB_TICK_MS};
     use htpc_core::Event;
     match *cmd {
+        Command::CaptionTick { id, ms } => Some((ms, Event::CaptionTickDue(id))),
         Command::SettleSeek { id, ms } => Some((ms, Event::SeekSettleDue(id))),
         Command::HoldCheck { id } => Some((HOLD_AFTER_MS, Event::HoldDue(id))),
         Command::ScrubTick { id } => Some((SCRUB_TICK_MS, Event::ScrubTickDue(id))),
@@ -193,6 +195,9 @@ pub struct Store<P, R, S> {
     awake: bool,
     /// Runs the sleep timer and suspends. `None` in tests that do not care.
     sleep: Option<Sleep>,
+    /// The captions' speech engine. Without an engine (tests that do not care) captions are
+    /// unavailable.
+    captions: Arc<Captions>,
     /// Watches the channel on screen for raids and counts the raid card down. `None` in tests
     /// that do not care.
     raids: Option<Raids>,
@@ -247,6 +252,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             keep_awake: None,
             awake: false,
             sleep: None,
+            captions: Arc::new(Captions::new(None)),
             raids: None,
             shown: None,
             provider: Arc::new(provider),
@@ -313,6 +319,12 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
         self
     }
 
+    /// Runs `Command::SetCaptions` with `captions`.
+    pub fn with_captions(mut self, captions: Arc<Captions>) -> Self {
+        self.captions = captions;
+        self
+    }
+
     /// Runs the raid commands with `raids`.
     pub fn with_raids(mut self, raids: Raids) -> Self {
         self.raids = Some(raids);
@@ -364,12 +376,74 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
 
     fn reduce_one(&mut self, msg: Msg) {
         tracing::trace!(?msg, "reduce");
+        self.log_caption_timing(&msg);
         let (next, cmds) = reduce(&self.state, msg);
         self.wake.after(&cmds);
         self.state = next;
+        // Before the commands, so a seek's tap starts at the place the reducer has for it.
+        if let Some(v) = &self.state.video {
+            self.playback
+                .follow_video(v.pos_ms, self.state.captions.clock_ms);
+            self.captions.set_playhead(self.state.captions.clock_ms);
+        } else {
+            self.captions.set_playhead(None);
+        }
         self.publish();
         self.update_awake();
         self.spawn_all(cmds);
+    }
+
+    /// Captions' timing at debug (captions-plan.md, phase 3b), target `livedeck::captions`: how
+    /// late each caption reaches the reducer (the stream clock then, minus its start: above 0 its
+    /// first words show late), and with each health report of the single player how far the
+    /// picture trails the newest audio the captions are made from (the lead; for a video, how far
+    /// ahead of the playhead the tap has read).
+    fn log_caption_timing(&self, msg: &Msg) {
+        if !self.state.captions_live() {
+            return;
+        }
+        let clock = self.state.captions.clock_ms;
+        match msg {
+            Msg::Event(htpc_core::Event::Caption {
+                start_ms,
+                end_ms,
+                words,
+                ..
+            }) => {
+                let late_ms = clock.map(|now| now as i64 - *start_ms as i64);
+                tracing::debug!(
+                    target: "livedeck::captions",
+                    ?late_ms,
+                    start_ms,
+                    length_ms = end_ms.saturating_sub(*start_ms),
+                    words = words.len(),
+                    "caption"
+                );
+            }
+            Msg::Event(htpc_core::Event::PlayerHealth {
+                slot: htpc_core::MAIN_SLOT,
+                health,
+                ..
+            }) => {
+                let lead_ms = self
+                    .captions
+                    .newest_audio_ms()
+                    .zip(health.stream_ms)
+                    .map(|(audio, picture)| audio as i64 - picture as i64);
+                tracing::debug!(
+                    target: "livedeck::captions",
+                    ?lead_ms,
+                    buffer_ms = health.buffer_ms,
+                    delayed = self.state.captions.delaying,
+                    "picture"
+                );
+            }
+            Msg::Event(htpc_core::Event::PlayerHeld {
+                slot: htpc_core::MAIN_SLOT,
+                held,
+            }) => tracing::debug!(target: "livedeck::captions", held, "picture held"),
+            _ => {}
+        }
     }
 
     /// Asks for the screen to stay on while a stream is starting or playing (not paused, not
@@ -436,6 +510,21 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
             if let Command::SetKick(on) = cmd {
                 // At once, not in a task: the `LoadFeed` after it must already see it.
                 self.provider.set_kick(on);
+                continue;
+            }
+            if let Command::SetCaptions(on) = cmd {
+                // The request is numbered now, in the order of the commands. Making the engine
+                // blocks (whisper loads its models), so the rest runs in a task.
+                let captions = Arc::clone(&self.captions);
+                let ticket = captions.request();
+                let playback = Arc::clone(&self.playback);
+                let tx = self.tx.clone();
+                tokio::spawn(async move { captions.apply(ticket, on, &playback, &tx).await });
+                continue;
+            }
+            if let Command::SetCaptionsQuality(quality) = cmd {
+                // At once, not in a task: the `SetCaptions` after it must already see it.
+                self.captions.set_quality(quality);
                 continue;
             }
             if let Command::SaveFavorites(list) = cmd {
@@ -810,6 +899,10 @@ mod tests {
         assert_eq!(
             seek_timer(&Command::ScrubTick { id: 5 }),
             Some((SCRUB_TICK_MS, Event::ScrubTickDue(5)))
+        );
+        assert_eq!(
+            seek_timer(&Command::CaptionTick { id: 6, ms: 250 }),
+            Some((250, Event::CaptionTickDue(6)))
         );
         assert_eq!(seek_timer(&Command::LeaveChat), None);
     }

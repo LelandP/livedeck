@@ -333,6 +333,7 @@ fn twitch_has_every_feature_and_kick_only_watching() {
         subscribe: true,
         chat_send: true,
         videos: true,
+        captions: true,
     };
     assert_eq!(Platform::Twitch.features(), all);
     assert_eq!(
@@ -343,6 +344,7 @@ fn twitch_has_every_feature_and_kick_only_watching() {
             subscribe: false,
             chat_send: false,
             videos: false,
+            captions: false,
         }
     );
 }

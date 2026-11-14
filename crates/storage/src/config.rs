@@ -6,6 +6,9 @@
 //! live_notifications = true   # a popup when a followed channel goes live
 //! background_play = false     # keep playing while another app has focus
 //! show_kick = false           # Kick streams next to Twitch (Home and Search)
+//! captions = false            # generated captions on Twitch streams (player menu)
+//! captions_quality = "standard"   # fast | standard | best (GPU builds)
+//! caption_delay = true        # with captions on, delay video and chat so captions are on time
 //! image_cache_max_mb = 256
 //! quick_messages = ["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"]   # chips while writing in chat
 //! # client_id = "..."         # public Twitch client ID (TWITCH_CLIENT_ID overrides it)
@@ -18,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use htpc_core::{default_quick_messages, ChatLayout, Quality, Settings, CHAT_MAX};
+use htpc_core::{default_quick_messages, CaptionsQuality, ChatLayout, Quality, Settings, CHAT_MAX};
 use serde::{Deserialize, Serialize};
 
 use crate::fs_util::{self, Access};
@@ -77,6 +80,9 @@ struct ConfigFile {
     live_notifications: Option<bool>,
     background_play: Option<bool>,
     show_kick: Option<bool>,
+    captions: Option<bool>,
+    captions_quality: Option<String>,
+    caption_delay: Option<bool>,
     image_cache_max_mb: Option<u64>,
     quick_messages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,6 +114,10 @@ impl From<ConfigFile> for Config {
                     .background_play
                     .unwrap_or(Settings::default().background_play),
                 show_kick: f.show_kick.unwrap_or(Settings::default().show_kick),
+                captions: f.captions.unwrap_or(Settings::default().captions),
+                captions_quality: named::<CaptionsQuality>("captions_quality", f.captions_quality),
+                // On in a file from before the setting, as in a fresh install.
+                caption_delay: f.caption_delay.unwrap_or(Settings::default().caption_delay),
             },
             client_id: f
                 .client_id
@@ -140,6 +150,9 @@ impl From<&Config> for ConfigFile {
             live_notifications: Some(c.settings.live_notifications),
             background_play: Some(c.settings.background_play),
             show_kick: Some(c.settings.show_kick),
+            captions: Some(c.settings.captions),
+            captions_quality: Some(c.settings.captions_quality.as_str().to_owned()),
+            caption_delay: Some(c.settings.caption_delay),
             image_cache_max_mb: Some(c.image_cache_max_mb),
             quick_messages: Some(c.quick_messages.clone()),
             client_id: c.client_id.clone(),

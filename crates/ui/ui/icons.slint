@@ -26,6 +26,18 @@ export component LockIcon inherits Path {
     stroke-width: 2.4px;
 }
 
+// The favorites' star, filled. A path, not the "★" character: the bundled font has no star, and
+// without a system fallback font (CI's Linux runner) the character drew nothing.
+export component StarIcon inherits Path {
+    in property <color> tone: Theme.accent-light;
+    width: 18px;
+    height: 18px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+    fill: root.tone;
+}
+
 // Vector nav icons (24x24 viewbox) so no image assets are needed.
 // kind (RailEntry order): 0 home, 1 following (heart), 2 favorites (star), 3 browse (grid),
 // 4 search (magnifier), 5 settings (sliders), 6 account

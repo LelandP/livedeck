@@ -48,6 +48,10 @@ Run livedeck.exe. Nothing needs to be installed: libmpv (video) and Streamlink (
 lookup) are in this folder. Settings are kept in %APPDATA%\livedeck, so deleting this folder
 removes the program and leaves your settings.
 
+Captions (optional, in the player menu) run on this PC with whisper.cpp. The first time they are
+turned on, LiveDeck downloads a speech model (60 MB for Standard) into %APPDATA%\livedeck; the
+models are not in this folder.
+
 Windows SmartScreen may warn about an unknown publisher, because the program is not code-signed.
 Choose "More info", then "Run anyway".
 

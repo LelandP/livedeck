@@ -1,0 +1,8 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+twitch: menu_open=true row="Off" caption_lines=[]
+no engine: menu_open=true row="Captions unavailable" caption_lines=[]
+sound only: menu_open=true row="Not with sound only" caption_lines=[]
+kick: menu_open=true row="Twitch only" caption_lines=[]

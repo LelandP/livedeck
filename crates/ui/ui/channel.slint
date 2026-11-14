@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { RowData } from "types.slint";
 import { StreamCard } from "components.slint";
+import { StarIcon } from "icons.slint";
 
 // A tab under the channel's name: Videos or Clips. LB and RB switch (the hints bar says so).
 component TabPill inherits Rectangle {
@@ -139,11 +140,12 @@ export component ChannelContent inherits Rectangle {
                     overflow: elide;
                 }
                 // The favorites' star, as in the multiview picker.
-                if root.favorite : Text {
-                    text: "★";
-                    color: Theme.accent-light;
-                    font-size: Theme.fs-title;
-                    vertical-alignment: center;
+                if root.favorite : VerticalLayout {
+                    alignment: center;
+                    StarIcon {
+                        width: 30px;
+                        height: 30px;
+                    }
                 }
             }
             HorizontalLayout {

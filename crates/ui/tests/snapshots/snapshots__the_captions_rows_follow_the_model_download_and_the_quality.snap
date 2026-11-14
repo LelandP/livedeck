@@ -1,0 +1,16 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+off: Captions="Off" Caption quality="Standard" Delay="On"
+on: Captions="On" Caption quality="Standard" Delay="On"
+Downloading(0): Captions="Downloading 0%" Caption quality="Standard" Delay="On"
+Downloading(34): Captions="Downloading 34%" Caption quality="Standard" Delay="On"
+Failed: Captions="Download failed · A to retry" Caption quality="Standard" Delay="On"
+Ready: Captions="On" Caption quality="Standard" Delay="On"
+cpu Fast: Captions="On" Caption quality="Fast" Delay="On"
+cpu Standard: Captions="On" Caption quality="Standard" Delay="On"
+cpu Best: Captions="On" Caption quality="Standard" Delay="On"
+gpu Best: Captions="On" Caption quality="Best" Delay="On"
+delay off: Captions="On" Caption quality="Best" Delay="Off"
+no engine: Captions="Captions unavailable" Caption quality="Captions unavailable" Delay="Off"

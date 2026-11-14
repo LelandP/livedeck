@@ -56,6 +56,33 @@ const LATENCY_OPTIONS: &[(&str, &str, &str)] = &[
     ("stream-buffer-size", "4k", "128k"),
 ];
 
+/// How far ahead the demuxer reads while a live stream is delayed for captions: enough to keep
+/// everything from the delayed picture up to the live edge (the latencies' own values stop
+/// reading 1 or 10 s ahead). Changed while playing, mpv reads further at once.
+const DELAY_READAHEAD_S: &str = "60";
+
+/// The length of a live HLS segment (Twitch's are 2 s): a delayed load starts back by as many
+/// segments as the delay needs, through lavf's `live_start_index`.
+const SEGMENT_MS: u32 = 2_000;
+
+/// A load `n` segments back has about `n` × 2 s − 1.5 s buffered once it plays (live Twitch,
+/// 2026-11-13: index −3 gave 3.8–4.9 s, −7 gave 12.3–13.6 s, −8 gave 14.2–15.3 s).
+const START_BACK_SHORT_MS: u32 = 1_500;
+
+/// A delayed stream whose buffer falls this far under the delay (after a network stall, say) is
+/// held again. Less than this is the saw of 2 s segments arriving (2.3 s under the release
+/// point at worst, measured).
+const REHOLD_SLACK_MS: u32 = 3_500;
+
+/// The longest hold. A buffer that cannot grow (a network too slow, a playlist too short) plays
+/// on after this, and is not held again until the next load or delay change.
+const HOLD_MAX: Duration = Duration::from_secs(20);
+
+/// Turning the delay off jumps ahead to leave about this much buffered: a keyframe seek lands up
+/// to a segment past its target, which leaves the 4-5 s a low-latency stream keeps (measured
+/// 2026-11-13 on live Twitch, `examples/caption_delay_probe.rs`).
+const CATCH_UP_KEEP_MS: u32 = 6_000;
+
 enum Control {
     Load(String, LoadOptions),
     Pause(bool),
@@ -101,11 +128,28 @@ impl MpvPlayer {
     pub fn new(
         on_event: impl Fn(PlayerEvent) + Send + 'static,
     ) -> Result<(Self, VideoOutput), String> {
+        Self::start(on_event, false)
+    }
+
+    /// A player that shows and plays nothing (`vo=null`, `ao=null`) but otherwise behaves the
+    /// same, for probes (`examples/caption_delay_probe.rs`).
+    pub fn headless(on_event: impl Fn(PlayerEvent) + Send + 'static) -> Result<Self, String> {
+        Self::start(on_event, true).map(|(player, _)| player)
+    }
+
+    fn start(
+        on_event: impl Fn(PlayerEvent) + Send + 'static,
+        headless: bool,
+    ) -> Result<(Self, VideoOutput), String> {
         use_c_numeric_locale();
         let mpv = Mpv::with_initializer(|init| {
             // Required: without these there is no video at all.
-            init.set_option("vo", "libmpv")
-                .inspect_err(|e| tracing::error!(%e, "mpv rejected vo=libmpv"))?;
+            let vo = if headless { "null" } else { "libmpv" };
+            init.set_option("vo", vo)
+                .inspect_err(|e| tracing::error!(%e, "mpv rejected vo={vo}"))?;
+            if headless {
+                init.set_option("ao", "null")?;
+            }
             // Keep the core alive between streams (and after one ends).
             init.set_option("idle", "yes")
                 .inspect_err(|e| tracing::error!(%e, "mpv rejected idle=yes"))?;
@@ -140,7 +184,8 @@ impl MpvPlayer {
 
         let (tx, rx) = channel();
         let core = Arc::clone(&mpv);
-        let ready = Arc::new(AtomicBool::new(false));
+        // Headless, nothing waits for a render context.
+        let ready = Arc::new(AtomicBool::new(headless));
         let can_show = Arc::clone(&ready);
         std::thread::Builder::new()
             .name("mpv-control".into())
@@ -251,6 +296,99 @@ fn apply_latency(mpv: &Mpv, latency: Latency) {
     }
 }
 
+/// A latency's own value of `option` in [`LATENCY_OPTIONS`].
+fn latency_value(option: &str, latency: Latency) -> &'static str {
+    LATENCY_OPTIONS
+        .iter()
+        .find(|(name, _, _)| *name == option)
+        .map_or("", |(_, low, normal)| match latency {
+            Latency::Low => low,
+            Latency::Normal => normal,
+        })
+}
+
+/// lavf's options for a live load `delay_ms` behind the edge: the latency's own, plus a start
+/// enough segments back for that buffer. Twitch's playlists hold 14 segments (28 s).
+fn delayed_lavf_options(latency: Latency, delay_ms: u32) -> String {
+    let back = (delay_ms + START_BACK_SHORT_MS).div_ceil(SEGMENT_MS);
+    let start = format!("live_start_index=-{back}");
+    match latency_value("demuxer-lavf-o", latency) {
+        "" => start,
+        own => format!("{own},{start}"),
+    }
+}
+
+/// Sets up the next live load to start `delay_ms` behind the live edge and to keep reading up to
+/// it.
+fn apply_delay_to_load(mpv: &Mpv, latency: Latency, delay_ms: u32) {
+    let lavf = delayed_lavf_options(latency, delay_ms);
+    for (name, value) in [
+        ("demuxer-lavf-o", lavf.as_str()),
+        ("demuxer-readahead-secs", DELAY_READAHEAD_S),
+    ] {
+        if let Err(e) = mpv.set_property(name, value) {
+            tracing::warn!(option = name, value, %e, "mpv delay option not applied");
+        }
+    }
+}
+
+/// What the delay asks of a live stream now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DelayStep {
+    /// Hold the picture: the buffer is too short.
+    Hold,
+    /// Let it go: the buffer is long enough, or the hold lasted [`HOLD_MAX`] (`gave_up`).
+    Release {
+        gave_up: bool,
+    },
+    Stay,
+}
+
+/// The delay's decision for a stream `buffered_ms` ahead, held for `held_for` (`None`: playing).
+/// `may_hold`: it plays with nothing against a hold (not paused by the user, not given up).
+fn delay_step(
+    delay_ms: u32,
+    buffered_ms: u32,
+    held_for: Option<Duration>,
+    may_hold: bool,
+) -> DelayStep {
+    match held_for {
+        Some(_) if buffered_ms >= delay_ms => DelayStep::Release { gave_up: false },
+        Some(held) if held >= HOLD_MAX => DelayStep::Release { gave_up: true },
+        Some(_) => DelayStep::Stay,
+        None if may_hold && buffered_ms + REHOLD_SLACK_MS < delay_ms => DelayStep::Hold,
+        None => DelayStep::Stay,
+    }
+}
+
+/// How far to jump ahead (seconds) when the delay is turned off with `buffered_ms` ahead: to near
+/// the live edge, or nowhere if it is near already.
+fn catch_up_s(buffered_ms: u32) -> Option<f64> {
+    let by = buffered_ms.checked_sub(CATCH_UP_KEEP_MS)?;
+    (by >= 1_000).then(|| f64::from(by) / 1000.0)
+}
+
+/// The demuxer's buffer ahead in milliseconds, 0 while mpv cannot tell.
+fn buffered_ms(mpv: &Mpv) -> u32 {
+    number(mpv, "demuxer-cache-duration").map_or(0, |s| {
+        u32::try_from((s * 1000.0).round() as u64).unwrap_or(u32::MAX)
+    })
+}
+
+/// The live delay on the control thread ([`PlayerOption::LiveDelay`]): what was asked, and the
+/// hold that builds it.
+#[derive(Debug, Default)]
+struct Delay {
+    /// The delay asked for, in milliseconds.
+    ms: Option<u32>,
+    /// Since when the picture is held: paused by the delay, whatever the user asked.
+    held_since: Option<Instant>,
+    /// The loaded stream's first frame came during the hold, so `Playing` waits for its end.
+    restarted: bool,
+    /// A hold ran out: no more until the next load or a new delay.
+    gave_up: bool,
+}
+
 /// Applies an option that changes while playing. mpv keeps it for later streams as well.
 fn apply_option(mpv: &Mpv, option: PlayerOption) {
     let result = match option {
@@ -271,6 +409,8 @@ fn apply_option(mpv: &Mpv, option: PlayerOption) {
         PlayerOption::Muted(muted) => mpv.set_property("mute", muted),
         // mpv keeps the pitch (`audio-pitch-correction` is on by default).
         PlayerOption::Speed(milli) => mpv.set_property("speed", speed(milli)),
+        // The control loop keeps it (`Delay`): it changes the next load and the pause.
+        PlayerOption::LiveDelay(_) => Ok(()),
     };
     if let Err(e) = result {
         tracing::warn!(?option, %e, "mpv option not changed");
@@ -370,14 +510,30 @@ fn read_health(mpv: &Mpv, video: bool) -> Option<PlayerHealth> {
         buffer_ms,
         pos_ms: at("time-pos"),
         length_ms: at("duration"),
+        stream_ms: stream_ms(mpv),
     })
+}
+
+/// `time-pos` on the stream's own clock. mpv rebases a file's timestamps to start at 0
+/// (`rebase-start-time`) by taking its start time off, so adding `demuxer-start-time` back gives
+/// the timestamps an audio tap with `rebase-start-time=no` sees. Measured 2026-11-13: 0 on live
+/// Twitch (rebased and raw `time-pos` were equal), 62.05 s on a Twitch video (raw = rebased +
+/// 62.05 s). Positions in the app (`pos_ms`, seeking) stay rebased.
+fn stream_ms(mpv: &Mpv) -> Option<u64> {
+    let pos = number(mpv, "time-pos")?;
+    let start = mpv
+        .get_property::<f64>("demuxer-start-time")
+        .ok()
+        .filter(|s| s.is_finite())
+        .unwrap_or(0.0);
+    Some(millis((pos + start).max(0.0)))
 }
 
 /// libmpv refuses to start (`mpv_create` returns NULL) unless `LC_NUMERIC` is "C". Rust never
 /// changes the locale, but a library in the process may have set it from the environment (a
 /// Flatpak or SteamOS session has `LANG` set). Only number formatting changes: text stays UTF-8.
 #[cfg(target_os = "linux")]
-fn use_c_numeric_locale() {
+pub(crate) fn use_c_numeric_locale() {
     use std::ffi::{c_char, c_int};
     // glibc and musl both use 1 for LC_NUMERIC.
     const LC_NUMERIC: c_int = 1;
@@ -392,7 +548,7 @@ fn use_c_numeric_locale() {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn use_c_numeric_locale() {}
+pub(crate) fn use_c_numeric_locale() {}
 
 /// Asks mpv to send its log messages at `min_level` and above as events, so a failure can show
 /// what mpv said (see `RecentLog`). libmpv2 has no wrapper for this call.
@@ -449,12 +605,21 @@ fn control_loop(
     let mut health_due: Option<Instant> = None;
     // The loaded file is a video or clip, so health carries its position and length.
     let mut video = false;
+    // A live stream is loaded (or loading), and has not ended, failed or been stopped.
+    let mut live = false;
+    // The loaded stream's latency, whose read-ahead comes back when the delay goes.
+    let mut latency = Latency::Low;
+    // The user's pause. mpv is paused while this or the delay's hold is on.
+    let mut user_paused = false;
+    let mut delay = Delay::default();
     loop {
         let mut load = None;
         match rx.recv_timeout(POLL) {
             // Held until the render context exists (see `RENDER_WAIT`). A newer load replaces it.
             Ok(Control::Load(url, options)) => waiting = Some((url, options, Instant::now())),
             Ok(Control::Pause(paused)) => {
+                user_paused = paused;
+                let paused = paused || delay.held_since.is_some();
                 if let Err(e) = mpv.set_property("pause", paused) {
                     tracing::warn!(%e, "could not change the pause state");
                 }
@@ -470,8 +635,43 @@ fn control_loop(
                 waiting = None;
                 starting = false;
                 health_due = None;
+                live = false;
+                delay.held_since = None;
                 if let Err(e) = mpv.command("stop", &[]) {
                     tracing::warn!(%e, "could not stop mpv");
+                }
+            }
+            Ok(Control::Option(PlayerOption::LiveDelay(ms))) => {
+                let was = std::mem::replace(&mut delay.ms, ms);
+                delay.gave_up = false;
+                if was == ms || !live {
+                    // Nothing plays to change: the next load reads it.
+                } else if ms.is_some() {
+                    // Read up to the live edge; the check below holds the picture until the
+                    // buffer is long enough.
+                    let _ = mpv.set_property("demuxer-readahead-secs", DELAY_READAHEAD_S);
+                    tracing::debug!(?ms, "live delay on");
+                } else {
+                    let readahead = latency_value("demuxer-readahead-secs", latency);
+                    let _ = mpv.set_property("demuxer-readahead-secs", readahead);
+                    let buffered = buffered_ms(mpv);
+                    end_hold(
+                        mpv,
+                        &mut delay,
+                        user_paused,
+                        &mut starting,
+                        &mut health_due,
+                        on_event,
+                    );
+                    // Back to near the live edge, from the cache: no reload.
+                    if let Some(by) = catch_up_s(buffered) {
+                        if let Err(e) =
+                            mpv.command("seek", &[format!("{by:.3}").as_str(), "relative"])
+                        {
+                            tracing::warn!(%e, by, "could not catch up with the live edge");
+                        }
+                    }
+                    tracing::debug!(buffered, "live delay off");
                 }
             }
             Ok(Control::Option(option)) => apply_option(mpv, option),
@@ -499,27 +699,47 @@ fn control_loop(
             recent.clear();
             health_due = None;
             video = options.is_video();
+            live = !video;
+            latency = options.effective_latency();
             // Never the low-latency buffers for a video (`effective_latency`).
-            apply_latency(mpv, options.effective_latency());
+            apply_latency(mpv, latency);
             apply_start(mpv, options.start_ms);
             // A live stream always plays at normal speed. A video keeps the speed set for it.
             if !video {
                 apply_option(mpv, PlayerOption::Speed(crate::NORMAL_SPEED));
             }
-            let _ = mpv.set_property("pause", false);
+            // A delayed live stream starts that far back and paused: its first frame waits until
+            // the buffer is long enough (at once, mostly), and `Playing` with it.
+            delay.held_since = None;
+            delay.restarted = false;
+            delay.gave_up = false;
+            user_paused = false;
+            if let (Some(ms), true) = (delay.ms, live) {
+                apply_delay_to_load(mpv, latency, ms);
+                delay.held_since = Some(Instant::now());
+            }
+            let _ = mpv.set_property("pause", delay.held_since.is_some());
             // A fade only quietens the stream it ran on.
             fade = None;
             set_volume(mpv, FULL_VOLUME);
             match mpv.command("loadfile", &[url.as_str(), "replace"]) {
                 Ok(()) => starting = true,
-                Err(e) => on_event(PlayerEvent::Failed(
-                    recent.report(&format!("loadfile failed: {}", describe(&e))),
-                )),
+                Err(e) => {
+                    live = false;
+                    delay.held_since = None;
+                    on_event(PlayerEvent::Failed(
+                        recent.report(&format!("loadfile failed: {}", describe(&e))),
+                    ));
+                }
             }
         }
 
         while let Some(event) = mpv.wait_event(0.0) {
             match event {
+                // Held for the delay: `Playing` comes when the hold ends (`end_hold`).
+                Ok(Event::PlaybackRestart) if starting && delay.held_since.is_some() => {
+                    delay.restarted = true;
+                }
                 Ok(Event::PlaybackRestart) if starting => {
                     starting = false;
                     health_due = Some(Instant::now() + HEALTH_EVERY);
@@ -528,6 +748,8 @@ fn control_loop(
                 Ok(Event::EndFile(reason)) if reason == mpv_end_file_reason::Eof => {
                     starting = false;
                     health_due = None;
+                    live = false;
+                    delay.held_since = None;
                     on_event(PlayerEvent::Ended);
                 }
                 // `Stop` and `Redirect` are our own doing (a new load or `stop`).
@@ -547,9 +769,44 @@ fn control_loop(
                 Err(e) => {
                     starting = false;
                     health_due = None;
+                    live = false;
+                    delay.held_since = None;
                     tracing::warn!(%e, "mpv could not play the stream");
                     on_event(PlayerEvent::Failed(recent.report(&describe(&e))));
                 }
+            }
+        }
+
+        // The delay: hold the picture while the buffer is too short, let it go once it is long
+        // enough. Holds start only on a stream that plays; a load is held from the start.
+        if let (Some(ms), true) = (delay.ms, live) {
+            let playing = !starting && health_due.is_some();
+            let may_hold = playing && !user_paused && !delay.gave_up;
+            let held_for = delay.held_since.map(|since| since.elapsed());
+            let buffered = buffered_ms(mpv);
+            match delay_step(ms, buffered, held_for, may_hold) {
+                DelayStep::Hold => {
+                    tracing::debug!(buffered, ms, "holding the picture for the live delay");
+                    delay.held_since = Some(Instant::now());
+                    let _ = mpv.set_property("pause", true);
+                    on_event(PlayerEvent::Held(true));
+                }
+                DelayStep::Release { gave_up } => {
+                    if gave_up {
+                        tracing::warn!(buffered, ms, "the live delay could not be built");
+                        delay.gave_up = true;
+                    }
+                    tracing::debug!(buffered, ?held_for, "the live delay is built");
+                    end_hold(
+                        mpv,
+                        &mut delay,
+                        user_paused,
+                        &mut starting,
+                        &mut health_due,
+                        on_event,
+                    );
+                }
+                DelayStep::Stay => {}
             }
         }
 
@@ -584,6 +841,33 @@ fn control_loop(
     tracing::debug!("mpv control thread finished");
 }
 
+/// Ends the delay's hold, if there is one: the picture goes on (unless the user paused it). A
+/// load held from its start reports `Playing` now if its first frame came meanwhile (or later, at
+/// that frame); a stream held while playing reports `Held(false)` and its health at once.
+fn end_hold(
+    mpv: &Mpv,
+    delay: &mut Delay,
+    user_paused: bool,
+    starting: &mut bool,
+    health_due: &mut Option<Instant>,
+    on_event: &impl Fn(PlayerEvent),
+) {
+    if delay.held_since.take().is_none() {
+        return;
+    }
+    let _ = mpv.set_property("pause", user_paused);
+    if *starting {
+        if std::mem::take(&mut delay.restarted) {
+            *starting = false;
+            *health_due = Some(Instant::now() + HEALTH_EVERY);
+            on_event(PlayerEvent::Playing);
+        }
+    } else {
+        *health_due = Some(Instant::now());
+        on_event(PlayerEvent::Held(false));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,5 +891,56 @@ mod tests {
         assert_eq!(speed(1500), 1.5);
         assert_eq!(speed(750), 0.75);
         assert_eq!(speed(0), 0.01);
+    }
+
+    #[test]
+    fn a_delayed_load_starts_segments_back_with_the_latencys_own_options() {
+        // 12.5 s: 7 segments of 2 s give about 12.5 s.
+        assert_eq!(
+            delayed_lavf_options(Latency::Low, 12_500),
+            "fflags=+nobuffer,live_start_index=-7"
+        );
+        assert_eq!(
+            delayed_lavf_options(Latency::Normal, 10_000),
+            "live_start_index=-6"
+        );
+        assert_eq!(latency_value("demuxer-readahead-secs", Latency::Low), "1");
+        assert_eq!(
+            latency_value("demuxer-readahead-secs", Latency::Normal),
+            "10"
+        );
+    }
+
+    #[test]
+    fn the_delay_holds_a_short_buffer_and_lets_go_of_a_long_one() {
+        let s = Duration::from_secs;
+        let step =
+            |buffered, held: Option<u64>, may| delay_step(11_500, buffered, held.map(s), may);
+        // Playing: held only well under the delay, and only when it may be.
+        assert_eq!(step(4_500, None, true), DelayStep::Hold);
+        assert_eq!(step(4_500, None, false), DelayStep::Stay);
+        assert_eq!(
+            step(9_000, None, true),
+            DelayStep::Stay,
+            "the saw of segments"
+        );
+        assert_eq!(step(7_900, None, true), DelayStep::Hold);
+        // Held: until the buffer is long enough, or for so long.
+        assert_eq!(step(11_000, Some(3), true), DelayStep::Stay);
+        assert_eq!(
+            step(11_500, Some(3), true),
+            DelayStep::Release { gave_up: false }
+        );
+        assert_eq!(
+            step(6_000, Some(20), false),
+            DelayStep::Release { gave_up: true }
+        );
+    }
+
+    #[test]
+    fn turning_the_delay_off_jumps_to_near_the_live_edge() {
+        assert_eq!(catch_up_s(12_400), Some(6.4));
+        assert_eq!(catch_up_s(6_500), None, "near it already");
+        assert_eq!(catch_up_s(0), None);
     }
 }

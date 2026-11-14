@@ -43,6 +43,9 @@ pub struct Features {
     pub chat_send: bool,
     /// A channel page with past broadcasts, highlights and clips (vod-plan.md). Twitch's GQL API.
     pub videos: bool,
+    /// Generated captions (captions-plan.md): Twitch's renditions share one clock, Kick's are not
+    /// checked yet.
+    pub captions: bool,
 }
 
 impl Platform {
@@ -54,6 +57,7 @@ impl Platform {
                 subscribe: true,
                 chat_send: true,
                 videos: true,
+                captions: true,
             },
             Platform::Kick => Features {
                 raids: false,
@@ -61,6 +65,7 @@ impl Platform {
                 subscribe: false,
                 chat_send: false,
                 videos: false,
+                captions: false,
             },
         }
     }

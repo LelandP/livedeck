@@ -10,11 +10,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
-    grid_cols, subscribe_url, AppState, ChannelPage, ChannelTab, ChatKind, ChatLayout, ChatMessage,
-    ChatSpan, ChatStatus, Feed, FeedId, HypeTrain, Key, LiveEndRow, LoginProblem, Paging, Platform,
-    Playback, PlayerMenuRow, RailEntry, Rgb, RoomMode, Row, RowKind, Screen, SearchState,
-    SendProblem, SettingsRow, Shift, Stream, Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC,
-    TOASTS_SHOWN,
+    grid_cols, subscribe_url, AppState, CaptionsRow, ChannelPage, ChannelTab, ChatKind, ChatLayout,
+    ChatMessage, ChatSpan, ChatStatus, Feed, FeedId, HypeTrain, Key, LiveEndRow, LoginProblem,
+    Paging, Platform, Playback, PlayerMenuRow, RailEntry, Rgb, RoomMode, Row, RowKind, Screen,
+    SearchState, SendProblem, SettingsRow, Shift, Stream, Tile, Toast, ToastKind, CHAT_MAX,
+    RESUME_MOSAIC, TOASTS_SHOWN,
 };
 use slint::{
     Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
@@ -310,6 +310,9 @@ pub struct ViewModel {
     pub audio_only: bool,
     /// The stats box, one fact per line. Empty while the box is off.
     pub stats_text: String,
+    /// The generated captions on screen, oldest first, at most two lines (captions-plan.md).
+    /// Empty while none show. Drawn over the bottom of the video, above the HUD when it is up.
+    pub caption_lines: Vec<String>,
     /// Changes whenever the HUD should come back (the window hides it again after a timeout).
     pub hud_pulse: i32,
     /// The "Quit LiveDeck?" prompt is open.
@@ -585,6 +588,22 @@ fn player_menu_value(state: &AppState, row: PlayerMenuRow) -> String {
         PlayerMenuRow::ChannelVideos if state.multiview.is_some() => "Not in multiview".into(),
         PlayerMenuRow::ChannelVideos if !state.on_screen_features().videos => "Twitch only".into(),
         PlayerMenuRow::ChannelVideos => String::new(),
+        PlayerMenuRow::Captions => match state.captions_row() {
+            CaptionsRow::Off => "Off".into(),
+            CaptionsRow::On => "On".into(),
+            CaptionsRow::Downloading(percent) => format!("Downloading {percent}%"),
+            CaptionsRow::DownloadFailed => "Download failed · A to retry".into(),
+            CaptionsRow::Unavailable => "Captions unavailable".into(),
+            CaptionsRow::NotInMultiview => "Not in multiview".into(),
+            CaptionsRow::TwitchOnly => "Twitch only".into(),
+            CaptionsRow::NotWithSoundOnly => "Not with sound only".into(),
+        },
+        PlayerMenuRow::CaptionsQuality if state.captions_unavailable => {
+            "Captions unavailable".into()
+        }
+        PlayerMenuRow::CaptionsQuality => state.captions_quality().label().into(),
+        PlayerMenuRow::CaptionDelay if state.settings.caption_delay => "On".into(),
+        PlayerMenuRow::CaptionDelay => "Off".into(),
     }
 }
 
@@ -611,6 +630,9 @@ fn player_menu_title(state: &AppState, row: PlayerMenuRow) -> String {
         PlayerMenuRow::Speed => "Speed".into(),
         PlayerMenuRow::Chapters => "Chapters".into(),
         PlayerMenuRow::StartOver => "Start over".into(),
+        PlayerMenuRow::Captions => "Captions".into(),
+        PlayerMenuRow::CaptionsQuality => "Caption quality".into(),
+        PlayerMenuRow::CaptionDelay => "Delay video for caption sync".into(),
     }
 }
 
@@ -655,6 +677,10 @@ fn player_menu_help(state: &AppState, row: PlayerMenuRow) -> &'static str {
         PlayerMenuRow::Speed => "Faster or slower, with the pitch kept. For this video only.",
         PlayerMenuRow::Chapters => "Left and Right pick a chapter, A jumps there. With the menu closed, LB and RB jump to the previous and next one.",
         PlayerMenuRow::StartOver => "Plays the video again from 0:00.",
+        PlayerMenuRow::Captions if video => "Subtitles made on this device from the video's speech, ahead of the picture. English. Uses the processor. The first seconds after a jump have none. Remembered for next time.",
+        PlayerMenuRow::Captions => "Subtitles made on this device from the stream's speech, a few seconds behind. English. Uses the processor. Remembered for next time.",
+        PlayerMenuRow::CaptionsQuality => "Fast is the smallest model, Standard the default. Another model is downloaded the first time it is used. Remembered for next time.",
+        PlayerMenuRow::CaptionDelay => "With captions on, the picture and chat run about 10 s later, so every caption is ready in time. Off: closer to live, captions a few seconds late. Remembered.",
     }
 }
 
@@ -716,10 +742,14 @@ fn stats_text(state: &AppState) -> String {
     };
     const UNKNOWN: &str = "—";
     let rate = |r: Option<u64>| r.map_or_else(|| UNKNOWN.to_owned(), format_bitrate);
-    let buffer = s.buffer_ms.map_or_else(
+    let mut buffer = s.buffer_ms.map_or_else(
         || UNKNOWN.to_owned(),
         |ms| format!("{}.{} s", ms / 1000, (ms % 1000) / 100),
     );
+    // Held back so captions are on time (captions-plan.md, phase 3b).
+    if state.captions.delaying {
+        buffer.push_str(" · delayed for captions");
+    }
     // No video is decoded, so its lines would only say "—".
     if state.audio_only {
         return [
@@ -1792,6 +1822,11 @@ pub fn view_model(state: &AppState) -> ViewModel {
         player_menu_rows: player_menu_rows(state),
         audio_only: on_player && state.audio_only,
         stats_text: stats_text(state),
+        caption_lines: if on_player {
+            state.captions.shown.clone()
+        } else {
+            Vec::new()
+        },
         hud_pulse: state.hud_pulse as i32,
         exit_prompt: state.exit_prompt,
         sleep_label: sleep_label(state),
@@ -2094,6 +2129,9 @@ impl Update {
         ui.set_video_hud(to_video_hud(&vm.video));
         ui.set_audio_only(vm.audio_only);
         ui.set_stats_text(vm.stats_text.into());
+        let caption_lines: Vec<slint::SharedString> =
+            vm.caption_lines.iter().map(|l| l.as_str().into()).collect();
+        ui.set_caption_lines(ModelRc::new(VecModel::from(caption_lines)));
         ui.set_hud_pulse(vm.hud_pulse);
         ui.set_exit_prompt(vm.exit_prompt);
         ui.set_sleep_label(vm.sleep_label.into());

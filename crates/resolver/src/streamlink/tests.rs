@@ -74,6 +74,17 @@ fn fallback_lists_pass_through() {
     assert_eq!(quality_arg(&vec!["160p"; MAX_NAMES + 1].join(",")), "best");
 }
 
+#[tokio::test]
+async fn the_tap_quality_asks_for_the_smallest_video_and_nothing_bigger() {
+    let runner = FakeRunner::new(Ok(ok(PLAYLIST)));
+    let resolver = StreamlinkResolver::new(runner.clone());
+    resolver
+        .resolve(&twitch("somechannel"), crate::TAP_QUALITY)
+        .await
+        .unwrap();
+    assert_eq!(runner.calls()[0].1[2], "160p30,160p,160p60,worst");
+}
+
 #[test]
 fn audio_only_falls_back_to_video_when_a_stream_has_no_audio_rendition() {
     assert_eq!(quality_arg("audio_only"), "audio_only,best");

@@ -134,6 +134,13 @@ fn valid_clip_slug(slug: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// The quality to [`StreamResolver::resolve`] for a captions audio tap: the lowest video
+/// rendition (Twitch's 160p30), whose timestamps match every other video rendition's. Never
+/// `audio_only`, which runs 22 to 26 s off them (captions-plan.md, section 1). It ends in `worst`,
+/// so a stream without a 160p rendition gives its smallest one, never `best`. Streamlink's
+/// `worst` never picks `audio_only` (checked 2026-11-13).
+pub const TAP_QUALITY: &str = "160p30,160p,160p60,worst";
+
 /// Looks up what mpv should open for a live channel, a video or a clip.
 pub trait StreamResolver: Send + Sync + 'static {
     /// `quality` is a Streamlink stream name (`best`, `720p`, `worst`, ...) or a comma-separated

@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use htpc_core::{ChatLayout, Quality, Settings};
+use htpc_core::{CaptionsQuality, ChatLayout, Quality, Settings};
 use htpc_storage::{Config, ConfigStore, Error, Paths, DEFAULT_IMAGE_CACHE_MB, MIN_IMAGE_CACHE_MB};
 
 fn store() -> (tempfile::TempDir, ConfigStore) {
@@ -29,6 +29,9 @@ fn round_trip_survives_a_restart() {
             live_notifications: false,
             background_play: true,
             show_kick: true,
+            captions: true,
+            captions_quality: CaptionsQuality::Fast,
+            caption_delay: false,
         },
         client_id: Some("abc123".to_owned()),
         image_cache_max_mb: 64,
@@ -45,6 +48,35 @@ fn round_trip_survives_a_restart() {
     assert!(text.contains("live_notifications = false"), "{text}");
     assert!(text.contains("background_play = true"), "{text}");
     assert!(text.contains("show_kick = true"), "{text}");
+    assert!(text.contains("captions = true"), "{text}");
+    assert!(text.contains("captions_quality = \"fast\""), "{text}");
+    assert!(text.contains("caption_delay = false"), "{text}");
+}
+
+#[test]
+fn an_older_file_without_the_caption_delay_has_it_on() {
+    let config = Config::from_toml("captions = true\n").unwrap();
+    assert!(config.settings.caption_delay);
+    let off = Config::from_toml("caption_delay = false\n").unwrap();
+    assert!(!off.settings.caption_delay);
+}
+
+#[test]
+fn captions_quality_defaults_to_standard_and_survives_nonsense() {
+    let old = Config::from_toml("captions = true\n").unwrap();
+    assert_eq!(old.settings.captions_quality, CaptionsQuality::Standard);
+    let best = Config::from_toml("captions_quality = \"Best\"\n").unwrap();
+    assert_eq!(best.settings.captions_quality, CaptionsQuality::Best);
+    let bad = Config::from_toml("captions_quality = \"huge\"\n").unwrap();
+    assert_eq!(bad.settings.captions_quality, CaptionsQuality::Standard);
+}
+
+#[test]
+fn an_older_file_without_captions_keeps_them_off() {
+    let config = Config::from_toml("chat_layout = \"side\"\n").unwrap();
+    assert!(!config.settings.captions);
+    let on = Config::from_toml("captions = true\n").unwrap();
+    assert!(on.settings.captions);
 }
 
 #[test]

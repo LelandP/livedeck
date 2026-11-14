@@ -47,6 +47,43 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # The `captions` feature builds whisper.cpp, which needs CMake and a C++ compiler. The job above
+  # stays free of both. Unit tests here use fakes: the real-model tests are `#[ignore]` (they need
+  # model files). Vulkan (the Flatpak) is not built here: see the Flatpak workflow.
+  captions:
+    name: captions build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake libudev-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      # Windows: CMake, LLVM/libclang (bindgen makes the bindings) and the ggml speed flags.
+      - uses: ./.github/actions/whisper-windows
+        if: runner.os == 'Windows'
+      - uses: Swatinem/rust-cache@v2
+      # Linux uses the bindings that ship with whisper-rs-sys (no libclang needed). They are
+      # generated for glibc and do not compile on Windows, which is why Windows uses LLVM.
+      - name: Use the bundled whisper bindings
+        if: runner.os == 'Linux'
+        run: echo "WHISPER_DONT_GENERATE_BINDINGS=1" >> "$GITHUB_ENV"
+      - run: cargo clippy -p livedeck -p htpc-captions --features livedeck/captions,htpc-captions/whisper --all-targets -- -D warnings
+      - run: cargo test -p htpc-captions --features whisper
+      - run: cargo test -p livedeck --features captions
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest

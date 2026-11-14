@@ -132,6 +132,7 @@ fn health(pos_ms: u64) -> Event {
             buffer_ms: 60_000,
             pos_ms: Some(pos_ms),
             length_ms: Some(15_128_000),
+            stream_ms: None,
         },
     }
 }
@@ -815,6 +816,7 @@ fn a_videos_health_stays_out_of_the_slow_network_rule_and_moves_the_playhead() {
             buffer_ms: 0,
             pos_ms: Some(pos_ms),
             length_ms: Some(15_200_000),
+            stream_ms: None,
         },
     };
     let mut state = s;

@@ -648,6 +648,7 @@ fn the_slow_network_rule_and_the_background_pause_still_apply_behind_the_page() 
             buffer_ms: 0,
             pos_ms: None,
             length_ms: None,
+            stream_ms: None,
         },
     };
     let (s, cmds) = reduce(&s, stall);

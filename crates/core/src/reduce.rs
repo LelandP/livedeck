@@ -3,6 +3,7 @@
 //! All navigation behaviour lives here, not in the Slint files: the back stack, paged feeds (Home,
 //! Browse, Category) and the commands needed to fetch data.
 
+mod captions;
 mod channel;
 mod continue_watching;
 mod end_card;
@@ -54,6 +55,7 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
     // Wherever it changed: the running multiview session is saved, and Home's resume card kept
     // where it belongs.
     multiview::track_saved(&mut next, &mut cmds);
+    captions::settle(&mut next, &mut cmds);
     resume::settle(&mut next);
     continue_watching::sync_home(&mut next, &mut cmds);
     (next, cmds)
@@ -641,6 +643,10 @@ fn change_player_option(
         }
         // A video's own speed.
         PlayerMenuRow::Speed => video::change_speed(s, forward, cmds),
+        // On or off, and saved: the one row here that is.
+        PlayerMenuRow::Captions => captions::toggle(s, cmds),
+        PlayerMenuRow::CaptionsQuality => captions::cycle_quality(s, forward, cmds),
+        PlayerMenuRow::CaptionDelay => captions::toggle_delay(s, cmds),
         // Action rows, and the chapter list, handled in `player_menu_intent`.
         PlayerMenuRow::Subscribe
         | PlayerMenuRow::WriteChat
@@ -1335,7 +1341,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 fetch_chat_images(&messages, cmds);
                 // Lines only arrive over a working connection.
                 s.chat_status = ChatStatus::Live;
-                s.chat.extend(messages);
+                // Held back with the picture while captions delay it.
+                captions::chat_lines(s, messages, cmds);
             }
         }
         Event::ChatModerated { channel, action } => {
@@ -1390,9 +1397,19 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         } => {
             if slot == MAIN_SLOT {
                 end_card::ticked(s);
+                captions::health(s, &health, cmds);
             }
             network::health(s, slot, at_ms, health, cmds);
         }
+        Event::Caption {
+            start_ms,
+            end_ms,
+            text,
+            words,
+        } => captions::caption(s, start_ms, end_ms, &text, words, cmds),
+        Event::PlayerHeld { slot, held } => captions::held(s, slot, held, cmds),
+        Event::CaptionTickDue(id) => captions::tick_due(s, id, cmds),
+        Event::CaptionsModel(state) => captions::model(s, state),
         // Without multiview only the single player's slot has a stream on screen.
         Event::PlaybackStarted { slot }
         | Event::PlaybackEnded { slot }

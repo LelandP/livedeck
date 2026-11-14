@@ -4,7 +4,7 @@
 import { Theme, InputDevice } from "theme.slint";
 import { StreamItem, ChatMsg, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
 import { ChatList, RaidCard } from "player.slint";
-import { ViewIcon } from "icons.slint";
+import { ViewIcon, StarIcon } from "icons.slint";
 
 // A speaker, with sound waves or crossed out.
 component SpeakerIcon inherits Rectangle {
@@ -432,10 +432,9 @@ component PickerPanel inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                         kick: item.kick;
                     }
-                    if picker-row.star : Text {
-                        text: "★";
-                        color: Theme.accent-light;
-                        font-size: Theme.fs-body;
+                    if picker-row.star : VerticalLayout {
+                        alignment: center;
+                        StarIcon { }
                     }
                     Text {
                         text: item.channel;

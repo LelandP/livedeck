@@ -1,0 +1,26 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+-- off
+menu_open=false row="Off" caption_lines=[]
+menu_open=false row="Off" caption_lines=[]
+-- on, the menu open, nothing said yet
+menu_open=true row="On" caption_lines=[]
+menu_open=false row="On" caption_lines=[]
+-- word by word, as the stream gets to each
+menu_open=false row="On" caption_lines=[]
+menu_open=false row="On" caption_lines=["Welcome"]
+menu_open=false row="On" caption_lines=["Welcome back,"]
+menu_open=false row="On" caption_lines=["Welcome back, everyone."]
+-- the line fills, then a second one starts
+menu_open=false row="On" caption_lines=["Welcome back, everyone. Today we try out", "captions."]
+-- a third line scrolls the oldest off
+menu_open=false row="On" caption_lines=["captions. They run on this device, word by", "word, and roll up."]
+-- the HUD (the menu) up over them
+menu_open=true row="On" caption_lines=["captions. They run on this device, word by", "word, and roll up."]
+-- cleared after 3 s with no new word
+menu_open=false row="On" caption_lines=["captions. They run on this device, word by", "word, and roll up."]
+menu_open=false row="On" caption_lines=[]
+-- off the Player screen
+lines=[]
