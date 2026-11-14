@@ -11,7 +11,7 @@ use crate::keyboard::{Board, KeyboardState, Shift};
 use crate::layout::MAX_STREAMS;
 use crate::msg::{Slot, StreamKind, MAIN_SLOT};
 use crate::multiview::PickerTab;
-use crate::multiview::{Multiview, SavedSet, ViewPopup};
+use crate::multiview::{Multiview, ParkedSet, SavedSet, ViewPopup};
 use crate::netlimit::{NetLimit, Tier};
 use crate::quality::{FrameRate, Rendition};
 use crate::settings::{Hwdec, Latency, Quality, Settings, Zoom};
@@ -168,8 +168,8 @@ pub enum PlayerMenuRow {
     Subscribe,
     /// An action row: A opens the chat compose panel (see `AppState::compose`). Signed in only.
     WriteChat,
-    /// An action row: A opens the channel's page (Twitch only, and not in multiview). The stream
-    /// stops, like B.
+    /// An action row: A opens the channel's page over the player (Twitch only). The stream, or
+    /// every multiview tile, keeps playing behind it (`channel::open_from_player`).
     ChannelVideos,
     /// A video's speed (`seek::SPEEDS`). Videos only.
     Speed,
@@ -709,6 +709,10 @@ pub struct AppState {
     /// (`[…, Player, Channel, Player]`). B from the page reloads it. `now_playing` is `None`
     /// meanwhile: a video and a live stream never share it.
     pub parked_live: Option<Stream>,
+    /// The multiview session that was stopped to play a video from the channel page opened over
+    /// it (`[…, Multiview|Player, Channel, Player]`). B from the page starts it again. `multiview`
+    /// is `None` meanwhile.
+    pub parked_multiview: Option<ParkedSet>,
     /// The stream on screen plays sound only (player menu). Unlike `session`, it belongs to this
     /// stream: every stream opens as video.
     pub audio_only: bool,
@@ -1045,13 +1049,18 @@ impl AppState {
     /// the channel page over a live stream that keeps playing (`live_covered`). Its chat, raids and
     /// hype trains are followed only then.
     pub fn stream_on_screen(&self) -> bool {
-        matches!(self.screen, Screen::Player | Screen::Multiview) || self.live_covered()
+        matches!(self.screen, Screen::Player | Screen::Multiview)
+            || self.live_covered()
+            || self.multiview_covered()
     }
 
     /// The channel of the live stream the channel page sits over (`[…, Player, Channel]`): the one
-    /// still playing, or the one parked while a video plays.
+    /// still playing, or the one parked while a video plays. Not multiview's (`multiview_behind`).
     pub fn live_behind(&self) -> Option<&ChannelRef> {
         if self.screen != Screen::Channel || self.back_stack.last() != Some(&Screen::Player) {
+            return None;
+        }
+        if self.multiview_behind() {
             return None;
         }
         self.now_playing
@@ -1066,6 +1075,51 @@ impl AppState {
     /// recheck, the slow-network rule, chat, hype trains, and raids (held until the Player is back).
     pub fn live_covered(&self) -> bool {
         self.now_playing.is_some() && self.multiview.is_none() && self.live_behind().is_some()
+    }
+
+    /// The channel page sits right over multiview (`[…, Multiview|Player, Channel]`, the grid or
+    /// full screen): a session still running, or one parked while a video plays.
+    pub fn multiview_behind(&self) -> bool {
+        if self.screen != Screen::Channel
+            || !matches!(
+                self.back_stack.last(),
+                Some(Screen::Multiview | Screen::Player)
+            )
+        {
+            return false;
+        }
+        match (&self.multiview, &self.parked_multiview) {
+            (Some(_), _) => true,
+            (None, Some(parked)) => parked.depth == self.back_stack.len(),
+            (None, None) => false,
+        }
+    }
+
+    /// The channel page is open over multiview, which keeps running behind it: every tile plays,
+    /// the one with sound is heard, and nothing is drawn (`htpc_ui::video_size` gives the page no
+    /// video area). Chat, raids (held until multiview is back) and hype trains follow the stream
+    /// with sound as usual.
+    pub fn multiview_covered(&self) -> bool {
+        self.multiview.is_some() && self.multiview_behind()
+    }
+
+    /// Multiview's full screen is up, or under the channel page: the stream with sound gets the
+    /// whole screen's quality.
+    pub fn multiview_full_screen(&self) -> bool {
+        self.multiview.is_some()
+            && (self.screen == Screen::Player
+                || (self.multiview_covered() && self.back_stack.last() == Some(&Screen::Player)))
+    }
+
+    /// The stream whose page the player menu's *Channel videos* row opens: the single player's,
+    /// multiview's in full screen (the one with sound), or the focused tile's in the grid.
+    pub fn channel_videos_stream(&self) -> Option<&Stream> {
+        match &self.multiview {
+            Some(mv) if self.screen == Screen::Multiview && mv.focus != mv.sound => {
+                mv.focused_tile().map(|t| &t.stream)
+            }
+            _ => self.now_playing.as_ref(),
+        }
     }
 
     /// The single live player is up: its screen, or the channel page over it.

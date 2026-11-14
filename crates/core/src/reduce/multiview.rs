@@ -9,7 +9,7 @@ use crate::domain::{ChannelRef, ResumeCard, Stream, Tile, RESUME_MIN_LIVE};
 use crate::layout::{self, Layout};
 use crate::msg::{Command, Intent, Slot, StreamKind, MAIN_SLOT};
 use crate::multiview::{
-    Multiview, MvTile, Picker, PickerTab, PopupRow, SavedSet, TileQuality, ViewPopup,
+    Multiview, MvTile, ParkedSet, Picker, PickerTab, PopupRow, SavedSet, TileQuality, ViewPopup,
 };
 use crate::netlimit::Tier;
 use crate::quality::{self, FrameRate, Rendition};
@@ -226,8 +226,25 @@ fn watch_together(
     layout: Option<Layout>,
     cmds: &mut Vec<Command>,
 ) {
-    if streams.len() < 2 || !s.is_signed_in() || s.multiview.is_some() {
+    if streams.len() < 2 {
         return;
+    }
+    start_set(s, streams, sound, layout, false, cmds);
+}
+
+/// Multiview starts with `streams` (at least one) on top of the current screen, as
+/// `watch_together` says, in the grid or, with `full_screen`, with the one with sound in full
+/// screen. `false` if it could not start (signed out, or multiview already runs).
+fn start_set(
+    s: &mut AppState,
+    streams: Vec<Stream>,
+    sound: usize,
+    layout: Option<Layout>,
+    full_screen: bool,
+    cmds: &mut Vec<Command>,
+) -> bool {
+    if streams.is_empty() || !s.is_signed_in() || s.multiview.is_some() {
+        return false;
     }
     s.rail.focused = false;
     s.chat_open = false;
@@ -244,6 +261,11 @@ fn watch_together(
     mv.focus = sound;
     s.multiview = Some(mv);
     push_screen(s, Screen::Multiview);
+    // Full screen is the Player screen while multiview runs (`grid_select`). Set before the tiles
+    // load, so the stream with sound asks for the whole screen's quality.
+    if full_screen {
+        s.screen = Screen::Player;
+    }
     // `now_playing` (chat, raids, hype train) follows the stream with sound.
     give_sound(s, sound, cmds);
     let places: Vec<(usize, Slot)> = s
@@ -266,6 +288,7 @@ fn watch_together(
         }
         play_tile(s, place, cmds);
     }
+    true
 }
 
 /// A on Home's *Resume multiview* card: the last session starts again with the streams of it
@@ -370,27 +393,94 @@ fn start_from_player(s: &mut AppState, cmds: &mut Vec<Command>) -> bool {
 /// started from comes back. The streams stay picked (the one with sound first, offline ones
 /// dropped), so the set can be grown and started again.
 pub(super) fn leave(s: &mut AppState, cmds: &mut Vec<Command>) {
-    let Some(mv) = s.multiview.take() else {
-        return;
-    };
-    let fresher = |t: &MvTile| match &s.now_playing {
-        // The stream with sound knows more by now (title, user id).
+    if stop_all(s, cmds) && matches!(s.screen, Screen::Multiview | Screen::Player) {
+        pop_screen(s);
+    }
+}
+
+/// The tile's stream, or `now_playing` for the stream with sound, which knows more by now (title,
+/// user id).
+fn fresher(now_playing: Option<&Stream>, t: &MvTile) -> Stream {
+    match now_playing {
         Some(now) if now.channel.is_same(&t.stream.channel) => now.clone(),
         _ => t.stream.clone(),
+    }
+}
+
+/// A video or clip is about to play from the channel page over multiview: every tile stops (as
+/// leaving does) and the set is kept, so B from the page starts it again (`restore`). Nothing
+/// happens unless multiview runs right behind the page.
+pub(super) fn park(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if !s.multiview_covered() {
+        return;
+    }
+    let Some(mv) = s.multiview.as_ref() else {
+        return;
     };
+    let Some(set) = SavedSet::of(mv) else {
+        return;
+    };
+    let streams: Vec<Stream> = mv
+        .occupied()
+        .filter_map(|p| mv.tile(p))
+        .map(|t| fresher(s.now_playing.as_ref(), t))
+        .collect();
+    let focus = mv.occupied().position(|p| p == mv.focus);
+    let parked = ParkedSet {
+        set,
+        streams,
+        focus,
+        full_screen: s.back_stack.last() == Some(&Screen::Player),
+        depth: s.back_stack.len(),
+    };
+    stop_all(s, cmds);
+    s.parked_multiview = Some(parked);
+}
+
+/// B on the channel page over a set parked for a video (`park`), with the set's own screen (grid
+/// or full screen) just back from under the page: the set starts again from there, in its layout,
+/// with the sound and the focus where they were. Every tile loads again. Signed out meanwhile,
+/// it cannot, and the screen multiview was started from is back instead.
+pub(super) fn restore(s: &mut AppState, parked: ParkedSet, cmds: &mut Vec<Command>) {
+    // The set's own screen goes: starting the set puts it back.
+    pop_screen(s);
+    let ParkedSet {
+        set,
+        streams,
+        focus,
+        full_screen,
+        ..
+    } = parked;
+    if !start_set(s, streams, set.sound, Some(set.layout), full_screen, cmds) {
+        return;
+    }
+    if let Some(mv) = s.multiview.as_mut() {
+        if let Some(place) = focus.and_then(|i| mv.occupied().nth(i)) {
+            mv.focus = place;
+        }
+    }
+}
+
+/// Every stream of multiview stops and multiview ends, as `leave` says, but the screen stays.
+/// `false` if multiview was not running.
+pub(super) fn stop_all(s: &mut AppState, cmds: &mut Vec<Command>) -> bool {
+    let Some(mv) = s.multiview.take() else {
+        return false;
+    };
+    let fresh = |t: &MvTile| fresher(s.now_playing.as_ref(), t);
     let live = |t: &&MvTile| t.state != Playback::Offline;
     s.picked = mv
         .streams_sound_first()
         .into_iter()
         .filter(live)
-        .map(fresher)
+        .map(fresh)
         .collect();
     // Home's resume card shows the set just left, its streams in place order.
     let in_order: Vec<Stream> = mv
         .occupied()
         .filter_map(|p| mv.tile(p))
         .filter(live)
-        .map(fresher)
+        .map(fresh)
         .collect();
     resume::place(s, resume::card(in_order));
     let sound_slot = mv.sound_tile().map(|t| t.slot);
@@ -410,9 +500,7 @@ pub(super) fn leave(s: &mut AppState, cmds: &mut Vec<Command>) {
     s.popup = None;
     stop_watching(s, cmds);
     s.chat_open = false;
-    if matches!(s.screen, Screen::Multiview | Screen::Player) {
-        pop_screen(s);
-    }
+    true
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -833,7 +921,8 @@ pub(super) fn wanted(s: &AppState, place: usize) -> TileQuality {
             lowered: false,
         };
     };
-    let full_screen = s.screen == Screen::Player && place == mv.sound;
+    // Also under the channel page opened from full screen, so nothing reloads behind it.
+    let full_screen = s.multiview_full_screen() && place == mv.sound;
     let height = if full_screen {
         full
     } else {

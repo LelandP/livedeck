@@ -1635,6 +1635,39 @@ fn multiview_full_screen_strip_and_pause() {
     insta::assert_snapshot!(out);
 }
 
+/// The player menu's *Channel videos* row: in multiview's full screen it names the stream whose
+/// page it opens (plan 13), and A opens that page over multiview.
+#[test]
+fn multiview_menu_channel_videos_row() {
+    let row = |vm: &ViewModel| {
+        let row = vm
+            .player_menu_rows
+            .iter()
+            .find(|r| r.title == "Channel videos")
+            .expect("the row is there");
+        format!(
+            "screen={:?} menu_open={} title={:?} value={:?}\n",
+            vm.screen, vm.player_menu_open, row.title, row.value
+        )
+    };
+    let single = send(&watching_signed_in(), &[Intent::Menu]);
+    let mut out = row(&view_model(&single));
+    let full = send(&multiview_with(3), &[Intent::Up, Intent::Left, Intent::Select]);
+    let menu = send(&full, &[Intent::Menu]);
+    out += &row(&view_model(&menu));
+    // RB: the next stream in full screen, and its name on the row.
+    let next = send(&full, &[Intent::PageRight, Intent::Menu]);
+    out += &row(&view_model(&next));
+    let page = send(&next, &[Intent::Down; 9]);
+    let page = send(&page, &[Intent::Select]);
+    out += &format!(
+        "screen={:?} page={:?}\n",
+        view_model(&page).screen,
+        page.channel_page.as_ref().map(|p| p.channel.login.as_str())
+    );
+    insta::assert_snapshot!(out);
+}
+
 fn compose_lines(vm: &ViewModel) -> String {
     let keys: Vec<&str> = vm.compose_keys.iter().map(|k| k.label.as_str()).collect();
     let focused = usize::try_from(vm.compose_key_focus)

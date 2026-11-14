@@ -1,0 +1,8 @@
+---
+source: crates/ui/tests/snapshots.rs
+expression: out
+---
+screen=Player menu_open=true title="Channel videos" value=""
+screen=Player menu_open=true title="Channel videos" value="grandmaster_k"
+screen=Player menu_open=true title="Channel videos" value="ash"
+screen=Channel page=Some("ash")

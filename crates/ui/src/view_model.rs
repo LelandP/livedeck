@@ -585,9 +585,17 @@ fn player_menu_value(state: &AppState, row: PlayerMenuRow) -> String {
         PlayerMenuRow::Subscribe | PlayerMenuRow::StartOver => String::new(),
         PlayerMenuRow::WriteChat if !state.is_signed_in() => "Sign in to Twitch to chat".into(),
         PlayerMenuRow::WriteChat => String::new(),
-        PlayerMenuRow::ChannelVideos if state.multiview.is_some() => "Not in multiview".into(),
-        PlayerMenuRow::ChannelVideos if !state.on_screen_features().videos => "Twitch only".into(),
-        PlayerMenuRow::ChannelVideos => String::new(),
+        PlayerMenuRow::ChannelVideos => {
+            let stream = state.channel_videos_stream();
+            let features = stream.map_or(state.on_screen_features(), |s| s.channel.features());
+            let several = state.multiview.as_ref().is_some_and(|mv| mv.count() > 1);
+            match stream {
+                _ if !features.videos => "Twitch only".into(),
+                // Multiview: which stream's page it opens.
+                Some(stream) if several => stream.channel.login.clone(),
+                _ => String::new(),
+            }
+        }
         PlayerMenuRow::Captions => match state.captions_row() {
             CaptionsRow::Off => "Off".into(),
             CaptionsRow::On => "On".into(),

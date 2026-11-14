@@ -35,7 +35,8 @@ use super::{
 /// so B comes back to it. `resumed`: `start_ms` is a saved place, and a toast says so.
 ///
 /// A subscriber-only video opens the subscribe card instead (where one can be shown), and nothing
-/// plays in multiview (vod-plan.md: no videos in multiview).
+/// plays in multiview (vod-plan.md: no videos in multiview), except from the channel page over
+/// it, which parks the set first.
 pub(super) fn open(
     s: &mut AppState,
     item: VideoItem,
@@ -43,7 +44,7 @@ pub(super) fn open(
     resumed: bool,
     cmds: &mut Vec<Command>,
 ) {
-    if s.multiview.is_some() {
+    if s.multiview.is_some() && !s.multiview_covered() {
         return;
     }
     if let VideoItem::Video(video) = &item {
@@ -53,6 +54,9 @@ pub(super) fn open(
             return;
         }
     }
+    // Multiview behind the page stops first, the whole set kept: B from the page starts it again
+    // (`channel::back_to_multiview`).
+    channel::park_multiview(s, cmds);
     // The clock for *Streamed Nov 10*: the page's, or (from Home) the newest saved place's.
     let now = s
         .channel_page

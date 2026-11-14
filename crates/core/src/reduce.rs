@@ -731,8 +731,8 @@ fn raided(
     });
     // The channel page covers the stream: the offer waits with no countdown, and the card shows
     // (and counts down) when the page is left (`channel::back_to_live`). The page's own subscribe
-    // card is not touched.
-    if s.live_covered() {
+    // card is not touched. The same over multiview (`channel::back_to_multiview`).
+    if s.live_covered() || s.multiview_covered() {
         return;
     }
     s.player_menu = None;
@@ -1683,18 +1683,24 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
                 // Like pressing B: the stream stops and chat is left, so nothing reconnects in
                 // the background and the browse screens are there on wake. With nothing playing
                 // it still suspends: the user asked for sleep.
-                if s.multiview.is_some() {
+                if s.multiview_covered() {
+                    // The channel page is open over multiview: it stops, the page stays.
+                    channel::drop_multiview_behind(s, cmds);
+                } else if s.multiview.is_some() {
                     multiview::leave(s, cmds);
                 } else if s.screen == Screen::Player {
-                    // A broadcast's video over its parked stream: that stream is not loaded
-                    // again either.
+                    // A broadcast's video over its parked stream (or multiview set): that stream
+                    // is not loaded again either.
                     if s.video.is_some() {
                         s.parked_live = None;
+                        channel::drop_multiview_behind(s, cmds);
                     }
                     back(s, cmds);
                 } else if s.live_behind().is_some() {
                     // The channel page is open over the stream: it stops, the page stays.
                     drop_live_behind(s, cmds);
+                } else if s.multiview_behind() {
+                    channel::drop_multiview_behind(s, cmds);
                 }
                 cmds.push(Command::Suspend);
             }
@@ -2052,7 +2058,9 @@ fn open_root(s: &mut AppState, target: Screen, cmds: &mut Vec<Command>) {
 /// B / Escape on Player, Login or Category. Like the scaffold, it always closes chat.
 fn back(s: &mut AppState, cmds: &mut Vec<Command>) {
     // The channel page over a live stream: straight back to it.
-    if s.screen == Screen::Channel && channel::back_to_live(s, cmds) {
+    if s.screen == Screen::Channel
+        && (channel::back_to_live(s, cmds) || channel::back_to_multiview(s, cmds))
+    {
         return;
     }
     match s.screen {
@@ -2121,7 +2129,11 @@ fn reset_stack(s: &mut AppState, cmds: &mut Vec<Command>) {
         stop_live(s, cmds);
         s.chat_open = false;
     }
+    // Multiview running behind the channel page ends too, and a set parked for a video is
+    // forgotten.
+    multiview::stop_all(s, cmds);
     s.parked_live = None;
+    s.parked_multiview = None;
     s.back_stack.clear();
 }
 

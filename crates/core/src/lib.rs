@@ -39,7 +39,7 @@ pub use msg::{
     Command, Dir, Event, Intent, Msg, PageOutcome, PlayerOption, Slot, StreamKind, MAIN_SLOT,
 };
 pub use multiview::{
-    Multiview, MvTile, Picker, PickerTab, PopupRow, SavedSet, TileQuality, ViewPopup,
+    Multiview, MvTile, ParkedSet, Picker, PickerTab, PopupRow, SavedSet, TileQuality, ViewPopup,
 };
 pub use netlimit::{Health, NetLimit, Tier};
 pub use quality::{FrameRate, Rendition};

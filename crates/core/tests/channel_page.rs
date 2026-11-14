@@ -821,6 +821,256 @@ fn the_page_opened_from_the_player_of_an_offline_stream_is_not_live() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// From multiview (plan 13)
+// ---------------------------------------------------------------------------------------------
+
+/// Signed in, multiview with `fox` (with sound, place 0) and `other` (muted, place 1), both
+/// playing, in the grid with the focus on `other`.
+fn grid_with(other: Stream) -> AppState {
+    let s = sign_in(&home());
+    let s = reduce(
+        &s,
+        Event::FeedLoaded {
+            feed: FeedId::Following,
+            rows: vec![Row::new(RowKind::FollowedLive, vec![Tile::Stream(other)])],
+        },
+    )
+    .0;
+    let (s, _) = reduce(&s, Intent::Select);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
+    // View, *Add a stream to watch with this one*, A on the picker's row, B closes the picker.
+    let (s, _) = press(&s, &[Intent::View, Intent::Select, Intent::Select, Intent::Back]);
+    let s = reduce(&s, Event::PlaybackStarted { slot: 1 }).0;
+    assert_eq!(s.screen, Screen::Multiview);
+    let mv = s.multiview.as_ref().expect("multiview runs");
+    assert_eq!((mv.count(), mv.sound, mv.focus), (2, 0, 1));
+    s
+}
+
+/// `grid_with`, A on `fox` (the stream with sound): full screen, the menu on *Channel videos*.
+fn full_screen_menu(other: Stream) -> AppState {
+    let mut s = grid_with(other);
+    s.multiview.as_mut().unwrap().focus = 0;
+    let (s, _) = press(&s, &[Intent::Select, Intent::Menu]);
+    assert_eq!(s.screen, Screen::Player, "full screen");
+    let (s, _) = press(&s, &[Intent::Down; 9]);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::ChannelVideos));
+    s
+}
+
+/// The page of `fox` over multiview's full screen, loaded.
+fn page_over_multiview() -> AppState {
+    let (s, _) = reduce(&full_screen_menu(live("owl")), Intent::Select);
+    assert_eq!(s.screen, Screen::Channel);
+    reduce(&s, loaded("fox")).0
+}
+
+#[test]
+fn the_menu_in_full_screen_opens_the_page_with_every_tile_still_playing() {
+    let menu = full_screen_menu(live("owl"));
+    let (page, cmds) = reduce(&menu, Intent::Select);
+    assert_eq!(page.screen, Screen::Channel);
+    // Full screen stays on the stack under the page.
+    assert_eq!(page.back_stack, vec![Screen::Home, Screen::Player]);
+    assert_eq!(page.channel_page.as_ref().unwrap().channel.login, "fox");
+    assert!(page.channel_page.as_ref().unwrap().live.is_some());
+    // Only the page is asked for: no tile stops, mutes or reloads.
+    assert_eq!(cmds, vec![load_command(ChannelRef::twitch("fox"))]);
+    assert_eq!(page.multiview, menu.multiview);
+    assert_eq!(page.now_playing, menu.now_playing);
+    assert_eq!(page.player_menu, None);
+    assert!(page.multiview_covered());
+    assert!(!page.live_covered(), "not the single player's way back");
+    assert!(page.stream_on_screen(), "chat and raids still follow the sound");
+    // A settle timer that runs out behind the page does what it would in full screen: the tiles
+    // keep the qualities they have there.
+    let settle = Event::QualitySettleDue(page.last_settle_id);
+    let (_, in_full_screen) = reduce(&menu, settle.clone());
+    let (_, behind_the_page) = reduce(&page, settle);
+    assert_eq!(behind_the_page, in_full_screen);
+}
+
+#[test]
+fn in_the_grid_the_row_is_about_the_focused_tile() {
+    let grid = grid_with(live("owl"));
+    let login = |s: &AppState| s.channel_videos_stream().map(|st| st.channel.login.clone());
+    assert_eq!(login(&grid).as_deref(), Some("owl"));
+    let mut on_sound = grid.clone();
+    on_sound.multiview.as_mut().unwrap().focus = 0;
+    assert_eq!(login(&on_sound).as_deref(), Some("fox"));
+    // Full screen: the stream on screen, which LB / RB move the sound to.
+    let (full, _) = press(&on_sound, &[Intent::Select, Intent::PageRight]);
+    assert_eq!(login(&full).as_deref(), Some("owl"));
+}
+
+#[test]
+fn b_on_the_page_goes_straight_back_to_full_screen_with_nothing_reloaded() {
+    let page = page_over_multiview();
+    let (back, cmds) = reduce(&page, Intent::Back);
+    assert!(cmds.is_empty(), "nothing reloads: {cmds:?}");
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(back.back_stack, vec![Screen::Home]);
+    assert_eq!(back.channel_page, None);
+    // The tiles, the sound and the focus are as they were.
+    assert_eq!(back.multiview, page.multiview);
+    assert_eq!(back.now_playing, page.now_playing);
+    assert_ne!(back.hud_pulse, page.hud_pulse, "the HUD shows again");
+    // From there B is the usual one: back to the grid, the focus on the stream with sound.
+    let (grid, _) = reduce(&back, Intent::Back);
+    assert_eq!(grid.screen, Screen::Multiview);
+    assert_eq!(grid.multiview.as_ref().unwrap().count(), 2);
+}
+
+#[test]
+fn a_live_card_of_a_stream_in_the_set_is_just_b() {
+    let s = reduce(&full_screen_menu(live("owl")), Intent::Select).0;
+    let (s, _) = reduce(
+        &s,
+        Event::ChannelPageLoaded {
+            info: info("fox", Some(live("fox"))),
+            rows: vec![Row::new(RowKind::LiveNow, vec![Tile::Stream(live("fox"))])],
+        },
+    );
+    let (back, cmds) = reduce(&s, Intent::Select);
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(back.multiview, s.multiview);
+}
+
+#[test]
+fn a_raid_behind_the_page_over_multiview_waits_for_b() {
+    let s = page_over_multiview();
+    let (s, cmds) = reduce(
+        &s,
+        Event::Raided {
+            from_login: "fox".into(),
+            to_login: "next_up".into(),
+            to_name: "Next Up".into(),
+            viewers: 50,
+        },
+    );
+    let id = s.raid.as_ref().expect("the offer is kept").id;
+    assert!(cmds.is_empty(), "no countdown behind the page: {cmds:?}");
+    let (back, cmds) = reduce(&s, Intent::Back);
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(cmds, vec![Command::StartRaidCountdown { id, seconds: 10 }]);
+}
+
+#[test]
+fn a_video_from_the_page_parks_the_set_and_b_twice_starts_it_again() {
+    let page = page_over_multiview();
+    let before = page.multiview.clone().unwrap();
+    let (s, cmds) = reduce(&page, Intent::Select);
+    assert_eq!(s.screen, Screen::Player);
+    assert!(s.video.is_some());
+    assert_eq!(s.multiview, None, "a video and multiview never share the player");
+    assert_eq!(s.now_playing, None);
+    let parked = s.parked_multiview.as_ref().expect("the set is kept");
+    let channels: Vec<&str> = parked.set.channels.iter().map(|c| c.login.as_str()).collect();
+    assert_eq!(channels, vec!["fox", "owl"]);
+    assert!(parked.full_screen);
+    assert_eq!(
+        s.back_stack,
+        vec![Screen::Home, Screen::Player, Screen::Channel]
+    );
+    // Every tile stops, with the chat of the one with sound, before the video starts.
+    let playing = cmds
+        .iter()
+        .position(|c| matches!(c, Command::PlayVideo { .. }))
+        .expect("the video plays");
+    for slot in [0, 1] {
+        let stopped = cmds
+            .iter()
+            .position(|c| *c == Command::StopPlayback { slot })
+            .expect("every tile stops");
+        assert!(stopped < playing, "{cmds:?}");
+    }
+    assert!(cmds.contains(&Command::LeaveChat));
+
+    // B from the video: the page, the set still parked.
+    let (page, _) = reduce(&s, Intent::Back);
+    assert_eq!(page.screen, Screen::Channel);
+    assert_eq!(page.multiview, None);
+    assert!(page.multiview_behind());
+    assert_eq!(page.back_stack, vec![Screen::Home, Screen::Player]);
+
+    // B from the page: the set starts again in full screen (it cannot be instant).
+    let (back, cmds) = reduce(&page, Intent::Back);
+    assert_eq!(back.screen, Screen::Player);
+    assert_eq!(back.back_stack, vec![Screen::Home]);
+    assert_eq!(back.channel_page, None);
+    assert_eq!(back.parked_multiview, None);
+    let mv = back.multiview.as_ref().expect("multiview again");
+    assert_eq!(mv.layout, before.layout);
+    assert_eq!((mv.sound, mv.focus), (before.sound, before.focus));
+    let logins: Vec<&str> = mv
+        .tiles
+        .iter()
+        .flatten()
+        .map(|t| t.stream.channel.login.as_str())
+        .collect();
+    assert_eq!(logins, vec!["fox", "owl"]);
+    assert!(mv.tiles.iter().flatten().all(|t| t.state == Playback::Loading));
+    assert_eq!(back.now_playing.as_ref().unwrap().channel.login, "fox");
+    for login in ["fox", "owl"] {
+        assert!(
+            cmds.iter().any(|c| matches!(c, Command::Play { channel, .. } if *channel == ChannelRef::twitch(login))),
+            "{login} loads again: {cmds:?}"
+        );
+    }
+    assert!(cmds.contains(&Command::JoinChat {
+        channel: ChannelRef::twitch("fox")
+    }));
+    // From there B is the usual one: the grid.
+    let (grid, _) = reduce(&back, Intent::Back);
+    assert_eq!(grid.screen, Screen::Multiview);
+}
+
+#[test]
+fn a_rail_entry_from_the_page_ends_multiview_behind_it() {
+    let s = page_over_multiview();
+    let (s, cmds) = reduce(&s, Intent::RailPick(RailEntry::Settings));
+    assert_eq!(s.screen, Screen::Settings);
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+    assert!(cmds.contains(&Command::StopPlayback { slot: 1 }));
+    assert_eq!(s.multiview, None);
+    assert_eq!(s.now_playing, None);
+    assert!(s.back_stack.is_empty());
+}
+
+#[test]
+fn the_sleep_timer_ends_multiview_behind_the_page_and_leaves_the_page() {
+    let mut s = page_over_multiview();
+    s.sleep = Some(SleepTimer {
+        id: 4,
+        minutes: 15,
+        left_min: 0,
+        warning: false,
+    });
+    let (s, cmds) = reduce(&s, Event::SleepTimerFired { id: 4 });
+    assert!(cmds.contains(&Command::StopPlayback { slot: 1 }));
+    assert!(cmds.contains(&Command::Suspend));
+    assert_eq!(s.multiview, None);
+    assert_eq!(s.screen, Screen::Channel);
+    assert_eq!(s.back_stack, vec![Screen::Home]);
+    let (home, _) = reduce(&s, Intent::Back);
+    assert_eq!(home.screen, Screen::Home);
+}
+
+#[test]
+fn over_a_kick_tile_the_row_does_nothing_in_multiview() {
+    let menu = full_screen_menu(kick_live("napper"));
+    // Close the menu, RB: the Kick stream in full screen, with the sound. Then the row again.
+    let (s, _) = press(&menu, &[Intent::Back, Intent::PageRight, Intent::Menu]);
+    let (s, _) = press(&s, &[Intent::Down; 9]);
+    assert_eq!(s.now_playing.as_ref().unwrap().channel, ChannelRef::kick("napper"));
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::ChannelVideos));
+    let (after, cmds) = reduce(&s, Intent::Select);
+    assert_eq!(after, s);
+    assert!(cmds.is_empty(), "{cmds:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
 // Kick
 // ---------------------------------------------------------------------------------------------
 

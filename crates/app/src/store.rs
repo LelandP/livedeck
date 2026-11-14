@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use htpc_core::{reduce, AppState, Command, Msg, Playback as CorePlayback, Screen, WakeCheck};
+use htpc_core::{reduce, AppState, Command, Msg, Playback as CorePlayback, WakeCheck};
 use htpc_ui::{
     apply_chat_image, apply_thumbnail, view_model, MainWindow, Thumbnail, Update, ViewModel,
 };
@@ -166,9 +166,9 @@ fn seek_timer(cmd: &Command) -> Option<(u64, htpc_core::Event)> {
 
 /// True while a stream is on screen and starting or playing: the time to keep the screen on. In
 /// multiview, `playback` is the stream with sound's. Also while the channel page covers a stream
-/// that still plays (it has sound).
+/// (or multiview) that still plays (it has sound).
 fn watching(state: &AppState) -> bool {
-    (matches!(state.screen, Screen::Player | Screen::Multiview) || state.live_covered())
+    state.stream_on_screen()
         && matches!(
             state.playback,
             CorePlayback::Loading | CorePlayback::Playing
@@ -1160,7 +1160,7 @@ mod tests {
         let mut session = VideoSession::new(VideoItem::Video(video), 0, 1_794_346_102);
         session.pos_ms = 42 * 60_000;
         state.video = Some(session);
-        state.screen = Screen::Player;
+        state.screen = htpc_core::Screen::Player;
         state.playback = CorePlayback::Playing;
 
         let (tx, rx) = unbounded_channel();

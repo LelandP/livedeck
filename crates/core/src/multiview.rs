@@ -292,6 +292,24 @@ impl SavedSet {
     }
 }
 
+/// A multiview session stopped for a video or clip played from the channel page over it
+/// (`AppState::parked_multiview`). B from the page starts it again, every tile loading anew, as
+/// `AppState::parked_live` does for the single player's stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParkedSet {
+    /// The set as the resume card keeps it: the channels in place order, the layout and which one
+    /// had sound.
+    pub set: SavedSet,
+    /// The streams of `set.channels`, in the same order.
+    pub streams: Vec<Stream>,
+    /// Index into `streams` of the focused tile, `None` if the focus was on an empty place.
+    pub focus: Option<usize>,
+    /// It was in full screen, not the grid.
+    pub full_screen: bool,
+    /// The length of the back stack while the page is right over it (`[…, Multiview|Player]`).
+    pub depth: usize,
+}
+
 /// The picker's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PickerTab {

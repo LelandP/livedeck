@@ -7,6 +7,11 @@
 //! (`AppState::live_covered`): B is instant (`back_to_live`). A video or clip played from the page
 //! stops the stream first and parks it (`park_live`), and B from the page then loads it again.
 //!
+//! In multiview the menu opens the page of the stream in full screen over multiview's screen
+//! (`AppState::multiview_covered`): every tile keeps playing, B is instant (`back_to_multiview`).
+//! A video or clip from there stops the whole set and keeps it (`park_multiview`), and B from the
+//! page starts it again where it was (plan 13).
+//!
 //! It is a screen of its own, not a `FeedId`: its two tabs are the `Feed`s of
 //! `AppState::channel_page`, each keeping its own focus. A on a video or a clip plays it in the
 //! video player (`video.rs`) over the page, so B comes back to the page; a subscriber-only video
@@ -21,8 +26,8 @@ use crate::state::{AppState, ChannelPage, Feed, Playback, Screen, RAID_SECONDS};
 use crate::video::{ChannelInfo, VideoItem};
 
 use super::{
-    back, begin_stream, drop_live_behind, fetch_thumbnails, open_player, pop_screen, pulse_hud,
-    push_screen, stop_live, subscribe_card_intent, video,
+    back, begin_stream, drop_live_behind, fetch_thumbnails, multiview, open_player, pop_screen,
+    pulse_hud, push_screen, stop_live, subscribe_card_intent, video,
 };
 
 /// Y on the focused card of a browse screen: a Twitch stream or channel card opens its channel
@@ -74,19 +79,27 @@ pub(super) fn open_from_offline_card(
 /// The *Channel videos* row of the live player's menu. The page goes over the Player
 /// (`[…, Player, Channel]`) and the stream keeps playing behind it, sound and chat included (the
 /// picture is not drawn: no video area on that screen), so B on the page is instant
-/// (`back_to_live`). Does nothing in multiview, or for a platform without videos.
+/// (`back_to_live`). Does nothing for a platform without videos.
+///
+/// In multiview it is the page of the stream in full screen (or of the focused tile in the grid),
+/// over multiview's screen (`[…, Multiview|Player, Channel]`). Every tile keeps playing, the one
+/// with sound heard, and B is just as instant (`back_to_multiview`).
 pub(super) fn open_from_player(s: &mut AppState, cmds: &mut Vec<Command>) {
-    if s.multiview.is_some() {
-        return;
-    }
-    let Some(stream) = s.now_playing.clone() else {
+    let Some(stream) = s.channel_videos_stream().cloned() else {
         return;
     };
     if !stream.channel.features().videos {
         return;
     }
-    // A stream that was on the end screen is not live.
-    let live = matches!(s.playback, Playback::Playing | Playback::Loading).then(|| stream.clone());
+    // A stream that was on the end screen is not live, nor is an offline or failed tile.
+    let state = match &s.multiview {
+        Some(mv) => mv
+            .place_of_channel(&stream.channel)
+            .and_then(|p| mv.tile(p))
+            .map_or(Playback::Idle, |t| t.state.clone()),
+        None => s.playback.clone(),
+    };
+    let live = matches!(state, Playback::Playing | Playback::Loading).then(|| stream.clone());
     s.player_menu = None;
     let login = stream.channel.login.clone();
     let page = ChannelPage::opening(stream.channel, login, live);
@@ -126,18 +139,73 @@ pub(super) fn back_to_live(s: &mut AppState, cmds: &mut Vec<Command>) -> bool {
     }
     match s.parked_live.take() {
         Some(stream) => begin_stream(s, stream, cmds),
-        None => {
-            pulse_hud(s);
-            if let Some(offer) = s.raid.as_mut() {
-                offer.seconds_left = RAID_SECONDS;
-                cmds.push(Command::StartRaidCountdown {
-                    id: offer.id,
-                    seconds: RAID_SECONDS,
-                });
-            }
-        }
+        None => uncovered(s, cmds),
     }
     true
+}
+
+/// B on the channel page over multiview: back to the grid or full screen, as it was left. A set
+/// that kept playing is just there again, with the focus kept (and a raid that came meanwhile gets
+/// its card and countdown now). One parked for a video (`park`) starts again, every tile loading
+/// anew. The page is dropped unless it is also further down the stack. `false` if multiview is
+/// not behind the page.
+pub(super) fn back_to_multiview(s: &mut AppState, cmds: &mut Vec<Command>) -> bool {
+    if !s.multiview_behind() {
+        return false;
+    }
+    s.subscribe_card = false;
+    pop_screen(s);
+    if !s.back_stack.contains(&Screen::Channel) {
+        s.channel_page = None;
+    }
+    match s.parked_multiview.take() {
+        Some(parked) => multiview::restore(s, parked, cmds),
+        None => uncovered(s, cmds),
+    }
+    true
+}
+
+/// The stream (or multiview) that kept playing behind the page is on screen again: the HUD shows
+/// briefly, and a raid that came meanwhile gets its card and countdown now.
+fn uncovered(s: &mut AppState, cmds: &mut Vec<Command>) {
+    pulse_hud(s);
+    if let Some(offer) = s.raid.as_mut() {
+        offer.seconds_left = RAID_SECONDS;
+        cmds.push(Command::StartRaidCountdown {
+            id: offer.id,
+            seconds: RAID_SECONDS,
+        });
+    }
+}
+
+/// A video, clip or other stream is about to play over the page, and cannot share `now_playing`
+/// with multiview: every tile behind the page stops and the set is kept, so B from the page
+/// starts it again. Nothing happens without multiview running behind the page.
+pub(super) fn park_multiview(s: &mut AppState, cmds: &mut Vec<Command>) {
+    multiview::park(s, cmds);
+}
+
+/// Multiview behind the page (running, or parked for a video further up) is not wanted any more
+/// (the sleep timer ran out): it stops and is forgotten, and its entry leaves the back stack, so
+/// the page's B goes to the screen multiview was started from.
+pub(super) fn drop_multiview_behind(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if s.multiview_covered() {
+        multiview::stop_all(s, cmds);
+        s.back_stack.pop();
+        return;
+    }
+    let Some(parked) = s.parked_multiview.take() else {
+        return;
+    };
+    let entry = parked.depth.checked_sub(1).filter(|i| {
+        matches!(
+            s.back_stack.get(*i),
+            Some(Screen::Multiview | Screen::Player)
+        )
+    });
+    if let Some(entry) = entry {
+        s.back_stack.remove(entry);
+    }
 }
 
 /// A video or clip is about to play over the page, and a video cannot share `now_playing` with a
@@ -250,6 +318,20 @@ pub(super) fn select(s: &mut AppState, cmds: &mut Vec<Command>) {
         return;
     };
     match tile {
+        // Over multiview: a stream of the set is just B. Another one plays on the single player,
+        // the set parked meanwhile as for a video.
+        Tile::Stream(stream) if s.multiview_behind() => {
+            let in_set = s
+                .multiview
+                .as_ref()
+                .is_some_and(|mv| mv.is_watching(&stream.channel));
+            if in_set {
+                back_to_multiview(s, cmds);
+            } else {
+                park_multiview(s, cmds);
+                open_player(s, stream, cmds);
+            }
+        }
         Tile::Stream(stream) => match s.live_behind() {
             // That stream is behind the page already: it is just B.
             Some(behind) if behind.is_same(&stream.channel) => {
