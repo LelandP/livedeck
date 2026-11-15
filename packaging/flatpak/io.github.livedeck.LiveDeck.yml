@@ -9,8 +9,8 @@
 # FFmpeg module versions are the ones flathub/io.mpv.Mpv builds, cut down to what libmpv needs.
 #
 # Captions (whisper.cpp with Vulkan) are built inside the livedeck module with the SDK's CMake,
-# glslc and Vulkan headers, and libclang from the llvm20 SDK extension. The speech models are not packaged: the app downloads them
-# into ~/.var/app/io.github.livedeck.LiveDeck/data on first use. The audio tap's temporary WAV goes
+# glslc and Vulkan headers, and libclang from the llvm20 SDK extension. The speech models are not
+# packaged: the app downloads them into ~/.var/app/io.github.livedeck.LiveDeck/data on first use. The audio tap's temporary WAV goes
 # in $XDG_RUNTIME_DIR (/run/user/UID inside the sandbox, a private writable tmpfs: no permission
 # needed; the app falls back to the temp folder otherwise).
 app-id: io.github.livedeck.LiveDeck

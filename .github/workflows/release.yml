@@ -11,6 +11,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Read-only by default. The publish job below asks for contents: write itself.
+permissions:
+  contents: read
+
 jobs:
   windows:
     name: Windows portable zip
@@ -121,7 +125,7 @@ jobs:
           fixed=$(printf '%s\n' "$bodies" | sed -n 's/^[[:space:]]*Fixed:[[:space:]]*/- /p')
           {
             cat <<'EOF'
-          **Windows:** download the `windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Captions download their speech model the first time you turn them on. Windows may show a SmartScreen warning because the program is not code-signed.
+          **Windows:** download the `LiveDeck-*-windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Captions download their speech model the first time you turn them on. Windows may show a SmartScreen warning because the program is not code-signed.
 
           **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. To update, open the new file in Discover (or GNOME Software), or run the same command with `--reinstall`. Settings and sign-in are kept. This build is new and untested on a Deck.
 
