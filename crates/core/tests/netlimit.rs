@@ -698,6 +698,36 @@ fn the_single_player_lowers_its_stream_and_says_so() {
 }
 
 #[test]
+fn a_video_ignores_a_limit_left_by_a_live_stream() {
+    // A live stream was lowered...
+    let (mut s, _) = run(&watching(), vec![health(MAIN_SLOT, 0, STALL).into()]);
+    assert_ne!(s.stream_kind(), StreamKind::Video(s.quality()));
+    // ...then a video plays: it gets the chosen quality, as it sends the rule no reports and so
+    // could never step back up.
+    let video = Video {
+        id: "1".into(),
+        channel: ChannelRef::twitch("sleepy"),
+        channel_name: "Sleepy".into(),
+        kind: VideoKind::Archive,
+        title: "a video".into(),
+        category: String::new(),
+        length_s: 3_600,
+        created_at: 0,
+        views: 0,
+        tint: Rgb::default(),
+        thumbnail: None,
+        muted: Vec::new(),
+        sub_only: false,
+        recording: false,
+    };
+    s.video = Some(VideoSession::new(VideoItem::Video(video), 0, 0));
+    assert_eq!(s.stream_kind(), StreamKind::Video(s.quality()));
+    // Sound only still wins.
+    s.audio_only = true;
+    assert_eq!(s.stream_kind(), StreamKind::AudioOnly);
+}
+
+#[test]
 fn picking_a_quality_in_the_player_menu_resets_the_hold() {
     let mut s = watching();
     // A low buffer for 5 s, twice: one step each, the second 10 s after the first.

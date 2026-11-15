@@ -873,6 +873,12 @@ impl AppState {
             return StreamKind::AudioOnly;
         }
         let quality = self.quality();
+        // The slow-network rule is for live streams: a video buffers far ahead, sends it no
+        // reports (`network::counts`), and so could never step back up. A limit left over from
+        // an earlier live stream held every video at 480p with minutes buffered (0.7.1).
+        if self.video.is_some() {
+            return StreamKind::Video(quality);
+        }
         let ceiling = Rendition::ceiling(quality);
         let lowered = ceiling.lowered(self.net.steps(Tier::Sound));
         if lowered < ceiling {
