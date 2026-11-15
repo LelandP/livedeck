@@ -359,6 +359,15 @@ impl Session {
     }
 }
 
+/// Who stored tokens belong to, as `/validate` last said, if they recorded it.
+fn stored_identity(tokens: &Tokens) -> Option<Identity> {
+    Some(Identity {
+        user_id: tokens.user_id.clone()?,
+        login: tokens.login.clone()?,
+        scopes: tokens.scopes.clone(),
+    })
+}
+
 /// How a refresh attempt went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Refreshed {
@@ -393,7 +402,19 @@ impl Session {
         };
         let renewed = async {
             let grant = self.auth.refresh(&refresh).await?;
-            let who = self.auth.validate(&grant.access_token).await?;
+            // The old refresh token is spent now, so the new one must be kept whatever /validate
+            // says. If it fails, the identity stored with the old token still holds: it is the
+            // same user. Dropping the grant here would sign the user out at the next refresh.
+            let who = match self.auth.validate(&grant.access_token).await {
+                Ok(who) => who,
+                Err(err) => match stored_identity(&old) {
+                    Some(who) => {
+                        tracing::warn!(%err, "could not check the refreshed token, keeping it");
+                        who
+                    }
+                    None => return Err(err),
+                },
+            };
             Ok::<_, Error>((grant, who))
         };
         match renewed.await {
