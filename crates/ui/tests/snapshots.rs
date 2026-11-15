@@ -1652,7 +1652,10 @@ fn multiview_menu_channel_videos_row() {
     };
     let single = send(&watching_signed_in(), &[Intent::Menu]);
     let mut out = row(&view_model(&single));
-    let full = send(&multiview_with(3), &[Intent::Up, Intent::Left, Intent::Select]);
+    let full = send(
+        &multiview_with(3),
+        &[Intent::Up, Intent::Left, Intent::Select],
+    );
     let menu = send(&full, &[Intent::Menu]);
     out += &row(&view_model(&menu));
     // RB: the next stream in full screen, and its name on the row.

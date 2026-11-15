@@ -9,7 +9,7 @@
 # FFmpeg module versions are the ones flathub/io.mpv.Mpv builds, cut down to what libmpv needs.
 #
 # Captions (whisper.cpp with Vulkan) are built inside the livedeck module with the SDK's CMake,
-# glslc, Vulkan headers and libclang. The speech models are not packaged: the app downloads them
+# glslc and Vulkan headers, and libclang from the llvm20 SDK extension. The speech models are not packaged: the app downloads them
 # into ~/.var/app/io.github.livedeck.LiveDeck/data on first use. The audio tap's temporary WAV goes
 # in $XDG_RUNTIME_DIR (/run/user/UID inside the sandbox, a private writable tmpfs: no permission
 # needed; the app falls back to the temp folder otherwise).
@@ -19,6 +19,9 @@ runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
+  # libclang for whisper-rs-sys's bindgen: the SDK itself has none (the 0.7.0 release build
+  # failed on that check). Only used while building; nothing of it goes in the package.
+  - org.freedesktop.Sdk.Extension.llvm20
 command: livedeck
 
 finish-args:
@@ -160,7 +163,9 @@ modules:
   - name: livedeck
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+      # libclang loads libLLVM from the same folder.
+      append-ld-library-path: /usr/lib/sdk/llvm20/lib
       build-args:
         - --share=network
       env:
@@ -171,8 +176,9 @@ modules:
         # Deck's GPU runs the speech model (the runtime's Mesa provides the Vulkan driver).
         #
         # Bindings: the ones bundled with whisper-rs-sys have no Vulkan functions, so they must be
-        # generated, which needs libclang (the SDK's). Do not set WHISPER_DONT_GENERATE_BINDINGS.
-        LIBCLANG_PATH: /usr/lib
+        # generated, which needs libclang (the llvm20 SDK extension's). Do not set
+        # WHISPER_DONT_GENERATE_BINDINGS.
+        LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
         # ggml's CPU code is used for the parts the GPU does not run. By default it is built for the
         # CPU of the machine that builds it (-march=native): a CI runner with AVX-512 would make a
         # package that crashes on the Deck's Zen 2. So: not native, and AVX2 + FMA + F16C, which
@@ -190,7 +196,7 @@ modules:
       # bindgen loads (libclang).
       - glslc --version
       - pkg-config --exists vulkan
-      - find /usr/lib -maxdepth 2 -name 'libclang*.so*' | grep .
+      - find /usr/lib/sdk/llvm20/lib -maxdepth 1 -name 'libclang*.so*' | grep .
       - cargo build --release --locked -p livedeck --features mpv,vulkan
       - install -Dm755 target/release/livedeck /app/bin/livedeck
       - install -Dm644 packaging/linux/io.github.livedeck.LiveDeck.desktop /app/share/applications/io.github.livedeck.LiveDeck.desktop

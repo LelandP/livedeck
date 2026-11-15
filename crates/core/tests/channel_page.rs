@@ -839,7 +839,10 @@ fn grid_with(other: Stream) -> AppState {
     let (s, _) = reduce(&s, Intent::Select);
     let s = reduce(&s, Event::PlaybackStarted { slot: 0 }).0;
     // View, *Add a stream to watch with this one*, A on the picker's row, B closes the picker.
-    let (s, _) = press(&s, &[Intent::View, Intent::Select, Intent::Select, Intent::Back]);
+    let (s, _) = press(
+        &s,
+        &[Intent::View, Intent::Select, Intent::Select, Intent::Back],
+    );
     let s = reduce(&s, Event::PlaybackStarted { slot: 1 }).0;
     assert_eq!(s.screen, Screen::Multiview);
     let mv = s.multiview.as_ref().expect("multiview runs");
@@ -881,7 +884,10 @@ fn the_menu_in_full_screen_opens_the_page_with_every_tile_still_playing() {
     assert_eq!(page.player_menu, None);
     assert!(page.multiview_covered());
     assert!(!page.live_covered(), "not the single player's way back");
-    assert!(page.stream_on_screen(), "chat and raids still follow the sound");
+    assert!(
+        page.stream_on_screen(),
+        "chat and raids still follow the sound"
+    );
     // A settle timer that runs out behind the page does what it would in full screen: the tiles
     // keep the qualities they have there.
     let settle = Event::QualitySettleDue(page.last_settle_id);
@@ -963,10 +969,18 @@ fn a_video_from_the_page_parks_the_set_and_b_twice_starts_it_again() {
     let (s, cmds) = reduce(&page, Intent::Select);
     assert_eq!(s.screen, Screen::Player);
     assert!(s.video.is_some());
-    assert_eq!(s.multiview, None, "a video and multiview never share the player");
+    assert_eq!(
+        s.multiview, None,
+        "a video and multiview never share the player"
+    );
     assert_eq!(s.now_playing, None);
     let parked = s.parked_multiview.as_ref().expect("the set is kept");
-    let channels: Vec<&str> = parked.set.channels.iter().map(|c| c.login.as_str()).collect();
+    let channels: Vec<&str> = parked
+        .set
+        .channels
+        .iter()
+        .map(|c| c.login.as_str())
+        .collect();
     assert_eq!(channels, vec!["fox", "owl"]);
     assert!(parked.full_screen);
     assert_eq!(
@@ -1010,7 +1024,11 @@ fn a_video_from_the_page_parks_the_set_and_b_twice_starts_it_again() {
         .map(|t| t.stream.channel.login.as_str())
         .collect();
     assert_eq!(logins, vec!["fox", "owl"]);
-    assert!(mv.tiles.iter().flatten().all(|t| t.state == Playback::Loading));
+    assert!(mv
+        .tiles
+        .iter()
+        .flatten()
+        .all(|t| t.state == Playback::Loading));
     assert_eq!(back.now_playing.as_ref().unwrap().channel.login, "fox");
     for login in ["fox", "owl"] {
         assert!(
@@ -1063,7 +1081,10 @@ fn over_a_kick_tile_the_row_does_nothing_in_multiview() {
     // Close the menu, RB: the Kick stream in full screen, with the sound. Then the row again.
     let (s, _) = press(&menu, &[Intent::Back, Intent::PageRight, Intent::Menu]);
     let (s, _) = press(&s, &[Intent::Down; 9]);
-    assert_eq!(s.now_playing.as_ref().unwrap().channel, ChannelRef::kick("napper"));
+    assert_eq!(
+        s.now_playing.as_ref().unwrap().channel,
+        ChannelRef::kick("napper")
+    );
     assert_eq!(s.player_menu, Some(PlayerMenuRow::ChannelVideos));
     let (after, cmds) = reduce(&s, Intent::Select);
     assert_eq!(after, s);
