@@ -393,7 +393,7 @@ fn taps_and_holds_as_scripted() {
             pos_ms: AT,
         },
         Case {
-            name: "A while scrubbing jumps at once",
+            name: "A while scrubbing does nothing: the release jumps",
             start_ms: AT,
             script: &[
                 (0, Act::Press(Right)),
@@ -401,10 +401,10 @@ fn taps_and_holds_as_scripted() {
                 (900, Act::Release(Right)),
             ],
             until: 3_000,
-            // Steps at 400, 500, 600, 700.
-            seeks: &[(720, AT + 4_000)],
-            pauses: &[(400, true), (720, false)],
-            pos_ms: AT + 4_000,
+            // Steps at 400 ... 900, A ignored on the way; the jump 300 ms after the release.
+            seeks: &[(900 + S, AT + 6_000)],
+            pauses: &[(400, true), (900 + S, false)],
+            pos_ms: AT + 6_000,
         },
         Case {
             // Right held: steps at 400 ... 900 (6 s). Left pressed at 950 while Right is

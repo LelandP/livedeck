@@ -10,6 +10,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned release tags of the bundled downloads. TODO: set (both values are inferred from the file
+  # names in deps\ and not checked against the release pages; confirm before the next tag).
+  MPV_TAG: "20261106"  # TODO: set (libmpv: shinchiro/mpv-winbuild-cmake)
+  STREAMLINK_TAG: "8.6.3-1"  # TODO: set (Streamlink: streamlink/windows-builds)
 
 # Read-only by default. The publish job below asks for contents: write itself.
 permissions:
@@ -47,11 +51,11 @@ jobs:
           New-Item -ItemType Directory -Force deps\mpv, deps\streamlink | Out-Null
           # Prebuilt libmpv (x86-64, not the "v3" CPU-specific one). The package has only the DLL and a MinGW
           # import library, so mpv.lib for MSVC is generated from the DLL.
-          gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*' --dir deps\mpv
+          gh release download $env:MPV_TAG --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*' --dir deps\mpv
           Push-Location deps\mpv; tar -xf (Get-ChildItem mpv-dev-x86_64-2*.7z).Name; Pop-Location
           ./packaging/windows/make-import-lib.ps1 -Dir deps\mpv
           # Portable Streamlink with its own Python.
-          gh release download --repo streamlink/windows-builds --pattern 'streamlink-*-x86_64.zip' --dir deps\streamlink
+          gh release download $env:STREAMLINK_TAG --repo streamlink/windows-builds --pattern 'streamlink-*-x86_64.zip' --dir deps\streamlink
           Expand-Archive (Get-ChildItem deps\streamlink\*.zip).FullName deps\streamlink\x
           $sl = Get-ChildItem deps\streamlink\x -Directory | Select-Object -First 1
           "STREAMLINK_DIR=$($sl.FullName)" >> $env:GITHUB_ENV
@@ -80,7 +84,7 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
-  # Linux. Experimental until it has built once (see the manifest header).
+  # Linux and the Steam Deck: the Flatpak bundle.
   flatpak:
     uses: ./.github/workflows/flatpak.yml
 
@@ -127,8 +131,7 @@ jobs:
             cat <<'EOF'
           **Windows:** download the `LiveDeck-*-windows-x64.zip`, unpack it anywhere and run `livedeck.exe`. Nothing else to install (video and Streamlink are included). Captions download their speech model the first time you turn them on. Windows may show a SmartScreen warning because the program is not code-signed.
 
-          **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. To update, open the new file in Discover (or GNOME Software), or run the same command with `--reinstall`. Settings and sign-in are kept. This build is new and untested on a Deck.
-
+          **Linux / Steam Deck:** download the `.flatpak` (if it is attached to this release) and run `flatpak install --user LiveDeck-*.flatpak`. To update, open the new file in Discover (or GNOME Software), or run the same command with `--reinstall`. Settings and sign-in are kept.
           LiveDeck is an unofficial Twitch client and finds streams through unofficial endpoints, which can break and may conflict with Twitch's terms of service. See the README.
 
           EOF
@@ -155,6 +158,11 @@ jobs:
             mv dist/livedeck.flatpak "dist/LiveDeck-${GITHUB_REF_NAME}-linux-x86_64.flatpak"
           fi
           ls -l dist
+      - name: Write SHA256SUMS
+        run: |
+          # sha256sum format over every file in dist/ (the sums file itself excluded), so users can run sha256sum -c.
+          (cd dist && find . -type f ! -name SHA256SUMS -printf '%P\0' | sort -z | xargs -0 sha256sum) > dist/SHA256SUMS
+          cat dist/SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

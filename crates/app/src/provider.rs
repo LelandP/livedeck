@@ -12,8 +12,8 @@ use htpc_chat::{EmoteProvider, TwitchCdn};
 use htpc_core::{
     grid_rows, unix_from_rfc3339, Category, Channel, ChannelInfo, ChannelRef, Chapter, ChatKind,
     ChatMessage, ChatSpan, Clip, Command, Event, FeedId, HypeTrain, LiveArchive, PageOutcome,
-    Paging, Platform, ReplayLine, Rgb, Row, RowId, RowKind, SendProblem, Span, Stream, Tile, Video,
-    VideoDetails, VideoKind, RESUME_MIN_LIVE,
+    Paging, Platform, ReplayLine, Rgb, Row, RowId, RowKind, SendProblem, Span, Storyboard, Stream,
+    Tile, Video, VideoDetails, VideoKind, RESUME_MIN_LIVE,
 };
 use htpc_storage::ImageCache;
 use htpc_twitch_api::{
@@ -906,6 +906,23 @@ impl<A: TwitchApi> ApiProvider<A> {
         }
     }
 
+    /// A video's seek-preview storyboard. A failure is only logged: no preview is drawn.
+    async fn storyboard(&self, id: String, url: &str) -> Option<Event> {
+        let body = match self.api.storyboard_info(url).await {
+            Ok(Some(body)) => body,
+            Ok(None) => return None,
+            Err(err) => {
+                tracing::debug!(id, %err, "could not load the storyboard");
+                return None;
+            }
+        };
+        let storyboard = parse_storyboard(url, &body);
+        if storyboard.is_none() {
+            tracing::debug!(id, "the storyboard description has no usable frames");
+        }
+        storyboard.map(|storyboard| Event::Storyboard { id, storyboard })
+    }
+
     /// The past broadcast being recorded from `channel`'s live stream, stamped with the wall clock
     /// (the reducer's "now" for *from where you joined*). Not live, no recording, an unreadable
     /// start time and a failure are all `None`: the end card does without it.
@@ -1021,6 +1038,9 @@ impl<A: TwitchApi> Provider for ApiProvider<A> {
             }
             Command::LoadChannelPage { channel } => vec![self.load_channel_page(channel).await],
             Command::LoadVideoDetails { id } => self.video_details(&id).await.into_iter().collect(),
+            Command::LoadStoryboard { id, url } => {
+                self.storyboard(id, &url).await.into_iter().collect()
+            }
             Command::LoadChatReplay { id, offset_s } => {
                 vec![self.chat_replay(id, offset_s).await]
             }
@@ -1339,6 +1359,61 @@ fn clip_of(c: &ClipInfo, channel: &ChannelRef) -> Clip {
         tint: tint_for(&c.slug),
         thumbnail: sized_url(&c.thumbnail_url, PREVIEW_SIZE),
     }
+}
+
+/// Twitch's storyboard description (`…-info.json`: one entry per quality) as a [`Storyboard`]:
+/// "high" if there is one, else the first entry that is usable. The sheets' names are relative
+/// to the description's folder; only https addresses are kept. `None` when nothing is usable.
+fn parse_storyboard(info_url: &str, body: &str) -> Option<Storyboard> {
+    let entries: serde_json::Value = serde_json::from_str(body).ok()?;
+    let entries = entries.as_array()?;
+    let quality =
+        |e: &serde_json::Value| e.get("quality").and_then(|q| q.as_str()).map(str::to_owned);
+    let high = entries
+        .iter()
+        .filter(|e| quality(e).as_deref() == Some("high"));
+    // Skip the query, then the file name: the folder is what the sheets are relative to.
+    let path = info_url.split(['?', '#']).next().unwrap_or(info_url);
+    let folder = &path[..path.rfind('/')? + 1];
+    high.chain(entries.iter()).find_map(|e| {
+        let num = |key: &str| e.get(key).and_then(serde_json::Value::as_u64);
+        let small = |key: &str| {
+            num(key)
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n > 0)
+        };
+        let (cols, rows) = (small("cols")?, small("rows")?);
+        let (width, height) = (small("width")?, small("height")?);
+        let count = small("count")?;
+        let interval = num("interval").filter(|n| *n > 0)?;
+        let sheets: Vec<String> = e
+            .get("images")?
+            .as_array()?
+            .iter()
+            .filter_map(|n| n.as_str())
+            .map(|name| {
+                if name.contains("://") {
+                    name.to_owned()
+                } else {
+                    format!("{folder}{}", name.trim_start_matches('/'))
+                }
+            })
+            .collect();
+        let wanted = count.div_ceil(cols.checked_mul(rows)?) as usize;
+        let https = |s: &String| {
+            s.get(..8)
+                .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+        };
+        (sheets.len() >= wanted && sheets.iter().all(https)).then(|| Storyboard {
+            sheets,
+            cols,
+            rows,
+            width,
+            height,
+            interval_ms: interval.saturating_mul(1_000),
+            count,
+        })
+    })
 }
 
 fn spans(muted: &[MutedSegment]) -> Vec<Span> {
@@ -2619,6 +2694,44 @@ mod tests {
             matches!(events.as_slice(), [Event::ChannelPageFailed { channel, .. }] if *channel == kick),
             "{events:?}"
         );
+    }
+
+    #[test]
+    fn a_storyboard_description_prefers_high_and_resolves_its_sheets() {
+        let body = r#"[
+            {"quality":"low","count":100,"width":220,"height":124,"rows":10,"cols":10,"interval":10,"images":["v-low-0.jpg"]},
+            {"quality":"high","count":120,"width":320,"height":180,"rows":5,"cols":5,"interval":30,"images":["v-high-0.jpg","v-high-1.jpg","v-high-2.jpg","v-high-3.jpg","v-high-4.jpg"]}
+        ]"#;
+        let s = parse_storyboard("https://cdn.example/sb/v/storyboards/1-info.json?x=1", body)
+            .expect("usable");
+        assert_eq!((s.cols, s.rows, s.width, s.height), (5, 5, 320, 180));
+        assert_eq!((s.count, s.interval_ms), (120, 30_000));
+        assert_eq!(
+            s.sheets[0],
+            "https://cdn.example/sb/v/storyboards/v-high-0.jpg"
+        );
+        // Without "high", the first usable entry; a broken one before it is skipped.
+        let body = r#"[{"quality":"x"},{"quality":"low","count":4,"width":2,"height":1,"rows":2,"cols":2,"interval":5,"images":["a.jpg"]}]"#;
+        let s = parse_storyboard("https://cdn.example/i.json", body).expect("usable");
+        assert_eq!(s.sheets, ["https://cdn.example/a.jpg"]);
+    }
+
+    #[test]
+    fn an_unusable_storyboard_description_gives_none() {
+        for body in [
+            "",
+            "{}",
+            "[]",
+            r#"[{"count":4,"width":2,"height":1,"rows":2,"cols":2,"interval":5,"images":[]}]"#,
+            r#"[{"count":4,"width":2,"height":1,"rows":2,"cols":2,"interval":0,"images":["a.jpg"]}]"#,
+            r#"[{"count":4,"width":2,"height":1,"rows":2,"cols":2,"interval":5,"images":["http://x/a.jpg"]}]"#,
+        ] {
+            assert_eq!(
+                parse_storyboard("https://cdn.example/i.json", body),
+                None,
+                "{body}"
+            );
+        }
     }
 
     #[tokio::test]

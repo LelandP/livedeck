@@ -246,7 +246,7 @@ impl CaptionsQuality {
     }
 
     /// The next (or previous) quality among `offered`, wrapping around. A quality that is not
-    /// offered steps to the first of them.
+    /// offered counts as the first of them, so it steps from there.
     pub fn cycled_in(self, offered: &[CaptionsQuality], forward: bool) -> Self {
         if offered.is_empty() {
             return self;

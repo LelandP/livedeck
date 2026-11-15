@@ -40,6 +40,22 @@ Copy-Item $StreamlinkDir (Join-Path $pkg 'streamlink') -Recurse
 Copy-Item (Join-Path $repo 'LICENSE') $pkg
 Copy-Item (Join-Path $repo 'packaging\THIRD_PARTY.md') $pkg
 Copy-Item (Join-Path $repo 'assets\fonts\OFL.txt') (Join-Path $pkg 'OFL-AtkinsonHyperlegible.txt')
+Copy-Item (Join-Path $repo 'packaging\steam-input\README.md') (Join-Path $pkg 'CONTROLLER.md')
+
+# Licence files that come with the bundled builds, prefixed with the component name so the
+# relative names stay unique (e.g. licenses\libmpv-LICENSE.txt).
+$licDir = Join-Path $pkg 'licenses'
+New-Item -ItemType Directory -Force $licDir | Out-Null
+$licSources = @(
+    @{ Name = 'libmpv'; Root = (Split-Path -Parent (Resolve-Path $MpvDll).Path) },
+    @{ Name = 'streamlink'; Root = (Resolve-Path $StreamlinkDir).Path }
+)
+foreach ($src in $licSources) {
+    Get-ChildItem -Path $src.Root -Recurse -File -Include 'LICENSE*', 'COPYING*' | ForEach-Object {
+        $rel = $_.FullName.Substring($src.Root.Length).TrimStart('\')
+        Copy-Item $_.FullName (Join-Path $licDir ("{0}-{1}" -f $src.Name, ($rel -replace '[\\/]', '-')))
+    }
+}
 
 @"
 LiveDeck $Version (portable)

@@ -38,6 +38,8 @@ pub struct Gpu {
     render: RenderContext<'static>,
     _mpv: Arc<Mpv>,
     target: Option<Target>,
+    /// The size of the last `Target::new` that failed: not retried until the size changes.
+    failed_size: Option<(u32, u32)>,
 }
 
 impl Gpu {
@@ -71,6 +73,7 @@ impl Gpu {
             render,
             _mpv: mpv,
             target: None,
+            failed_size: None,
         })
     }
 
@@ -87,7 +90,20 @@ impl Gpu {
             if let Some(old) = self.target.take() {
                 old.delete(&self.gl);
             }
-            self.target = Some(Target::new(&self.gl, width, height)?);
+            // A size that failed is not tried (or reported) again until the size changes.
+            if self.failed_size == Some((width, height)) {
+                return Ok(None);
+            }
+            match Target::new(&self.gl, width, height) {
+                Ok(target) => {
+                    self.target = Some(target);
+                    self.failed_size = None;
+                }
+                Err(e) => {
+                    self.failed_size = Some((width, height));
+                    return Err(e);
+                }
+            }
         }
 
         let flags = self.render.update().map_err(|e| e.to_string())?;

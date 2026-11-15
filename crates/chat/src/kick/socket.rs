@@ -3,13 +3,18 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use async_tungstenite::tungstenite::Message;
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 /// Frames queued from the socket before the session reads them.
 const INCOMING_BUFFER: usize = 256;
+
+/// How long opening the socket (TCP, TLS and the WebSocket handshake) may take.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// An open socket. Dropping it closes the socket.
 pub struct FrameLink {
@@ -32,9 +37,13 @@ pub struct WsFrames;
 impl FrameConnector for WsFrames {
     fn connect<'a>(&'a self, url: &'a str) -> FrameFuture<'a> {
         Box::pin(async move {
-            let (ws, _) = async_tungstenite::tokio::connect_async(url)
-                .await
-                .map_err(|e| format!("could not connect to Kick chat: {e}"))?;
+            let (ws, _) = timeout(
+                CONNECT_TIMEOUT,
+                async_tungstenite::tokio::connect_async(url),
+            )
+            .await
+            .map_err(|_| "could not connect to Kick chat: timed out".to_owned())?
+            .map_err(|e| format!("could not connect to Kick chat: {e}"))?;
             let (mut sink, mut stream) = ws.split();
             let (in_tx, in_rx) = mpsc::channel(INCOMING_BUFFER);
             let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();

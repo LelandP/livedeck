@@ -174,9 +174,12 @@ fn corrupt_file_is_an_error_on_strict_load() {
     fs::write(store.path(), "chat_layout = [unclosed").unwrap();
     assert!(matches!(store.load(), Err(Error::CorruptConfig { .. })));
 
-    // Wrong types are corruption too.
+    // A wrong-typed key is ignored, not corruption.
     fs::write(store.path(), "image_cache_max_mb = \"big\"").unwrap();
-    assert!(matches!(store.load(), Err(Error::CorruptConfig { .. })));
+    assert_eq!(
+        store.load().unwrap().image_cache_max_mb,
+        DEFAULT_IMAGE_CACHE_MB
+    );
 
     fs::write(store.path(), [0xff, 0xfe, 0x00]).unwrap();
     assert!(matches!(store.load(), Err(Error::CorruptConfig { .. })));
@@ -196,6 +199,23 @@ fn corrupt_file_is_quarantined_and_defaults_are_used() {
     // The next save works and the next start reads it.
     store.save(&Config::default()).unwrap();
     assert_eq!(store.load().unwrap(), Config::default());
+}
+
+#[test]
+fn a_key_with_the_wrong_type_is_ignored_and_the_rest_loads() {
+    let config = Config::from_toml("background_play = \"yes\"\nquality = \"720p\"\n").unwrap();
+    assert_eq!(
+        config.settings.background_play,
+        Settings::default().background_play
+    );
+    assert_eq!(config.settings.quality, Quality::P720);
+    let negative = Config::from_toml("image_cache_max_mb = -5\n").unwrap();
+    assert_eq!(negative.image_cache_max_mb, DEFAULT_IMAGE_CACHE_MB);
+}
+
+#[test]
+fn invalid_toml_is_still_an_error() {
+    assert!(Config::from_toml("not = valid = toml").is_err());
 }
 
 #[test]

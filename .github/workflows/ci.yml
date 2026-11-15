@@ -47,8 +47,8 @@ jobs:
             libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
       - uses: Swatinem/rust-cache@v2
       # The `mpv` features (htpc-player, livedeck) stay off: CI has no libmpv.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
 
   # The `captions` feature builds whisper.cpp, which needs CMake and a C++ compiler. The job above
   # stays free of both. Unit tests here use fakes: the real-model tests are `#[ignore]` (they need
@@ -83,9 +83,9 @@ jobs:
       - name: Use the bundled whisper bindings
         if: runner.os == 'Linux'
         run: echo "WHISPER_DONT_GENERATE_BINDINGS=1" >> "$GITHUB_ENV"
-      - run: cargo clippy -p livedeck -p htpc-captions --features livedeck/captions,htpc-captions/whisper --all-targets -- -D warnings
-      - run: cargo test -p htpc-captions --features whisper
-      - run: cargo test -p livedeck --features captions
+      - run: cargo clippy --locked -p livedeck -p htpc-captions --features livedeck/captions,htpc-captions/whisper --all-targets -- -D warnings
+      - run: cargo test --locked -p htpc-captions --features whisper
+      - run: cargo test --locked -p livedeck --features captions
 
   deny:
     name: cargo-deny

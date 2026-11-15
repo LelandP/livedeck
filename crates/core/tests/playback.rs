@@ -305,11 +305,15 @@ fn a_recheck_looks_quietly_and_plays_when_the_stream_is_back() {
     let (s, _) = watching();
     let (s, _) = offline(&s);
     let (s, cmds) = reduce(&s, Event::OfflineRecheckDue(1));
-    assert_eq!(cmds, vec![play("chan")]);
+    // The next look is scheduled at once, so a look that never hears back can't stall them.
+    assert_eq!(
+        cmds,
+        vec![Command::ScheduleOfflineRecheck { id: 2 }, play("chan")]
+    );
     // The offline screen stays up while it looks.
     assert_eq!(s.playback, Playback::Offline);
     assert!(s.rechecking);
-    // A second timer while looking does not ask twice.
+    // The same timer again is stale now and does not ask twice.
     assert!(reduce(&s, Event::OfflineRecheckDue(1)).1.is_empty());
     let s = ev(&s, Event::PlaybackStarted { slot: 0 });
     assert_eq!(s.playback, Playback::Playing);
@@ -337,7 +341,8 @@ fn a_failed_recheck_stays_offline_and_looks_again() {
         let (s, cmds) = reduce(&looking, answer);
         assert_eq!(s.playback, Playback::Offline);
         assert!(!s.rechecking);
-        assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 2 }]);
+        // The look's own timer (2) is replaced by this one.
+        assert_eq!(cmds, vec![Command::ScheduleOfflineRecheck { id: 3 }]);
     }
 }
 

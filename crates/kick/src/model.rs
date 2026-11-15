@@ -58,10 +58,31 @@ pub struct PusherApp {
 /// The JSON as Kick sends it. Only the fields used are named; the rest is ignored.
 pub(crate) mod wire {
     use super::Deserialize;
+    use serde::de::{DeserializeOwned, Deserializer};
+
+    /// Reads a list item by item. An item that does not fit `T` (a listed stream without a
+    /// channel, say) is logged and left out, so one bad row does not fail the page.
+    pub fn lenient_items<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: DeserializeOwned,
+    {
+        let items = Vec::<serde_json::Value>::deserialize(de)?;
+        Ok(items
+            .into_iter()
+            .filter_map(|v| match serde_json::from_value(v) {
+                Ok(item) => Some(item),
+                Err(e) => {
+                    tracing::debug!(error = %e, "skipping malformed listed stream");
+                    None
+                }
+            })
+            .collect())
+    }
 
     #[derive(Deserialize)]
     pub struct LivestreamsPage {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "lenient_items")]
         pub data: Vec<ListedStream>,
         #[serde(default)]
         pub current_page: Option<u32>,
@@ -260,5 +281,25 @@ impl From<wire::SearchChannel> for SearchHit {
             slug: c.slug,
             is_live: c.is_live,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_listed_stream_without_a_channel_is_skipped_and_the_rest_survive() {
+        let json = r#"{"data":[
+            {"session_title":"one","viewer_count":5,"categories":[],"channel":{"id":1,"slug":"one"}},
+            {"session_title":"no channel","viewer_count":7,"categories":[]},
+            {"session_title":"three","viewer_count":9,"categories":[],"channel":{"id":3,"slug":"three"}}]}"#;
+        let page: wire::LivestreamsPage = serde_json::from_str(json).unwrap();
+        let slugs: Vec<String> = page
+            .data
+            .into_iter()
+            .map(|s| LiveStream::from(s).slug)
+            .collect();
+        assert_eq!(slugs, ["one", "three"]);
     }
 }

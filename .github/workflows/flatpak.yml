@@ -8,6 +8,9 @@ on:
     paths:
       - packaging/flatpak/**
       - packaging/linux/**
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
       - .github/workflows/flatpak.yml
   workflow_dispatch:
   workflow_call:

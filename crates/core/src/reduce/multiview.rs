@@ -13,7 +13,7 @@ use crate::multiview::{
 };
 use crate::netlimit::Tier;
 use crate::quality::{self, FrameRate, Rendition};
-use crate::state::{AppState, Playback, Screen, ToastKind};
+use crate::state::{AppState, Playback, PlayerMenuRow, Screen, ToastKind};
 
 use super::{
     favorites, open_login, pop_screen, pulse_hud, push_screen, push_toast, raid_intent, resume,
@@ -333,6 +333,18 @@ pub(super) fn track_saved(s: &mut AppState, cmds: &mut Vec<Command>) {
     cmds.push(Command::SaveMultiview(set));
 }
 
+/// After every message: on a Steam Deck, the first time the set has more than 3 streams, one
+/// toast says they can stutter. Once per run.
+pub(crate) fn warn_if_crowded(s: &mut AppState, cmds: &mut Vec<Command>) {
+    if !s.on_deck() || s.multiview_warned {
+        return;
+    }
+    if s.multiview.as_ref().is_some_and(|mv| mv.count() > 3) {
+        s.multiview_warned = true;
+        push_toast(s, ToastKind::DeckCrowded, cmds);
+    }
+}
+
 /// *Watch with the N picked* on the single player: multiview starts with the stream on screen
 /// (which keeps playing, with sound) and the picked ones join it, muted.
 fn watch_with_picked(s: &mut AppState, cmds: &mut Vec<Command>) {
@@ -540,8 +552,10 @@ pub(super) fn grid_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Comma
                 play_tile(s, focus, cmds);
             }
         }
-        Intent::Menu
-        | Intent::Text(_)
+        // Start opens the player menu on its first row. While it is open it takes the buttons (see
+        // `on_intent`), as on the single player.
+        Intent::Menu => s.player_menu = Some(PlayerMenuRow::default()),
+        Intent::Text(_)
         | Intent::Erase
         | Intent::Pick { .. }
         | Intent::RailPick(_)

@@ -33,7 +33,7 @@ screen=Player playback=Playing paused=false select="Pause" retry=false hints_men
   seek: chip="−10 s" side=-1 seeking=true scrubbing=false speed="" chapters=true end_card=false end_focus=0
   stream card: "Sleepy Fox" "No-hit run attempts, night 12"
 -- held: scrubbing forward, a few steps in
-screen=Player playback=Playing paused=false select="Jump here" retry=false hints_menu=false
+screen=Player playback=Playing paused=false select="" retry=false hints_menu=false
   top: [PAST BROADCAST] "Sleepy Fox" | "No-hit run attempts, night 12" | "Streamed Nov 10 · Chapter 2 of 5: Hollow Depths"
   bar: 1:12:58 / "4:12:08" head=2893 chapter="Hollow Depths" ticks=[832, 5156, 7535, 9188] muted=[(3569, 238), (7284, 238)] in_muted=false
   seek: chip="" side=0 seeking=true scrubbing=true speed="" chapters=true end_card=false end_focus=0
@@ -94,7 +94,7 @@ menu_open=true focus=2 select="Jump there"
     Channel videos = "" (action)
     Captions = "Off"
     Caption quality = "Standard"
-  help: Left and Right pick a chapter, A jumps there. With the menu closed, LB and RB jump to the previous and next one.
+  help: Left and Right pick a chapter, A jumps there. Closed, LB and RB jump to the previous and next one.
 -- start over, and the HUD with the speed
 menu_open=true focus=3 select="Start over"
     Quality = "Best available"

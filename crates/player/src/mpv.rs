@@ -16,7 +16,9 @@ use libmpv2::{mpv_end_file_reason, Mpv};
 
 use crate::output::VideoOutput;
 use crate::recent::RecentLog;
-use crate::sync::{next_lead_ms, sync_step, ClockWatch, SyncStep, SyncView, SEEK_LEAD_MS};
+use crate::sync::{
+    next_lead_ms, seek_running_step, sync_step, ClockWatch, SyncStep, SyncView, SEEK_LEAD_MS,
+};
 use crate::{
     ClockReading, Latency, LoadOptions, Player, PlayerClock, PlayerEvent, PlayerHealth,
     PlayerOption, PlayerStats, Zoom,
@@ -33,8 +35,9 @@ const SYNC_POLL: Duration = Duration::from_millis(10);
 /// back to start.
 const READING_WAIT: Duration = Duration::from_millis(300);
 
-/// A seek this old that has not finished ends the take-over: the spare goes from where it is.
-const SEEK_MAX: Duration = Duration::from_secs(3);
+/// A take-over load with no first frame this long after it was made fails (no PlaybackRestart, no
+/// error): the spare cannot be waited for forever.
+const TAKE_OVER_LOAD_MAX: Duration = Duration::from_secs(30);
 
 /// A live load that takes over starts this much further back than the old picture, so it can
 /// seek forward to it (a segment).
@@ -440,10 +443,12 @@ struct TakeOver {
     from: PlayerClock,
     /// Keeps `from` published.
     _watch: ClockWatch,
+    /// The load was made at this moment.
+    loaded: Instant,
     /// Its first frame came, paused, at this moment.
     ready_since: Option<Instant>,
-    /// A seek to the old picture runs, since then.
-    seeking: Option<Instant>,
+    /// A seek runs: since when, and to where (the old picture's moment, as aimed).
+    seeking: Option<(Instant, u64)>,
     seeks: u8,
     /// How far ahead of the old picture the next seek aims.
     lead_ms: u64,
@@ -454,6 +459,7 @@ impl TakeOver {
         Self {
             from,
             _watch: watch,
+            loaded: Instant::now(),
             ready_since: None,
             seeking: None,
             seeks: 0,
@@ -466,12 +472,9 @@ impl TakeOver {
         let Some(ready) = self.ready_since else {
             return SyncStep::Wait;
         };
-        if let Some(at) = self.seeking {
-            return if now.saturating_duration_since(at) < SEEK_MAX {
-                SyncStep::Wait
-            } else {
-                SyncStep::Go
-            };
+        let ready_for = now.saturating_duration_since(ready);
+        if let Some((at, target)) = self.seeking {
+            return seek_running_step(now.saturating_duration_since(at), ready_for, target);
         }
         let Some(own) = own else {
             return SyncStep::Go;
@@ -483,7 +486,7 @@ impl TakeOver {
             now,
             seek_anywhere: video,
             seeks: self.seeks,
-            ready_for: now.saturating_duration_since(ready),
+            ready_for,
             lead_ms: self.lead_ms,
         })
     }
@@ -943,7 +946,7 @@ fn control_loop(
                 Ok(Event::PlaybackRestart) if starting && sync.is_some() => {
                     if let Some(s) = sync.as_mut() {
                         let now = Instant::now();
-                        if let Some(at) = s.seeking.take() {
+                        if let Some((at, _)) = s.seeking.take() {
                             s.lead_ms = next_lead_ms(now.saturating_duration_since(at));
                         }
                         s.ready_since.get_or_insert(now);
@@ -992,6 +995,22 @@ fn control_loop(
             }
         }
 
+        // Taking over: a load that never shows its first frame fails, as a load does on error.
+        if sync
+            .as_ref()
+            .is_some_and(|s| s.ready_since.is_none() && s.loaded.elapsed() >= TAKE_OVER_LOAD_MAX)
+        {
+            tracing::warn!("a take-over load showed no picture in time");
+            sync = None;
+            starting = false;
+            health_due = None;
+            live = false;
+            delay.held_since = None;
+            on_event(PlayerEvent::Failed(
+                recent.report("the stream showed no picture within 30 s (take-over)"),
+            ));
+        }
+
         // Taking over: wait, seek, or go once the old picture reaches this one's.
         if let Some(s) = sync.as_mut() {
             let now = Instant::now();
@@ -1002,7 +1021,7 @@ fn control_loop(
                     tracing::debug!(own, to, lead = s.lead_ms, "seeking to the old picture");
                     seek_to_clock(mpv, video, to);
                     s.seeks += 1;
-                    s.seeking = Some(now);
+                    s.seeking = Some((now, to));
                 }
                 SyncStep::Go => {
                     let old = s.from.now_ms();

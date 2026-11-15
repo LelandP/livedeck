@@ -166,6 +166,11 @@ impl TwitchApi for HybridApi {
         self.parts.gql.video_details(id).await
     }
 
+    /// Always GQL's client, like [`HybridApi::channel_videos`].
+    async fn storyboard_info(&self, url: &str) -> Result<Option<String>> {
+        self.parts.gql.storyboard_info(url).await
+    }
+
     /// Always GQL, like [`HybridApi::channel_videos`].
     async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
         self.parts.gql.live_archive(login).await

@@ -1,5 +1,4 @@
-# Flatpak manifest for LiveDeck. Experimental: not yet verified by a CI run
-# (.github/workflows/flatpak.yml), so a module or two may need fixing.
+# Flatpak manifest for LiveDeck.
 #
 # Build locally:
 #   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.livedeck.LiveDeck.yml
@@ -152,7 +151,7 @@ modules:
       build-args:
         - --share=network
     build-commands:
-      - pip3 install --no-cache-dir --target=/app/lib/streamlink 'streamlink>=8,<9'
+      - pip3 install --no-cache-dir --target=/app/lib/streamlink 'streamlink==8.6.3'
       - install -Dm755 streamlink-wrapper /app/bin/streamlink
     sources:
       - type: script

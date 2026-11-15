@@ -71,9 +71,10 @@ struct User {
 
 #[derive(Deserialize)]
 struct Badge {
-    #[serde(rename = "setID")]
-    set_id: String,
-    version: String,
+    #[serde(rename = "setID", default)]
+    set_id: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
     #[serde(rename = "imageURL")]
     image_url: Option<String>,
 }
@@ -82,9 +83,13 @@ fn into_set(badges: Vec<Badge>) -> BadgeSet {
     badges
         .into_iter()
         .filter_map(|b| {
+            let (Some(set_id), Some(version)) = (b.set_id, b.version) else {
+                tracing::debug!("skipping a badge without a set or version");
+                return None;
+            };
             // Only https images: the URL ends up in a download.
             let url = b.image_url.filter(|u| u.starts_with("https://"))?;
-            Some(((b.set_id, b.version), url))
+            Some(((set_id, version), url))
         })
         .collect()
 }
@@ -263,6 +268,19 @@ mod tests {
             get(&channel, "subscriber", "6"),
             Some("https://cdn/sub6.png")
         );
+    }
+
+    #[test]
+    fn a_badge_without_set_or_version_is_skipped_and_the_rest_survive() {
+        let json = r#"{"data":{"badges":[
+            {"setID":"moderator","version":"1","imageURL":"https://cdn/mod.png"},
+            {"setID":"subscriber","imageURL":"https://cdn/nover.png"},
+            {"version":"0","imageURL":"https://cdn/noset.png"},
+            {"setID":"founder","version":"0","imageURL":"https://cdn/founder.png"}]}}"#;
+        let set = parse_global(json).unwrap();
+        assert_eq!(get(&set, "moderator", "1"), Some("https://cdn/mod.png"));
+        assert_eq!(get(&set, "founder", "0"), Some("https://cdn/founder.png"));
+        assert_eq!(set.len(), 2);
     }
 
     #[tokio::test]

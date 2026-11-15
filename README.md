@@ -9,7 +9,7 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 
 > **This is not an official Twitch or Valve product, and it is not affiliated with or endorsed by either.** Twitch and Steam are trademarks of their owners.
 >
-> **Use it at your own risk.** It finds streams through unofficial, undocumented Twitch endpoints. They can break without notice, and using them may conflict with the [Twitch Terms of Service](https://www.twitch.tv/p/legal/terms-of-service/). The software comes with no warranty (see [LICENSE](LICENSE)). You are responsible for how you use it.
+> **Use it at your own risk.** It finds streams through unofficial, undocumented Twitch and Kick endpoints. Kick's API is unofficial too. They can break without notice, and using them may conflict with the [Twitch Terms of Service](https://www.twitch.tv/p/legal/terms-of-service/). The software comes with no warranty (see [LICENSE](LICENSE)). You are responsible for how you use it.
 >
 > **Why it exists:** I made this for myself, because I wanted to watch Twitch on my TV from the couch without a mouse and keyboard, and the existing options did not fit. I am sharing it in case it is useful to someone else. It is a hobby project: expect rough edges, and things get fixed when I have time. Contributions are very welcome (see [Contributing](#contributing)).
 
@@ -56,7 +56,7 @@ Ideas and plans, from easiest to hardest. Nothing here exists yet.
 
 ## Install
 
-Download the latest build from the **Releases** page of this repository.
+Download the latest build from the **Releases** page of this repository. Each release lists `SHA256SUMS`, so you can check the download against it.
 
 ### Windows
 
@@ -96,7 +96,7 @@ With video you also need libmpv and Streamlink:
 
 - **Linux:** install libmpv 2.x development files (`libmpv-dev` / `mpv-libs`), `libudev-dev`, `libfontconfig1-dev`, `libxkbcommon-dev` and Streamlink, then `cargo run -p livedeck --release --features mpv`.
 
-The captions need the `captions` feature too (CMake and a C++ compiler), for example `--features mpv,captions`.
+The captions need the `captions` feature too (CMake, a C++ compiler and libclang), for example `--features mpv,captions`. The `vulkan` feature also needs the Vulkan headers and `glslc`. The exact package list is in `packaging/flatpak/io.github.livedeck.LiveDeck.yml`.
 
 To make the portable Windows zip yourself, see `packaging/windows/package.ps1`. For captions during development, `HTPC_CAPTIONS_MODEL` and `HTPC_CAPTIONS_VAD_MODEL` point at local model files instead of the download.
 
@@ -122,7 +122,7 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`. 
 - **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. *Sleep timer* counts down whatever you watch (switching channels does not reset it); a minute before the end any button keeps going for the same length again, otherwise the sound fades, the stream stops and the device suspends. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
 - **Multiview:** while signed in, press View on a live channel card to add it to the set (a tick shows it, and a tray in the corner counts them). *Watch the N together* starts the set in a grid. In the grid, A moves the sound to the stream you press it on, or goes full screen on the stream with sound; B goes back to browsing with the set still picked. LB/RB change the layout, and Y shows the chat of the stream with sound. View opens the options: add a stream (Favorites or Following), remove one, star it, or leave. A stream's quality follows its size on screen, and a change of quality loads the new picture behind the old one, so it does not go black. After five seconds without a button the captions and controls fade and the streams fill the window. Full screen: A pauses, and play jumps back to live; LB/RB move to the previous or next stream.
 - **Favorites:** View on a channel card (or the picker in multiview) stars it. Favorites are listed on their own screen and in a Home row, live ones first. They are saved in `favorites.toml`.
-- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `show_kick`, `image_cache_max_mb`, `quick_messages`, `captions`, `captions_quality`, `caption_delay`, `caption_size`, `caption_position`, `caption_background` and an optional `client_id`. The starred channels are in `favorites.toml`, the last multiview set (which Home's *Resume multiview* card starts) in `multiview.toml`, and where each video was left (for *Continue watching*) in `continue.toml`. These three are in the data folder next to the sign-in fallback, and LiveDeck writes them itself.
+- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout` (`side` or `overlay`), `quality` (`best`, `1080p`, `720p`, `480p` or `worst`), `live_notifications`, `background_play`, `show_kick`, `image_cache_max_mb`, `quick_messages`, `captions`, `captions_quality`, `caption_delay`, `caption_size`, `caption_position`, `caption_background` and an optional `client_id`. The starred channels are in `favorites.toml`, the last multiview set (which Home's *Resume multiview* card starts) in `multiview.toml`, and where each video was left (for *Continue watching*) in `continue.toml`. These three are in the data folder next to the sign-in fallback, and LiveDeck writes them itself.
 - **Try it offline:** `livedeck --mock` runs with fixture data and no network. Its live channels play generated test pictures, so the player and multiview can be tried too (this needs the video build, see *Build from source*).
 - **Logs:** set `RUST_LOG=livedeck=debug`, or `RUST_LOG=livedeck::captions=debug` for caption timing. `HTPC_LOG=<file>` writes the log, and any crash, to that file instead of the terminal (a Windows release build has none unless started from one). `livedeck --help` lists every option and environment variable.
 
@@ -142,6 +142,21 @@ Captions are made on your device by a speech model, with no cloud and no account
 ### Using your own Twitch application (forks)
 
 Signing in needs a Twitch application's client ID. This project's public ID is built in (`DEFAULT_CLIENT_ID` in `crates/app/src/main.rs`); a client ID is public, not a secret, and the app has no client secret. If you fork or repackage the app, register your own at <https://dev.twitch.tv/console> (Client Type **Public**, any OAuth redirect URL such as `http://localhost:3000`, the Device Code flow never uses it), then set `TWITCH_CLIENT_ID`, or `client_id` in `config.toml`, or replace the constant. Never commit tokens.
+
+## Known issues
+
+- The Windows zip is not code-signed, so SmartScreen warns about an unknown publisher. Choose *More info*, then *Run anyway*.
+- Captions on Windows run on the CPU. On a slow machine, use *Fast*.
+- Kick is read-only: no sign-in, no follows and no chat messages.
+- LiveDeck does not block ads.
+- The Twitch and Kick endpoints are unofficial. They can break without notice.
+
+## Troubleshooting
+
+- **No streams play:** Streamlink is missing or outdated. Install or update it, or point `HTPC_STREAMLINK` at a working copy.
+- **Sign-in asks again:** sign in once more.
+- **Captions fail:** the speech model downloads the first time captions are turned on, so that needs the network. Check the connection and try again.
+- **Logs:** set `HTPC_LOG` to write a log file, and any crash, to that file. See *Logs* under *Use*.
 
 ## Contributing
 
@@ -195,7 +210,7 @@ By contributing you agree your work is released under the project's licence (GPL
 
 **Is this the official Twitch app for Steam Deck?** No. It is an independent hobby project.
 
-**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with permission to see your follows and to write chat messages as you (only when you send one). You sign in with your Twitch account; LiveDeck has no accounts of its own. Stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
+**Is it safe, and will my Twitch account be banned?** I do not know, and cannot promise. The app reads public information and, if you sign in, uses Twitch's official OAuth Device Code flow with permission to see your follows and to write chat messages as you (only when you send one). You sign in with your Twitch account; LiveDeck has no accounts of its own. Twitch and Kick data come from unofficial endpoints, and stream lookup uses the same unofficial approach as Streamlink. Use it at your own risk.
 
 **Does it block ads?** No, and it does not try to.
 
@@ -205,6 +220,6 @@ By contributing you agree your work is released under the project's licence (GPL
 
 ## Licence
 
-GPL-3.0-only, see [LICENSE](LICENSE). Release packages bundle other software under its own licences, listed in [packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md). The interface font is Atkinson Hyperlegible (SIL OFL 1.1).
+GPL-3.0-only, see [LICENSE](LICENSE). See also [AI_DISCLOSURE.md](AI_DISCLOSURE.md). Release packages bundle other software under its own licences, listed in [packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md). The interface font is Atkinson Hyperlegible (SIL OFL 1.1).
 
 <!-- Keywords: Twitch client, Twitch for Steam Deck, SteamOS Game Mode Twitch app, controller Twitch app, gamepad Twitch, couch Twitch, HTPC Twitch, unofficial Twitch client, Rust, Slint, mpv, Streamlink, open source -->

@@ -53,6 +53,9 @@ const ROTATE_RETRY: Duration = Duration::from_secs(60);
 /// A tap file not written for this long belongs to no running tap (a crash left it).
 const STALE: Duration = Duration::from_secs(600);
 
+/// A tap that has not found its first audio in this long gives up (the stream is not playing).
+const ANCHOR_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The tap files' names: `livedeck-tap-<pid>-<n>.wav`.
 const FILE_PREFIX: &str = "livedeck-tap-";
 
@@ -134,15 +137,32 @@ fn tap_path(dir: &Path) -> PathBuf {
     dir.join(format!("{FILE_PREFIX}{}-{n}.wav", std::process::id()))
 }
 
-/// Deletes tap files a crash left behind: any not written for [`STALE`].
+/// Creates a tap file the process owns, readable by this user only. `create_new` refuses an
+/// existing file, including a symlink planted in a shared temp folder.
+fn create_private(path: &Path) -> Result<(), String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+        .map(drop)
+        .map_err(|e| format!("could not create the audio tap file: {e}"))
+}
+
+/// Deletes tap files a crash left behind: any not written for [`STALE`]. This process's own
+/// files are never deleted: a live session owns them.
 fn remove_stale(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
+    let own = format!("{FILE_PREFIX}{}-", std::process::id());
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !name.starts_with(FILE_PREFIX) || !name.ends_with(".wav") {
+        if !name.starts_with(FILE_PREFIX) || !name.ends_with(".wav") || name.starts_with(&own) {
             continue;
         }
         let old = entry
@@ -174,6 +194,8 @@ struct Session {
     chunker: Chunker,
     /// When the clock was last checked against `audio-pts`.
     checked: Instant,
+    /// When the session was opened: it gives up if it has no clock after `ANCHOR_TIMEOUT`.
+    opened: Instant,
     /// The biggest gap between `audio-pts` and the mapped time seen, for the log.
     most_ahead: f64,
     /// A video or clip: mpv rebases its timestamps to 0, and the stream clock is `audio-pts`
@@ -198,6 +220,9 @@ impl Session {
     /// A live stream (`from_s` `None`), or a video or clip from `from_s` seconds in.
     fn open(url: &str, path: PathBuf, from_s: Option<f64>) -> Result<Self, String> {
         let out = path.to_str().ok_or("the tap path is not UTF-8")?.to_owned();
+        // mpv would create the file with the default mode; create it private first, and mpv
+        // then writes into it.
+        create_private(&path)?;
         let mpv = Mpv::with_initializer(|init| {
             init.set_option("o", out.as_str())?;
             init.set_option("of", "wav")?;
@@ -238,6 +263,7 @@ impl Session {
             timeline: Timeline::default(),
             chunker: Chunker::default(),
             checked: Instant::now(),
+            opened: Instant::now(),
             most_ahead: 0.0,
             rebased: from_s.is_some(),
             paced: false,
@@ -342,6 +368,16 @@ impl Session {
         }
     }
 
+    /// `Failed` if the session has had no clock for [`ANCHOR_TIMEOUT`].
+    fn anchor_timeout(&self) -> Option<End> {
+        (!self.timeline.is_set() && self.opened.elapsed() > ANCHOR_TIMEOUT).then(|| {
+            End::Failed(format!(
+                "the audio tap had no audio after {} s",
+                ANCHOR_TIMEOUT.as_secs()
+            ))
+        })
+    }
+
     /// The file's new bytes as chunks.
     fn read(&mut self) -> Result<Vec<PcmChunk>, String> {
         if self.file.is_none() {
@@ -417,6 +453,7 @@ impl Drop for Session {
 fn step(session: &mut Session, pace: Option<&TapPace>) -> (Vec<PcmChunk>, Option<End>) {
     let end = session.events();
     session.anchor();
+    let end = end.or_else(|| session.anchor_timeout());
     let now = session.check_due();
     let chunks = match session.read() {
         Ok(chunks) => chunks,

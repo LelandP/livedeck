@@ -66,9 +66,26 @@ impl Config {
         self.image_cache_max_mb.saturating_mul(1024 * 1024)
     }
 
-    /// Parses TOML text. Fails only if the text is not valid TOML or a key has the wrong type.
+    /// Parses TOML text. Fails only if the text is not valid TOML. A key with the wrong type is
+    /// logged and treated as missing, so the rest of the file still applies.
     pub fn from_toml(text: &str) -> std::result::Result<Self, String> {
-        let file: ConfigFile = toml::from_str(text).map_err(|e| e.to_string())?;
+        let table: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
+        let file = ConfigFile {
+            chat_layout: field(&table, "chat_layout"),
+            quality: field(&table, "quality"),
+            live_notifications: field(&table, "live_notifications"),
+            background_play: field(&table, "background_play"),
+            show_kick: field(&table, "show_kick"),
+            captions: field(&table, "captions"),
+            captions_quality: field(&table, "captions_quality"),
+            caption_delay: field(&table, "caption_delay"),
+            caption_size: field(&table, "caption_size"),
+            caption_position: field(&table, "caption_position"),
+            caption_background: field(&table, "caption_background"),
+            image_cache_max_mb: field(&table, "image_cache_max_mb"),
+            quick_messages: field(&table, "quick_messages"),
+            client_id: field(&table, "client_id"),
+        };
         Ok(file.into())
     }
 
@@ -96,6 +113,18 @@ struct ConfigFile {
     quick_messages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_id: Option<String>,
+}
+
+/// Reads one key. `None` if it is missing or has the wrong type; a wrong type is logged.
+fn field<T: serde::de::DeserializeOwned>(table: &toml::Table, key: &str) -> Option<T> {
+    let value = table.get(key)?;
+    match value.clone().try_into::<T>() {
+        Ok(v) => Some(v),
+        Err(err) => {
+            tracing::warn!(key, %err, "config value has the wrong type, using the default");
+            None
+        }
+    }
 }
 
 /// Parses a named setting, warning and falling back to the default on unknown names.

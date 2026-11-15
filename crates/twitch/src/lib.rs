@@ -150,6 +150,13 @@ pub trait TwitchApi: Send + Sync + 'static {
         async { Ok(None) }
     }
 
+    /// The body of the seek-preview storyboard description (`…-info.json`) at the https `url`, or
+    /// `Ok(None)` when this API does not fetch it. GQL only, like [`TwitchApi::channel_videos`].
+    fn storyboard_info(&self, url: &str) -> impl Future<Output = Result<Option<String>>> + Send {
+        let _ = url;
+        async { Ok(None) }
+    }
+
     /// The past broadcast being recorded from `login`'s live stream, or `Ok(None)` when it is not
     /// live or keeps no past broadcasts. GQL only, like [`TwitchApi::channel_videos`].
     fn live_archive(

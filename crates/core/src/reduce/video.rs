@@ -23,7 +23,8 @@ use crate::netlimit::Health;
 use crate::seek::{self, Scrub, Seeking, TapRun};
 use crate::state::{AppState, Playback, Screen, ToastKind};
 use crate::video::{
-    EndRow, Landing, VideoDetails, VideoItem, VideoLoad, VideoSession, VIDEO_GONE_MESSAGE,
+    EndRow, Landing, Storyboard, VideoDetails, VideoItem, VideoLoad, VideoSession,
+    VIDEO_GONE_MESSAGE,
 };
 
 use super::{
@@ -310,11 +311,11 @@ pub(super) fn intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) 
         return;
     }
     if v.seeking.scrub().is_some() {
-        // A scrub takes the D-pad, A and B. Everything else waits for it to end.
+        // A scrub takes the D-pad and B; letting go of the direction jumps. A does nothing here (a
+        // separate "jump here" press only confused). Everything else waits for it to end.
         match intent {
             Intent::Left => press(s, Dir::Left, cmds),
             Intent::Right => press(s, Dir::Right, cmds),
-            Intent::Select => finish_scrub(s, cmds),
             Intent::Back => cancel_scrub(s, cmds),
             _ => {}
         }
@@ -510,6 +511,9 @@ pub(super) fn hold_due(s: &mut AppState, id: u32, cmds: &mut Vec<Command>) {
         return;
     };
     if !free || v.load == VideoLoad::Starting || v.end_card.is_some() {
+        // No scrub here: it stays a press, so its release still counts as a tap (a seek while
+        // the video loads goes into the start of the load). Seeking::Pressed with a lost release
+        // ends at the next press.
         return;
     }
     run.untap(dir);
@@ -976,8 +980,38 @@ pub(super) fn gone(s: &mut AppState, id: &str, cmds: &mut Vec<Command>) {
     }
 }
 
+/// `Event::Storyboard`: the seek-preview frames of the video on screen. One for another video
+/// (the viewer moved on while it loaded) is dropped.
+pub(super) fn storyboard(s: &mut AppState, id: &str, storyboard: Storyboard) {
+    if let Some(v) = s.video.as_mut().filter(|v| v.item.video_id() == Some(id)) {
+        v.storyboard = Some(storyboard);
+        v.sheets_asked.clear();
+    }
+}
+
+/// After every message: while a video with a storyboard is on screen, the sheet holding the frame
+/// at the shown time is fetched once (the app's thumbnail pipeline), so the picture is there by
+/// the time a seek wants it.
+pub(super) fn want_sheet(s: &mut AppState, cmds: &mut Vec<Command>) {
+    let Some(v) = s.video.as_mut() else {
+        return;
+    };
+    let Some(sb) = &v.storyboard else {
+        return;
+    };
+    let Some(i) = sb.sheet_at(v.shown_ms()) else {
+        return;
+    };
+    if v.sheets_asked.contains(&i) {
+        return;
+    }
+    let url = sb.sheets[i].clone();
+    v.sheets_asked.push(i);
+    cmds.push(Command::FetchThumbnails { urls: vec![url] });
+}
+
 /// `Event::VideoDetails`: the chapters, muted parts and seek previews of the video on screen.
-pub(super) fn details(s: &mut AppState, details: VideoDetails) {
+pub(super) fn details(s: &mut AppState, details: VideoDetails, cmds: &mut Vec<Command>) {
     let Some(v) = s
         .video
         .as_mut()
@@ -987,6 +1021,12 @@ pub(super) fn details(s: &mut AppState, details: VideoDetails) {
     };
     v.chapters = details.chapters;
     v.muted = details.muted;
+    if let (Some(url), true) = (&details.previews, v.storyboard.is_none()) {
+        cmds.push(Command::LoadStoryboard {
+            id: details.id.clone(),
+            url: url.clone(),
+        });
+    }
     v.previews = details.previews;
     if v.length_ms == 0 {
         v.length_ms = u64::from(details.length_s) * 1_000;

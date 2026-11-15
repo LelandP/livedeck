@@ -131,19 +131,34 @@ impl ImageCache {
     }
 
     async fn download(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = self.http.get(url).send().await.map_err(Error::Network)?;
+        // Images are only fetched over https, the URL as given and after any redirect. Plain http
+        // is allowed to this machine only (tests and local mock servers).
+        if !secure_or_local(url) {
+            return Err(Error::Decode("image URL is not https".to_owned()));
+        }
+        let mut resp = self.http.get(url).send().await.map_err(Error::Network)?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Error::HttpStatus(status.as_u16()));
         }
+        if !secure_or_local(resp.url().as_str()) {
+            return Err(Error::Decode(
+                "image redirected to a non-https URL".to_owned(),
+            ));
+        }
         if let Some(len) = resp.content_length().filter(|&l| l > MAX_IMAGE_BYTES) {
             return Err(Error::TooLarge(len));
         }
-        let bytes = resp.bytes().await.map_err(Error::Network)?;
-        if bytes.len() as u64 > MAX_IMAGE_BYTES {
-            return Err(Error::TooLarge(bytes.len() as u64));
+        // Read chunk by chunk so an oversized body stops at the cap instead of being fully read.
+        let mut bytes = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(Error::Network)? {
+            let total = (bytes.len() + chunk.len()) as u64;
+            if total > MAX_IMAGE_BYTES {
+                return Err(Error::TooLarge(total));
+            }
+            bytes.extend_from_slice(&chunk);
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, DiskLru> {
@@ -167,6 +182,27 @@ async fn unblock<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'stat
         .unwrap_or_else(|join| Err(Error::Decode(format!("worker task failed: {join}"))))
 }
 
+/// `https://`, or `http://` to this machine (localhost, 127.0.0.1, [::1]).
+fn secure_or_local(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let name = if host.starts_with('[') {
+        host.split_once(']')
+            .map_or(host, |(h, _)| h)
+            .trim_start_matches('[')
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    matches!(name, "localhost" | "127.0.0.1" | "::1")
+}
+
 /// A stable file name for `url`: two FNV-1a 64-bit hashes with different offsets, as 32 hex
 /// digits. Stable across Rust versions, unlike `DefaultHasher`.
 pub(crate) fn cache_key(url: &str) -> String {
@@ -183,6 +219,18 @@ pub(crate) fn cache_key(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_https_or_this_machine_is_fetched() {
+        assert!(secure_or_local("https://static-cdn.jtvnw.net/a.jpg"));
+        assert!(secure_or_local("http://127.0.0.1:4000/a.png"));
+        assert!(secure_or_local("http://localhost/a.png"));
+        assert!(secure_or_local("http://[::1]:80/a.png"));
+        assert!(!secure_or_local("http://static-cdn.jtvnw.net/a.jpg"));
+        assert!(!secure_or_local("http://127.0.0.1.evil.com/a.png"));
+        assert!(!secure_or_local("http://localhost@evil.com/a.png"));
+        assert!(!secure_or_local("ftp://127.0.0.1/a.png"));
+    }
 
     #[test]
     fn cache_keys_are_stable_hex_and_distinct() {

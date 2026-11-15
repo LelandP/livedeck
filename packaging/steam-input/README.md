@@ -6,7 +6,7 @@ XInput-style pad) and also accepts the keyboard keys Steam Input can send.
 ## Adding it to Steam (Windows, or Linux desktop)
 
 1. Steam, **Games**, **Add a Non-Steam Game to My Library**, browse to `livedeck.exe` (Windows
-   package) or pick **LiveDeck** from the list (Flatpak install).
+   package) or pick **LiveDeck** from the list (Flatpak install). If LiveDeck is not in the list, add any program, then set its target to `flatpak` and its launch options to `run io.github.livedeck.LiveDeck`.
 2. Open its **Controller** settings and choose the **Gamepad** template (the default). Do not pick
    a "keyboard and mouse" template.
 3. Launch it from Game Mode.
@@ -17,7 +17,7 @@ XInput-style pad) and also accepts the keyboard keys Steam Input can send.
 |---|---|
 | D-pad / left stick | Move focus |
 | A | Select / watch / change a setting |
-| B | Back. On a main screen (Home, Following, Browse, Settings) it asks whether to quit: A quits, B stays |
+| B | Back. On the left menu, B asks whether to quit: A quits, B stays |
 | X | Retry a failed load. While watching with chat shown: write in chat |
 | Y | Show or hide chat |
 | Start (Menu) | Open or close the left rail |

@@ -772,6 +772,42 @@ fn start_y_and_x_work_in_full_screen_as_on_the_single_player() {
     assert!(compose.compose.open);
 }
 
+// --- The player menu in the grid -----------------------------------------------------------------
+
+#[test]
+fn start_in_the_grid_opens_the_player_menu() {
+    let s = with_streams(2);
+    let (s, _) = reduce(&s, Intent::Menu);
+    assert_eq!(s.player_menu, Some(PlayerMenuRow::Quality));
+    assert_eq!(s.screen, Screen::Multiview, "the grid stays");
+}
+
+#[test]
+fn b_closes_the_grids_player_menu_and_leaves_the_grid() {
+    let (s, _) = press(&with_streams(2), &[Intent::Menu, Intent::Back]);
+    assert!(s.player_menu.is_none());
+    assert_eq!(s.screen, Screen::Multiview);
+    assert!(s.multiview.is_some(), "multiview keeps running");
+}
+
+#[test]
+fn channel_videos_in_the_grid_opens_the_focused_tiles_channel_page() {
+    // Focus the tile of "a" (not the one with sound), then Start, down to *Channel videos*, A.
+    let mut keys = vec![Intent::Right, Intent::Menu];
+    keys.extend(std::iter::repeat_n(Intent::Down, 9));
+    keys.push(Intent::Select);
+    let (s, _) = press(&with_streams(2), &keys);
+    assert_eq!(s.screen, Screen::Channel);
+    assert_eq!(s.player_menu, None);
+    let page = s.channel_page.as_ref().expect("the page is open");
+    assert_eq!(page.channel, ChannelRef::twitch("a"));
+    assert_eq!(
+        s.multiview.as_ref().unwrap().sound,
+        0,
+        "the sound stays on main"
+    );
+}
+
 #[test]
 fn the_player_menus_stats_follow_the_sound() {
     let s = with_streams(2);
@@ -1050,4 +1086,108 @@ fn the_sleep_timer_leaves_multiview() {
     assert_eq!(s.screen, Screen::Home);
     assert!(cmds.contains(&Command::StopPlayback { slot: 1 }));
     assert!(cmds.contains(&Command::Suspend));
+}
+
+#[test]
+fn signing_out_stops_multiview_and_goes_home() {
+    let s = with_streams(2);
+    let (s, cmds) = reduce(&s, Event::SignedOut);
+    assert!(s.multiview.is_none());
+    assert_eq!(s.screen, Screen::Home);
+    assert!(cmds.contains(&Command::StopPlayback { slot: 0 }));
+    assert!(cmds.contains(&Command::StopPlayback { slot: 1 }));
+}
+
+/// The id of the last offline recheck timer in `cmds`.
+fn recheck_id(cmds: &[Command]) -> Option<u32> {
+    cmds.iter().rev().find_map(|c| match c {
+        Command::ScheduleOfflineRecheck { id } => Some(*id),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_recheck_with_no_answer_is_followed_by_the_next_one() {
+    let (s, cmds) = reduce(&watching(true), Event::PlaybackEnded { slot: MAIN_SLOT });
+    assert_eq!(s.playback, Playback::Offline);
+    let first = recheck_id(&cmds).expect("the offline screen schedules a look");
+
+    // The look asks for the stream, and the next look is scheduled at once.
+    let (s, cmds) = reduce(&s, Event::OfflineRecheckDue(first));
+    assert!(s.rechecking);
+    assert_eq!(plays(&cmds), [MAIN_SLOT]);
+    let second = recheck_id(&cmds).expect("the next look is scheduled");
+    assert_ne!(first, second);
+
+    // No answer comes: the next look asks again, and schedules another.
+    let (s, cmds) = reduce(&s, Event::OfflineRecheckDue(second));
+    assert_eq!(plays(&cmds), [MAIN_SLOT], "asked again");
+    let third = recheck_id(&cmds).expect("and scheduled again");
+
+    // A look with a stale id finds nothing.
+    let (_, cmds) = reduce(&s, Event::OfflineRecheckDue(first));
+    assert!(cmds.is_empty());
+
+    // The answer comes: the stream plays, and the scheduled look finds nothing to do.
+    let s = reduce(&s, Event::PlaybackStarted { slot: MAIN_SLOT }).0;
+    assert_eq!(s.playback, Playback::Playing);
+    let (_, cmds) = reduce(&s, Event::OfflineRecheckDue(third));
+    assert!(cmds.is_empty());
+}
+
+// --- The Steam Deck's warning ------------------------------------------------------------------
+
+/// `watching(true)` on `device`.
+fn on(device: Device) -> AppState {
+    let mut s = watching(true);
+    s.device = device;
+    s
+}
+
+/// The multiview with `main` and `picks` more streams picked from the picker, as `with_streams`
+/// picks them: the grid has `picks + 1` streams.
+fn picked(s: &AppState, picks: usize) -> AppState {
+    let (mut s, _) = press(s, &[Intent::View, Intent::Select]);
+    for i in 0..picks {
+        if i > 0 {
+            s = reduce(&s, Intent::Down).0;
+        }
+        s = reduce(&s, Intent::Select).0;
+    }
+    s
+}
+
+/// How many toasts say the Deck warning.
+fn deck_warnings(s: &AppState) -> usize {
+    s.toasts
+        .iter()
+        .filter(|t| t.kind == ToastKind::DeckCrowded)
+        .count()
+}
+
+#[test]
+fn on_a_deck_a_fourth_stream_shows_the_warning_once() {
+    for device in [Device::DeckLcd, Device::DeckOled] {
+        let s = picked(&on(device), 2);
+        assert_eq!(mv(&s).count(), 3);
+        assert_eq!(deck_warnings(&s), 0, "3 streams are fine");
+
+        let s = picked(&on(device), 3);
+        assert_eq!(mv(&s).count(), 4);
+        assert_eq!(deck_warnings(&s), 1);
+        assert!(s.multiview_warned);
+
+        // A fifth stream does not show it again.
+        let s = picked(&on(device), 4);
+        assert_eq!(mv(&s).count(), 5);
+        assert_eq!(deck_warnings(&s), 1);
+    }
+}
+
+#[test]
+fn off_a_deck_there_is_no_warning() {
+    let s = picked(&on(Device::Other), 4);
+    assert_eq!(mv(&s).count(), 5);
+    assert_eq!(deck_warnings(&s), 0);
+    assert!(!s.multiview_warned);
 }

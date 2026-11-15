@@ -106,7 +106,7 @@ component ComposeKeys inherits Rectangle {
             wrap: word-wrap;
         }
         Text {
-            text: "A: Sign in again";
+            text: "Press A to sign in again";
             color: Theme.accent-light;
             font-size: Theme.fs-body;
             font-weight: 700;
@@ -285,6 +285,55 @@ component MenuRow inherits Rectangle {
             font-size: Theme.fs-body;
             vertical-alignment: center;
             horizontal-alignment: right;
+        }
+    }
+}
+
+// The player menu (Start): the box bottom left, just above the HUD text. Up/Down pick a row,
+// Left/Right change it (see `player_menu_intent` in htpc-core). The component fills its parent,
+// so the box sits at the same place on the Player screen and over the multiview grid.
+export component PlayerMenu inherits Rectangle {
+    in property <bool> menu-open: false;
+    in property <int> menu-focus: 0;
+    in property <[MenuItem]> menu-items: [];
+
+    if root.menu-open : Rectangle {
+        x: Theme.safe-x / 2;
+        y: root.height - 190px - self.height - 8px;
+        width: Theme.menu-w;
+        height: menu-layout.preferred-height;
+        background: #18181bf0;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.surface-high;
+        menu-layout := VerticalLayout {
+            padding: 12px;
+            spacing: 4px;
+            Text {
+                text: "OPTIONS";
+                color: Theme.accent-light;
+                font-size: Theme.fs-small;
+                font-weight: 800;
+                letter-spacing: 3px;
+            }
+            for item[i] in root.menu-items : MenuRow {
+                title: item.title;
+                value: item.value;
+                focused: root.menu-focus == i;
+                locked: item.locked;
+                action: item.action;
+            }
+            Text {
+                text: root.menu-items[root.menu-focus].help;
+                color: Theme.text;
+                font-size: Theme.fs-small;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Lasts until LiveDeck quits (the caption rows are saved)";
+                color: Theme.muted;
+                font-size: Theme.fs-small;
+            }
         }
     }
 }
@@ -640,8 +689,8 @@ component SeekBar inherits Rectangle {
 
 // A video's HUD (Theme-sized like the live one): the channel, a kind chip and the title along the
 // top, and the seek bar with the time along the bottom, just above the hints bar. While seeking
-// the time and chapter show above the playhead (the storyboard preview comes in phase 8 of
-// vod-plan.md).
+// the time and chapter show above the playhead, with the storyboard frame at that time over them
+// once its sheet has loaded.
 component VideoHudView inherits Rectangle {
     in property <VideoHud> hud;
     in property <bool> shown;
@@ -744,6 +793,29 @@ component VideoHudView inherits Rectangle {
             y: bar.y - self.height - 6px;
             border-radius: 6px;
             background: #0e0e10e6;
+            // The storyboard frame at the playhead, above the time, kept inside the bar's ends.
+            // The sheet may be loaded scaled down, so the crop is scaled by how much.
+            if root.hud.preview-url != "" && root.hud.preview.width > 0 && root.hud.preview-w > 0 : Rectangle {
+                property <length> w: 240px;
+                property <float> k: root.hud.preview-sheet-w > 0 ? root.hud.preview.width / root.hud.preview-sheet-w : 1.0;
+                width: self.w;
+                height: self.w * root.hud.preview-h / root.hud.preview-w;
+                x: max(bar.x, min(bar.x + bar.width - self.width, parent.x + parent.width / 2 - self.width / 2)) - parent.x;
+                y: -self.height - 6px;
+                border-radius: 6px;
+                background: #000000;
+                clip: true;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.hud.preview;
+                    source-clip-x: round(root.hud.preview-x * parent.k);
+                    source-clip-y: round(root.hud.preview-y * parent.k);
+                    source-clip-width: round(root.hud.preview-w * parent.k);
+                    source-clip-height: round(root.hud.preview-h * parent.k);
+                    image-fit: fill;
+                }
+            }
             bubble-text := Text {
                 text: root.hud.chapter != "" ? root.hud.pos + "  ·  " + root.hud.chapter : root.hud.pos;
                 color: Theme.text;
@@ -1211,46 +1283,13 @@ export component PlayerScreen inherits Rectangle {
             box: root.caption-box;
         }
 
-        // Player menu: bottom left, just above the HUD text. Up/Down pick a row, Left/Right change
-        // it (see `player_menu_intent` in htpc-core).
-        if root.menu-open : Rectangle {
-            x: Theme.safe-x / 2;
-            y: parent.height - 190px - self.height - 8px;
-            width: Theme.menu-w;
-            height: menu-layout.preferred-height;
-            background: #18181bf0;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: Theme.surface-high;
-            menu-layout := VerticalLayout {
-                padding: 12px;
-                spacing: 4px;
-                Text {
-                    text: "OPTIONS";
-                    color: Theme.accent-light;
-                    font-size: Theme.fs-small;
-                    font-weight: 800;
-                    letter-spacing: 3px;
-                }
-                for item[i] in root.menu-items : MenuRow {
-                    title: item.title;
-                    value: item.value;
-                    focused: root.menu-focus == i;
-                    locked: item.locked;
-                    action: item.action;
-                }
-                Text {
-                    text: root.menu-items[root.menu-focus].help;
-                    color: Theme.text;
-                    font-size: Theme.fs-small;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: "Lasts until LiveDeck quits (the caption rows are saved)";
-                    color: Theme.muted;
-                    font-size: Theme.fs-small;
-                }
-            }
+        // Player menu: bottom left, just above the HUD text (`PlayerMenu`, also over the grid).
+        PlayerMenu {
+            width: parent.width;
+            height: parent.height;
+            menu-open: root.menu-open;
+            menu-focus: root.menu-focus;
+            menu-items: root.menu-items;
         }
 
         // HUD: channel, title and viewers. Fades out on its own while playing, never while the

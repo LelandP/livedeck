@@ -1,7 +1,7 @@
 //! The video player's view (vod-plan.md, phase 4): the HUD (channel, title, *Streamed Nov 10*,
 //! the chapter), the seek bar (chapter ticks, muted parts, the playhead), the tap chip, the time
-//! above the playhead while seeking, and the end card. The storyboard preview is not drawn yet
-//! (phase 8): while seeking the time and chapter show above the playhead instead.
+//! above the playhead while seeking, and the end card. While seeking, the storyboard frame at the
+//! playhead (its sheet and crop) is handed over too; the window draws it above the time.
 
 use htpc_core::{AppState, Screen, Seeking, VideoItem, VideoKind, VideoSession};
 
@@ -50,6 +50,16 @@ pub struct VideoVm {
     pub seeking: bool,
     /// Holding to scrub: the picture is still and only the playhead moves. A jumps, B cancels.
     pub scrubbing: bool,
+    /// While seeking with a storyboard: the sheet (loaded as a thumbnail, by this URL) holding the
+    /// frame at the playhead, the frame's rectangle in the sheet's own pixels, and the sheet's
+    /// full width in those pixels (the decoded image may be smaller; the window scales by it).
+    /// Empty when there is nothing to show.
+    pub preview_url: String,
+    pub preview_x: i32,
+    pub preview_y: i32,
+    pub preview_w: i32,
+    pub preview_h: i32,
+    pub preview_sheet_w: i32,
     /// "1.5×". Empty at normal speed.
     pub speed: String,
     /// LB / RB have chapters to jump between (a video, not a clip).
@@ -195,8 +205,28 @@ pub fn video_vm(state: &AppState) -> VideoVm {
         ),
         Seeking::Idle | Seeking::Scrub(_) => (String::new(), 0),
     };
+    // The frame at the playhead, only while it moves.
+    let frame = v
+        .storyboard
+        .as_ref()
+        .filter(|_| !v.seeking.is_idle())
+        .and_then(|sb| sb.frame_at(at).map(|f| (sb.sheet_width(), f)));
+    let (preview_url, [preview_x, preview_y, preview_w, preview_h], preview_sheet_w) = match frame {
+        Some((sheet_w, (url, x, y, w, h))) => (
+            url.to_owned(),
+            [x, y, w, h].map(|n| to_i32(n as usize)),
+            to_i32(sheet_w as usize),
+        ),
+        None => (String::new(), [0; 4], 0),
+    };
     VideoVm {
         on: true,
+        preview_url,
+        preview_x,
+        preview_y,
+        preview_w,
+        preview_h,
+        preview_sheet_w,
         kind: match &v.item {
             VideoItem::Video(video) => match video.kind {
                 VideoKind::Archive => "PAST BROADCAST",

@@ -27,7 +27,7 @@ open=true needs_sign_in=false overlay=false select="Shift" text="GG" count="2/50
 open=false needs_sign_in=false overlay=false select="Pause" text="GG" count="2/500" status="Slow mode: wait 30 s" problem=true room="Slow mode 30 s · Followers only (10 min)" hint="Press X to write in chat"
   chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=1 key="-" keys=
 -- a sign-in from before chat sending
-open=false needs_sign_in=false overlay=false select="Pause" text="" count="0/500" status="" problem=false room="" hint="Chat needs a new Twitch sign-in: press X"
+open=false needs_sign_in=false overlay=false select="Pause" text="" count="0/500" status="" problem=false room="" hint="Chat needs a new Twitch sign-in. Press X"
   chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=0 key="-" keys=
 open=true needs_sign_in=true overlay=false select="Sign in again" text="" count="0/500" status="" problem=false room="" hint=""
   chips=["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"] chip_focus=-1 shift=0 key="-" keys=

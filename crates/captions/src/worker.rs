@@ -151,9 +151,9 @@ impl Drop for CaptionWorker {
         // Take the lock so the thread is either before its stop check or already waiting.
         drop(lock(&self.shared.queue));
         self.shared.wake.notify_all();
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
+        // Not joined: a chunk in the model can take seconds, and this runs on the UI thread. The
+        // thread checks `stop` after each chunk and before each wait, so it exits on its own.
+        drop(self.handle.take());
     }
 }
 

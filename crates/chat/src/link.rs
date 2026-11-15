@@ -5,15 +5,20 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use twitch_irc::message::IRCMessage;
 use twitch_irc::transport::Transport;
 use twitch_irc::SecureWSTransport;
 
 /// Messages queued from the socket before the session loop reads them.
 const INCOMING_BUFFER: usize = 256;
+
+/// How long opening the connection (TCP, TLS and the WebSocket handshake) may take.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// An open connection. Dropping it closes the socket.
 pub struct Link {
@@ -36,8 +41,9 @@ pub struct WsConnector;
 impl Connector for WsConnector {
     fn connect(&self) -> ConnectFuture<'_> {
         Box::pin(async {
-            let transport = SecureWSTransport::new()
+            let transport = timeout(CONNECT_TIMEOUT, SecureWSTransport::new())
                 .await
+                .map_err(|_| "could not connect to chat: timed out".to_owned())?
                 .map_err(|e| format!("could not connect to chat: {e}"))?;
             let (mut incoming, mut outgoing) = transport.split();
             let (in_tx, in_rx) = mpsc::channel(INCOMING_BUFFER);

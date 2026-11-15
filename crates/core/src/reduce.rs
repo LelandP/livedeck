@@ -58,6 +58,8 @@ pub fn reduce(state: &AppState, msg: impl Into<Msg>) -> (AppState, Vec<Command>)
     captions::settle(&mut next, &mut cmds);
     resume::settle(&mut next);
     continue_watching::sync_home(&mut next, &mut cmds);
+    multiview::warn_if_crowded(&mut next, &mut cmds);
+    video::want_sheet(&mut next, &mut cmds);
     (next, cmds)
 }
 
@@ -90,8 +92,13 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
         Screen::Login => login_intent(s, intent, cmds),
         Screen::Player => player_intent(s, intent, cmds),
         // Any button shows the grid's controls again (they fade while idle, main.slint).
+        // The grid's player menu (Start) takes the buttons while it is open, as on the Player screen.
         Screen::Multiview => {
-            multiview::grid_intent(s, intent, cmds);
+            if let Some(row) = s.player_menu {
+                player_menu_intent(s, row, intent, cmds);
+            } else {
+                multiview::grid_intent(s, intent, cmds);
+            }
             pulse_hud(s);
         }
         // Settings has no cards, but shares the rail handling and the Left-opens-the-rail rule.
@@ -548,13 +555,16 @@ fn player_menu_intent(
     match intent {
         Intent::Up => s.player_menu = Some(row.step(rows, -1)),
         Intent::Down => s.player_menu = Some(row.step(rows, 1)),
+        // The grid has no subscribe card, compose panel or caption lines: those rows do nothing there.
+        Intent::Select | Intent::Left | Intent::Right
+            if s.screen == Screen::Multiview && needs_player_screen(row) => {}
         Intent::Select if row == PlayerMenuRow::Subscribe => {
             s.subscribe_card = s.on_screen_features().subscribe;
         }
         // Signed out the row only says to sign in.
         Intent::Select if row == PlayerMenuRow::WriteChat => open_compose(s),
-        // The stream (or video) stops and the page takes the player's place, so nothing below
-        // applies. A video goes back to the page it was opened from.
+        // The page takes the player's place, so nothing below applies: a live stream keeps playing
+        // behind it, a video stops. A video goes back to the page it was opened from.
         Intent::Select if row == PlayerMenuRow::ChannelVideos => {
             if s.video.is_some() {
                 video::to_channel_page(s, cmds);
@@ -592,6 +602,19 @@ fn player_menu_intent(
         | Intent::Released(_) => {}
     }
     pulse_hud(s);
+}
+
+/// The rows whose results only the Player screen shows: the subscribe card, the compose panel and
+/// the caption lines. In the grid they do nothing.
+fn needs_player_screen(row: PlayerMenuRow) -> bool {
+    matches!(
+        row,
+        PlayerMenuRow::Subscribe
+            | PlayerMenuRow::WriteChat
+            | PlayerMenuRow::Captions
+            | PlayerMenuRow::CaptionsQuality
+            | PlayerMenuRow::CaptionDelay
+    )
 }
 
 /// Steps a player-menu row to its next or previous value and applies it. Quality and latency are
@@ -1493,10 +1516,16 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             }
         }
         Event::OfflineRecheckDue(id) => {
-            let due = id == s.offline_recheck && !s.rechecking;
             let single = s.on_live_player() && s.multiview.is_none();
-            if due && single && s.playback == Playback::Offline {
+            if id == s.offline_recheck && single && s.playback == Playback::Offline {
                 s.rechecking = true;
+                // The next look is scheduled now, under a new id, so a look whose answer never
+                // comes only means the next one runs. An answer that does come ends the chain: the
+                // look then finds the stream playing, not offline.
+                s.offline_recheck = s.offline_recheck.wrapping_add(1);
+                cmds.push(Command::ScheduleOfflineRecheck {
+                    id: s.offline_recheck,
+                });
                 push_play(s, cmds);
             }
         }
@@ -1563,7 +1592,15 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             cmds.push(Command::DisconnectRaids);
             // So does writing in chat. The room's rules still apply to what is on screen.
             s.compose = Compose::default();
-            // Multiview is for signed-in users.
+            // Multiview is for signed-in users: it stops (its streams are then cleared from the
+            // picked set below), and the screen it ran on goes Home.
+            if multiview::stop_all(s, cmds)
+                && matches!(s.screen, Screen::Multiview | Screen::Player)
+            {
+                s.screen = Screen::Home;
+                s.back_stack.clear();
+                s.rail.index = RailEntry::Home;
+            }
             s.picked.clear();
             // The results came from the account. The id carries on, so a late answer to an
             // old search can never pass for a new one.
@@ -1575,7 +1612,7 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
             // Following and Search only exist while signed in. Anything that would lead back
             // there goes Home instead.
             for screen in &mut s.back_stack {
-                if screen.needs_account() {
+                if screen.needs_account() || *screen == Screen::Multiview {
                     *screen = Screen::Home;
                 }
             }
@@ -1654,7 +1691,8 @@ fn on_event(s: &mut AppState, event: Event, cmds: &mut Vec<Command>) {
         }
         Event::ChannelPageLoaded { info, rows } => channel::loaded(s, *info, rows, cmds),
         Event::ChannelPageFailed { channel, message } => channel::failed(s, &channel, message),
-        Event::VideoDetails(details) => video::details(s, details),
+        Event::VideoDetails(details) => video::details(s, details, cmds),
+        Event::Storyboard { id, storyboard } => video::storyboard(s, &id, storyboard),
         Event::VideoGone { id } => video::gone(s, &id, cmds),
         Event::ChatReplay {
             id,

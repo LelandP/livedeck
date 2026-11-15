@@ -553,7 +553,7 @@ fn compose_hint(state: &AppState) -> &'static str {
     } else if !state.is_signed_in() {
         "Sign in to Twitch to chat"
     } else if !state.can_chat() {
-        "Chat needs a new Twitch sign-in: press X"
+        "Chat needs a new Twitch sign-in. Press X"
     } else {
         "Press X to write in chat"
     }
@@ -692,7 +692,7 @@ fn player_menu_help(state: &AppState, row: PlayerMenuRow) -> &'static str {
             "Past broadcasts, highlights and clips of this channel. The stream keeps playing until you pick one."
         }
         PlayerMenuRow::Speed => "Faster or slower, with the pitch kept. For this video only.",
-        PlayerMenuRow::Chapters => "Left and Right pick a chapter, A jumps there. With the menu closed, LB and RB jump to the previous and next one.",
+        PlayerMenuRow::Chapters => "Left and Right pick a chapter, A jumps there. Closed, LB and RB jump to the previous and next one.",
         PlayerMenuRow::StartOver => "Plays the video again from 0:00.",
         PlayerMenuRow::Captions if video => "Subtitles made on this device from the video's speech, ahead of the picture. English. Uses the processor. The first seconds after a jump have none. Remembered for next time.",
         PlayerMenuRow::Captions => "Subtitles made on this device from the stream's speech, a few seconds behind. English. Uses the processor. Remembered for next time.",
@@ -1349,6 +1349,9 @@ fn toast(t: &Toast) -> ToastVm {
             return note("Slow network: lowered the quality".to_owned())
         }
         ToastKind::NoChatReplay => return note("No chat replay for this video".to_owned()),
+        ToastKind::DeckCrowded => {
+            return note("More than 3 streams can stutter on the Steam Deck".to_owned())
+        }
         ToastKind::Resumed { pos_s } => {
             return note(format!(
                 "Resumed at {} · Start over in the menu",
@@ -1547,6 +1550,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
     };
     let login_status = login_status(state);
     let on_player = state.screen == Screen::Player;
+    // The player menu (Start) is up on the Player screen and over the multiview grid.
+    let menu_screen = on_player || state.screen == Screen::Multiview;
     // Built only while the card is open, so the diff flags a new code when it opens or the
     // channel changes, and never otherwise.
     let on_channel = state.screen == Screen::Channel;
@@ -1711,13 +1716,13 @@ pub fn view_model(state: &AppState) -> ViewModel {
             None => compose_key_label(state.compose.keys.key()),
         };
         (label, false)
-    } else if on_player && state.player_menu == Some(PlayerMenuRow::StartOver) {
+    } else if menu_screen && state.player_menu == Some(PlayerMenuRow::StartOver) {
         ("Start over", false)
-    } else if on_player && state.player_menu == Some(PlayerMenuRow::Chapters) {
+    } else if menu_screen && state.player_menu == Some(PlayerMenuRow::Chapters) {
         ("Jump there", false)
-    } else if on_player && state.player_menu.is_some_and(PlayerMenuRow::is_action) {
+    } else if menu_screen && state.player_menu.is_some_and(PlayerMenuRow::is_action) {
         ("Open", false)
-    } else if on_player && state.player_menu.is_some() {
+    } else if menu_screen && state.player_menu.is_some() {
         // The menu has the buttons: A changes the focused value.
         ("Change", false)
     } else if video.end_card {
@@ -1726,8 +1731,8 @@ pub fn view_model(state: &AppState) -> ViewModel {
         // X still looks for the stream at once.
         ("Select", true)
     } else if video.scrubbing {
-        // A jumps to the playhead at once.
-        ("Jump here", false)
+        // Letting go of the direction jumps; A does nothing while scrubbing, so no hint.
+        ("", false)
     } else if on_player {
         match playback {
             PlaybackId::Loading => ("", false),
@@ -1835,7 +1840,7 @@ pub fn view_model(state: &AppState) -> ViewModel {
         live_end_rows: end_rows.iter().map(|r| live_end_row(state, *r)).collect(),
         live_end_focus: to_i32(live_end_focus),
         paused: state.paused,
-        player_menu_open: on_player && state.player_menu.is_some(),
+        player_menu_open: menu_screen && state.player_menu.is_some(),
         player_menu_focus: to_i32(
             state
                 .player_menu
@@ -2246,6 +2251,13 @@ fn to_video_hud(v: &VideoVm) -> VideoHud {
         chip_side: v.chip_side,
         seeking: v.seeking,
         scrubbing: v.scrubbing,
+        preview_url: v.preview_url.as_str().into(),
+        preview: IMAGES.with_borrow(|images| images.get(&v.preview_url).unwrap_or_default()),
+        preview_x: v.preview_x,
+        preview_y: v.preview_y,
+        preview_w: v.preview_w,
+        preview_h: v.preview_h,
+        preview_sheet_w: v.preview_sheet_w,
         speed: v.speed.as_str().into(),
         chapters: v.chapters,
         replay: v.replay,
@@ -2491,6 +2503,14 @@ pub fn apply_thumbnail(ui: &MainWindow, url: &str, thumb: &Thumbnail) {
     // The channel page's profile picture.
     if ui.get_channel_avatar_url().as_str() == url {
         ui.set_channel_avatar(image.clone());
+    }
+    // A seek preview's storyboard sheet.
+    let hud = ui.get_video_hud();
+    if hud.preview_url.as_str() == url {
+        ui.set_video_hud(VideoHud {
+            preview: image.clone(),
+            ..hud
+        });
     }
     // A toast's preview comes the same way as a card's.
     let toasts = ui.get_toasts();

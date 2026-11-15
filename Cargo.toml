@@ -6,6 +6,10 @@ members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twi
 version = "0.7.1"
 edition = "2021"
 license = "GPL-3.0-only"
+repository = "https://github.com/LelandP/livedeck"
+homepage = "https://github.com/LelandP/livedeck"
+# No rust-toolchain.toml in the repo, so this is the minimum supported Rust version.
+rust-version = "1.85"
 
 # Shared dependency versions, verified on crates.io 2026-11-04.
 # Members opt in with `name.workspace = true` and may add features locally.

@@ -42,6 +42,8 @@ open.workspace = true
 # The captions' speech models are downloaded on first use and checked with their SHA-256.
 reqwest.workspace = true
 sha2.workspace = true
+# A video's seek-preview storyboard description (`…-info.json`).
+serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
@@ -51,4 +53,3 @@ zbus.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
 tempfile.workspace = true
-serde_json.workspace = true

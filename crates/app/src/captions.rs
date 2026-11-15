@@ -220,6 +220,9 @@ impl Captions {
         // captioning while the new model downloads and loads. Its thread ends on its next poll
         // after the new feed replaces that one (or captions go off).
         *running = None;
+        // Not held across the download: turning captions off must not wait for it. The request
+        // number is already bumped (`request`), so the download's `stale` check sees it.
+        drop(running);
         if let Some(models) = &self.models {
             let say = |state| {
                 let _ = events.send(Event::CaptionsModel(state).into());
@@ -253,7 +256,9 @@ impl Captions {
                 return;
             }
         };
-        // Turned off (or on again) while the models loaded: this engine is not wanted.
+        // Turned off (or on again) while the models loaded: this engine is not wanted. Checked
+        // under the lock again, so the install below is in order with an off request.
+        let mut running = self.running.lock().await;
         if ticket != self.wanted.load(Ordering::SeqCst) {
             return;
         }

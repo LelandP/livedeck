@@ -12,7 +12,7 @@ use crate::quality::{FrameRate, Rendition};
 use crate::replay::ReplayLine;
 use crate::settings::{CaptionsQuality, Hwdec, Latency, Quality, Settings, Zoom};
 use crate::state::RailEntry;
-use crate::video::{ChannelInfo, Progress, VideoDetails, VideoTarget};
+use crate::video::{ChannelInfo, Progress, Storyboard, VideoDetails, VideoTarget};
 
 /// What the user wants, independent of the input device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +255,9 @@ pub enum Command {
     /// Fetch the chapters, muted parts and seek previews of the Twitch video `id`. Answered with
     /// `Event::VideoDetails`, or nothing if the lookup fails: the player then has no chapters.
     LoadVideoDetails { id: String },
+    /// Fetch and parse the seek-preview storyboard description at `url` (https) of the video
+    /// `id`. Answered with `Event::Storyboard`, or nothing if it fails: no preview is drawn.
+    LoadStoryboard { id: String, url: String },
     /// Fetch a window of the chat replay of the Twitch video `id`: about 60 lines around
     /// `offset_s` seconds into it, starting a little before. Answered with `Event::ChatReplay`,
     /// or `Event::ChatReplayFailed` when Twitch gives none or refuses.
@@ -519,6 +522,11 @@ pub enum Event {
     },
     /// The answer to `LoadVideoDetails`.
     VideoDetails(VideoDetails),
+    /// The answer to `LoadStoryboard`.
+    Storyboard {
+        id: String,
+        storyboard: Storyboard,
+    },
     /// Twitch says the video `id` does not exist (any more): the details lookup came back with no
     /// video. A failed lookup is no answer at all. The video leaves *Continue watching*, and the
     /// error screen says it is gone.

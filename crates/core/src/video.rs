@@ -241,8 +241,12 @@ pub struct VideoSession {
     pub chapters: Vec<Chapter>,
     /// The parts Twitch muted: the card's, then the details'.
     pub muted: Vec<Span>,
-    /// The seek-preview storyboard (`VideoDetails::previews`). Not drawn yet (phase 8).
+    /// The seek-preview storyboard description's address (`VideoDetails::previews`).
     pub previews: Option<String>,
+    /// The parsed storyboard (`Event::Storyboard`), drawn above the playhead while seeking.
+    pub storyboard: Option<Storyboard>,
+    /// The sheets of the storyboard already asked for (`Command::FetchThumbnails`), by index.
+    pub sheets_asked: Vec<usize>,
     /// The speed, in thousandths. Every video starts at 1×.
     pub speed: u32,
     /// ◀ ▶: taps, holds and scrubs.
@@ -293,6 +297,8 @@ impl VideoSession {
             chapters: Vec::new(),
             muted,
             previews: None,
+            storyboard: None,
+            sheets_asked: Vec::new(),
             speed: crate::seek::NORMAL_SPEED,
             seeking: crate::seek::Seeking::Idle,
             timer: 0,
@@ -353,6 +359,64 @@ impl VideoSession {
     pub fn is_muted_at(&self, ms: u64) -> bool {
         let second = u32::try_from(ms / 1_000).unwrap_or(u32::MAX);
         self.muted.iter().any(|m| m.contains(second))
+    }
+}
+
+/// Twitch's seek-preview storyboard: sheets of small frames, `interval_ms` apart, each sheet
+/// `cols` x `rows` frames read row by row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Storyboard {
+    /// The sheets' addresses (https), in order.
+    pub sheets: Vec<String>,
+    pub cols: u32,
+    pub rows: u32,
+    /// One frame's size, in the sheet's own pixels.
+    pub width: u32,
+    pub height: u32,
+    pub interval_ms: u64,
+    /// How many frames there are in all.
+    pub count: u32,
+}
+
+impl Storyboard {
+    fn per_sheet(&self) -> u32 {
+        self.cols.saturating_mul(self.rows)
+    }
+
+    /// The frame number at `ms`, kept to the last one. `None` for a storyboard with no frames.
+    fn frame_index(&self, ms: u64) -> Option<u32> {
+        if self.interval_ms == 0 || self.count == 0 || self.per_sheet() == 0 {
+            return None;
+        }
+        let i = (ms / self.interval_ms).min(u64::from(self.count - 1));
+        u32::try_from(i).ok()
+    }
+
+    /// The index of the sheet that holds the frame at `ms`.
+    pub fn sheet_at(&self, ms: u64) -> Option<usize> {
+        let i = self.frame_index(ms)?;
+        Some((i / self.per_sheet()) as usize).filter(|s| *s < self.sheets.len())
+    }
+
+    /// A full sheet's width in its own pixels (`cols` frames across).
+    pub fn sheet_width(&self) -> u32 {
+        self.cols.saturating_mul(self.width)
+    }
+
+    /// The frame at `ms`: its sheet's address and the rectangle to crop (x, y, width, height, in
+    /// the sheet's own pixels). `None` when there is no such frame or sheet.
+    pub fn frame_at(&self, ms: u64) -> Option<(&str, u32, u32, u32, u32)> {
+        let i = self.frame_index(ms)?;
+        let per = self.per_sheet();
+        let sheet = self.sheets.get((i / per) as usize)?;
+        let cell = i % per;
+        Some((
+            sheet,
+            (cell % self.cols) * self.width,
+            (cell / self.cols) * self.height,
+            self.width,
+            self.height,
+        ))
     }
 }
 
@@ -473,6 +537,66 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn board() -> Storyboard {
+        Storyboard {
+            sheets: vec!["https://cdn/s-0.jpg".into(), "https://cdn/s-1.jpg".into()],
+            cols: 5,
+            rows: 2,
+            width: 200,
+            height: 100,
+            interval_ms: 10_000,
+            count: 15,
+        }
+    }
+
+    #[test]
+    fn a_frame_is_found_by_time() {
+        let b = board();
+        assert_eq!(b.frame_at(0), Some(("https://cdn/s-0.jpg", 0, 0, 200, 100)));
+        // Frame 7: second row, third column.
+        assert_eq!(
+            b.frame_at(79_999),
+            Some(("https://cdn/s-0.jpg", 400, 100, 200, 100))
+        );
+        // Frame 10 starts the second sheet.
+        assert_eq!(
+            b.frame_at(100_000),
+            Some(("https://cdn/s-1.jpg", 0, 0, 200, 100))
+        );
+        assert_eq!(b.sheet_at(100_000), Some(1));
+        assert_eq!(b.sheet_width(), 1_000);
+    }
+
+    #[test]
+    fn a_frame_past_the_end_is_the_last_one() {
+        let b = board();
+        assert_eq!(
+            b.frame_at(9_999_999),
+            Some(("https://cdn/s-1.jpg", 800, 0, 200, 100))
+        );
+    }
+
+    #[test]
+    fn a_storyboard_without_frames_or_sheets_gives_none() {
+        let mut b = board();
+        b.sheets.truncate(1);
+        assert_eq!(b.frame_at(100_000), None);
+        assert_eq!(b.sheet_at(100_000), None);
+        for broken in [
+            Storyboard {
+                count: 0,
+                ..board()
+            },
+            Storyboard {
+                interval_ms: 0,
+                ..board()
+            },
+            Storyboard { cols: 0, ..board() },
+        ] {
+            assert_eq!(broken.frame_at(0), None);
+        }
+    }
 
     #[test]
     fn rfc3339_as_twitch_writes_it() {

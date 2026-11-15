@@ -2,8 +2,8 @@
 // (on every screen) and the strip over full screen. Pure views: where things are and which one has
 // focus comes from htpc_core (layout::rects, reduce/multiview.rs) through view_model.rs.
 import { Theme, InputDevice } from "theme.slint";
-import { StreamItem, ChatMsg, MvTile, MvLayoutChip, MvStripItem, PopupItem } from "types.slint";
-import { ChatList, RaidCard } from "player.slint";
+import { StreamItem, ChatMsg, MvTile, MvLayoutChip, MvStripItem, PopupItem, MenuItem } from "types.slint";
+import { ChatList, RaidCard, PlayerMenu } from "player.slint";
 import { ViewIcon, StarIcon } from "icons.slint";
 
 // A speaker, with sound waves or crossed out.
@@ -501,6 +501,10 @@ export component MultiviewScreen inherits Rectangle {
     in property <[bool]> picker-starred;
     in property <int> picker-focus;
     in property <string> picker-empty;
+    // The player menu (Start): bottom left over the grid, as on the Player screen.
+    in property <bool> menu-open;
+    in property <int> menu-focus;
+    in property <[MenuItem]> menu-items;
     // The 1280x800 layout, centred in a window of another shape.
     property <length> oy: (root.height - 800px) / 2;
 
@@ -614,6 +618,14 @@ export component MultiviewScreen inherits Rectangle {
         starred: root.picker-starred;
         focused-row: root.picker-focus;
         empty-text: root.picker-empty;
+    }
+
+    PlayerMenu {
+        width: parent.width;
+        height: parent.height;
+        menu-open: root.menu-open;
+        menu-focus: root.menu-focus;
+        menu-items: root.menu-items;
     }
 }
 

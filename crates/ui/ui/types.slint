@@ -182,6 +182,16 @@ export struct VideoHud {
     // Taps or a scrub under way: the bar stays up, with the time above the playhead.
     seeking: bool,
     scrubbing: bool,
+    // The storyboard frame at the playhead while seeking: its sheet's URL (the key the sheet is
+    // delivered under), the sheet once loaded, the frame's rectangle in the sheet's own pixels
+    // and the sheet's full width in them (the loaded image may be a scaled-down copy).
+    preview-url: string,
+    preview: image,
+    preview-x: int,
+    preview-y: int,
+    preview-w: int,
+    preview-h: int,
+    preview-sheet-w: int,
     // "1.5×", empty at normal speed.
     speed: string,
     // LB / RB jump between chapters (videos, not clips).

@@ -50,7 +50,13 @@ impl Target {
             glow::PixelUnpackData::Slice(None),
         );
 
-        let fbo = gl.create_framebuffer()?;
+        let fbo = match gl.create_framebuffer() {
+            Ok(fbo) => fbo,
+            Err(e) => {
+                gl.delete_texture(texture);
+                return Err(e);
+            }
+        };
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
         gl.framebuffer_texture_2d(
             glow::FRAMEBUFFER,

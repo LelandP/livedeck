@@ -420,6 +420,9 @@ pub enum ToastKind {
     /// away 2 h 10 min · X watches from where you left off*. X on the live player opens the
     /// broadcast there while it is up.
     Away { away_ms: u64 },
+    /// Multiview went past 3 streams on the Steam Deck: *More than 3 streams can stutter on the
+    /// Steam Deck*. Once per run.
+    DeckCrowded,
 }
 
 impl Toast {
@@ -431,7 +434,8 @@ impl Toast {
             | ToastKind::SlowNetwork { .. }
             | ToastKind::Resumed { .. }
             | ToastKind::NoChatReplay
-            | ToastKind::Away { .. } => None,
+            | ToastKind::Away { .. }
+            | ToastKind::DeckCrowded => None,
         }
     }
 }
@@ -671,6 +675,29 @@ pub enum Playback {
     Failed(String),
 }
 
+/// Which device the app runs on, from the board name in DMI (`Device::from_board_name`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Device {
+    #[default]
+    Other,
+    /// Steam Deck LCD ("Jupiter").
+    DeckLcd,
+    /// Steam Deck OLED ("Galileo").
+    DeckOled,
+}
+
+impl Device {
+    /// The device for a DMI board name (`/sys/devices/virtual/dmi/id/board_name`). Surrounding
+    /// whitespace is ignored; anything unknown is not a Deck.
+    pub fn from_board_name(name: &str) -> Self {
+        match name.trim() {
+            "Jupiter" => Device::DeckLcd,
+            "Galileo" => Device::DeckOled,
+            _ => Device::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AppState {
     pub screen: Screen,
@@ -782,6 +809,10 @@ pub struct AppState {
     /// The platform can open a web page in a browser the user will see. False in Game Mode on
     /// the Deck, where a browser opens behind gamescope or not at all. Set once at startup.
     pub can_open_browser: bool,
+    /// The device the app runs on. Set once at startup.
+    pub device: Device,
+    /// The multiview warning for more than 3 streams on the Deck has been shown this run.
+    pub multiview_warned: bool,
     /// The window's size in physical pixels (`Event::DisplaySize`), (0, 0) until the first report.
     /// Multiview's tile quality comes from it (`layout::pixel_height`).
     pub display: (u32, u32),
@@ -843,6 +874,11 @@ pub fn subscribe_url(channel: &str) -> String {
 }
 
 impl AppState {
+    /// Running on a Steam Deck (LCD or OLED).
+    pub fn on_deck(&self) -> bool {
+        self.device != Device::Other
+    }
+
     pub fn is_signed_in(&self) -> bool {
         self.user.is_some()
     }
@@ -1247,5 +1283,25 @@ impl AppState {
 
     pub fn focused_tile(&self) -> Option<&Tile> {
         self.current_feed().and_then(Feed::focused_tile)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn board_names_map_to_the_steam_deck_models() {
+        assert_eq!(Device::from_board_name("Jupiter"), Device::DeckLcd);
+        assert_eq!(Device::from_board_name("Galileo"), Device::DeckOled);
+        assert_eq!(Device::from_board_name("Jupiter\n"), Device::DeckLcd);
+        assert_eq!(Device::from_board_name("Jupiter2"), Device::Other);
+        assert_eq!(Device::from_board_name(""), Device::Other);
+        let deck = AppState {
+            device: Device::DeckOled,
+            ..AppState::default()
+        };
+        assert!(deck.on_deck());
+        assert!(!AppState::default().on_deck());
     }
 }

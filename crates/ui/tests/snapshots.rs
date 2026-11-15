@@ -2512,3 +2512,43 @@ fn dates_and_ages_read_as_people_say_them() {
         "a clock that runs behind"
     );
 }
+
+#[test]
+fn a_seek_shows_the_storyboard_frame_at_the_playhead() {
+    let s = video_playing();
+    let board = htpc_core::Storyboard {
+        sheets: vec!["https://cdn/s-0.jpg".into(), "https://cdn/s-1.jpg".into()],
+        cols: 10,
+        rows: 10,
+        width: 220,
+        height: 124,
+        interval_ms: 30_000,
+        count: 200,
+    };
+    let (s, _) = reduce(
+        &s,
+        Event::Storyboard {
+            id: "9001".into(),
+            storyboard: board,
+        },
+    );
+    // Playing: nothing drawn.
+    let idle = view_model(&s).video;
+    assert_eq!(idle.preview_url, "");
+
+    // One tap forward: 4_370_000 ms is frame 145 (every 30 s): sheet 1, cell 45.
+    let (taps, _) = reduce(&s, Intent::Right);
+    let vm = view_model(&taps).video;
+    assert!(vm.seeking);
+    assert_eq!(vm.preview_url, "https://cdn/s-1.jpg");
+    // Cell 45 = row 4, column 5.
+    assert_eq!(
+        (vm.preview_x, vm.preview_y, vm.preview_w, vm.preview_h),
+        (1_100, 496, 220, 124)
+    );
+    assert_eq!(vm.preview_sheet_w, 2_200);
+
+    // One tap back: 4_350_000 ms is the same frame.
+    let (back, _) = reduce(&s, Intent::Left);
+    assert_eq!(view_model(&back).video.preview_url, "https://cdn/s-1.jpg");
+}

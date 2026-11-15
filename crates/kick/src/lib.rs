@@ -30,8 +30,19 @@ pub use web::{
 pub const PUSHER_KEY: &str = "34bf7a0ff419a2a775b9";
 pub const PUSHER_CLUSTER: &str = "us2";
 
-/// The Pusher WebSocket address for `key` in `cluster`.
+/// The Pusher WebSocket address for `key` in `cluster`. Values from the API that do not look like
+/// a key or cluster name fall back to [`PUSHER_KEY`] and [`PUSHER_CLUSTER`].
 pub fn pusher_url(key: &str, cluster: &str) -> String {
+    let cluster_ok = !cluster.is_empty()
+        && cluster
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let key_ok = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric());
+    let (key, cluster) = if cluster_ok && key_ok {
+        (key, cluster)
+    } else {
+        (PUSHER_KEY, PUSHER_CLUSTER)
+    };
     format!(
         "wss://ws-{cluster}.pusher.com/app/{key}?protocol=7&client=js&version=8.4.0&flash=false"
     )
@@ -52,4 +63,23 @@ pub trait KickApi: Send + Sync + 'static {
 
     /// The Pusher app the chat of channel `channel_id` is served from.
     fn chat_app(&self, channel_id: u64) -> impl Future<Output = Result<PusherApp>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pusher_url_rejects_odd_key_or_cluster() {
+        let good = pusher_url("abc123", "us2");
+        assert_eq!(
+            good,
+            "wss://ws-us2.pusher.com/app/abc123?protocol=7&client=js&version=8.4.0&flash=false"
+        );
+        let fallback = pusher_url(PUSHER_KEY, PUSHER_CLUSTER);
+        assert_eq!(pusher_url("a/b", "us2"), fallback);
+        assert_eq!(pusher_url("abc123", "us2.evil.com/x?"), fallback);
+        assert_eq!(pusher_url("", "us2"), fallback);
+        assert_eq!(pusher_url("abc123", ""), fallback);
+    }
 }

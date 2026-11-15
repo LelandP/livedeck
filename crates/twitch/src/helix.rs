@@ -4,7 +4,7 @@ use std::sync::RwLock;
 
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::http::{build_client, error_message, is_retryable, map_status};
 use crate::{
@@ -34,10 +34,50 @@ impl std::fmt::Debug for Credentials {
 
 /// Helix list envelope: `{ "data": [...], "pagination": { "cursor": "..." } }`.
 #[derive(Deserialize)]
+#[serde(bound = "T: DeserializeOwned")]
 struct Envelope<T> {
+    #[serde(deserialize_with = "lenient_items")]
     data: Vec<T>,
     #[serde(default)]
     pagination: Pagination,
+}
+
+/// Reads a list item by item. An item that does not fit `T` is logged and left out, so one bad
+/// row does not fail the whole page.
+pub(crate) fn lenient_items<'de, D, T>(de: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let items = Vec::<serde_json::Value>::deserialize(de)?;
+    Ok(items
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value(v) {
+            Ok(item) => Some(item),
+            Err(e) => {
+                tracing::debug!(error = %e, "skipping malformed list item");
+                None
+            }
+        })
+        .collect())
+}
+
+/// An optional nested object that does not fit `T` is logged and read as absent.
+pub(crate) fn lenient_opt<'de, D, T>(de: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let Some(v) = Option::<serde_json::Value>::deserialize(de)? else {
+        return Ok(None);
+    };
+    Ok(match serde_json::from_value(v) {
+        Ok(item) => Some(item),
+        Err(e) => {
+            tracing::debug!(error = %e, "skipping malformed nested item");
+            None
+        }
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -339,5 +379,21 @@ mod tests {
             access_token: "secret".into(),
         };
         assert!(!format!("{c:?}").contains("secret"));
+    }
+
+    #[test]
+    fn one_malformed_item_is_skipped_and_the_rest_of_the_page_survives() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Item {
+            id: String,
+        }
+        let json =
+            r#"{"data":[{"id":"1"},{"name":"no id"},{"id":"3"}],"pagination":{"cursor":"c"}}"#;
+        let env: Envelope<Item> = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            env.data,
+            vec![Item { id: "1".into() }, Item { id: "3".into() }]
+        );
+        assert_eq!(env.pagination.cursor.as_deref(), Some("c"));
     }
 }

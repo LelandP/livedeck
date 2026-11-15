@@ -168,7 +168,7 @@ export component MainWindow inherits Window {
     // The grid with nothing pressed for `mv-idle-after` and nothing open over it: the header,
     // hints and captions fade, and the tiles grow to fill the window (beside the chat panel when
     // it is open), keeping their shape. Any button brings it all back.
-    out property <bool> mv-idle: root.screen == 6 && !root.hud-visible && !root.picker-open && !root.popup-open && !root.raid-open && !root.exit-prompt && !root.sleep-warning;
+    out property <bool> mv-idle: root.screen == 6 && !root.hud-visible && !root.picker-open && !root.popup-open && !root.raid-open && !root.exit-prompt && !root.sleep-warning && !root.player-menu-open;
     property <length> mv-free-w: root.width - (root.chat-open ? Theme.chat-w : 0px) - 2 * Theme.mv-idle-margin;
     property <length> mv-free-h: root.height - 2 * Theme.mv-idle-margin;
     out property <float> mv-k: root.mv-idle ? min(root.mv-free-w / Theme.mv-area-w, root.mv-free-h / Theme.mv-area-h) : root.mv-base-k;
@@ -561,6 +561,9 @@ export component MainWindow inherits Window {
         picker-starred: root.picker-starred;
         picker-focus: root.picker-focus;
         picker-empty: root.picker-empty;
+        menu-open: root.player-menu-open;
+        menu-focus: root.player-menu-focus;
+        menu-items: root.player-menu-items;
     }
 
     // Multiview's full screen: which stream and the strip of all of them, for a moment after
@@ -795,7 +798,16 @@ export component MainWindow inherits Window {
             Hint { glyph: "RB"; label: "LB/RB Favorites / Following"; clicked => { root.action(UiAction.page-right); } }
             Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
         }
-        if root.screen == 6 && !root.picker-open && !root.exit-prompt && !root.sleep-warning && !root.raid-open && !root.popup-open : HorizontalLayout {
+        // The grid's player menu (Start): the same hints as on the Player screen.
+        if root.screen == 6 && root.player-menu-open && !root.exit-prompt && !root.sleep-warning && !root.raid-open && !root.popup-open : HorizontalLayout {
+            padding-left: Theme.safe-x;
+            padding-right: Theme.safe-x;
+            spacing: 36px;
+            alignment: end;
+            Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
+            Hint { glyph: "B"; label: "Close"; clicked => { root.action(UiAction.back); } }
+        }
+        if root.screen == 6 && !root.picker-open && !root.player-menu-open && !root.exit-prompt && !root.sleep-warning && !root.raid-open && !root.popup-open : HorizontalLayout {
             padding-left: Theme.safe-x;
             padding-right: Theme.safe-x;
             spacing: 32px;
@@ -871,7 +883,7 @@ export component MainWindow inherits Window {
             // channel, B goes back. With
             // the subscribe card open only A and B act.
             if root.screen == 7 && ((root.rail-focused && !root.subscribe-open) || root.select-label != "") : Hint { glyph: "A"; label: root.rail-focused && !root.subscribe-open ? "Open" : root.select-label; clicked => { root.action(UiAction.select); } }
-            if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-start-over : Hint { glyph: "X"; label: "Start over"; clicked => { root.action(UiAction.retry); } }
+            if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-start-over && !root.can-retry : Hint { glyph: "X"; label: "Start over"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 7 && !root.subscribe-open && !root.rail-focused && root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
             if root.screen == 7 && !root.subscribe-open && !root.rail-focused : Hint { glyph: "RB"; label: "LB/RB Videos / Clips"; clicked => { root.action(UiAction.page-right); } }
             // View stars the channel at once, or unstars it (LiveDeck's Favorites).

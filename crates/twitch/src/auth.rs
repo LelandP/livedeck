@@ -31,7 +31,7 @@ pub const SCOPES: &[&str] = &[SCOPE_READ_FOLLOWS, SCOPE_WRITE_CHAT];
 const DEFAULT_INTERVAL_SECS: u64 = 5;
 
 /// What `POST /device` returns: the code to show and what to poll with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DeviceGrant {
     /// Secret half. Only ever sent back to the token endpoint.
     pub device_code: String,
@@ -43,6 +43,18 @@ pub struct DeviceGrant {
     pub expires_in: Duration,
     /// Minimum time between polls.
     pub interval: Duration,
+}
+
+impl fmt::Debug for DeviceGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceGrant")
+            .field("device_code", &"<redacted>")
+            .field("user_code", &self.user_code)
+            .field("verification_uri", &self.verification_uri)
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish()
+    }
 }
 
 /// Tokens from the token endpoint. The secrets never appear in `Debug`.

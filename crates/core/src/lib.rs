@@ -52,12 +52,12 @@ pub use settings::{
 };
 pub use state::{
     default_quick_messages, subscribe_url, AppState, CategoryFeed, ChannelPage, ChannelTab,
-    Compose, Feed, Focus, Playback, PlayerMenuRow, RaidOffer, RailEntry, RailState, Screen,
+    Compose, Device, Feed, Focus, Playback, PlayerMenuRow, RaidOffer, RailEntry, RailState, Screen,
     SearchState, Sending, SessionOptions, SettingsRow, SleepTimer, Toast, ToastKind,
     DEFAULT_QUICK_MESSAGES, RAID_SECONDS, SEARCH_MIN_CHARS, SLEEP_STEPS, TOASTS_KEPT, TOASTS_SHOWN,
 };
 pub use video::{
     date_from_unix, unix_from_rfc3339, ChannelInfo, Chapter, Clip, EndRow, Landing, Progress, Span,
-    Video, VideoDetails, VideoItem, VideoKind, VideoLoad, VideoSession, VideoTarget,
+    Storyboard, Video, VideoDetails, VideoItem, VideoKind, VideoLoad, VideoSession, VideoTarget,
     CONTINUE_END_MARGIN_S, CONTINUE_MAX, CONTINUE_MIN_S, VIDEO_GONE_MESSAGE,
 };

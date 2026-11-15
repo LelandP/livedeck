@@ -326,7 +326,8 @@ impl Session {
         let login = tokens.login.clone()?;
         // Tokens from before the user id was stored cannot ask for follows. Sign in again.
         tokens.user_id.as_ref()?;
-        tracing::info!(%login, "restored the stored sign-in");
+        tracing::info!("restored the stored sign-in");
+        tracing::debug!(%login, "the stored sign-in belongs to this account");
         let user = user_of(&login, &tokens.scopes);
         // Not written back: they were just read from there.
         let creds = Credentials {
@@ -513,7 +514,8 @@ impl Session {
         };
         let tokens = self.tokens_from(&grant, &who, None);
         let user = user_of(&who.login, &tokens.scopes);
-        tracing::info!(login = %user.login, "signed in");
+        tracing::info!("signed in");
+        tracing::debug!(login = %user.login, "signed in as");
         self.install(tokens).await;
         (self.notify)(Event::SignedIn(user));
     }

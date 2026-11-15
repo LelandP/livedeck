@@ -157,6 +157,9 @@ pub trait SocketConnector: Send + Sync + 'static {
 /// Frames queued from the socket before the connection task reads them.
 const FRAME_BUFFER: usize = 64;
 
+/// How long opening a socket (TCP, TLS and the WebSocket handshake) may take.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A real WebSocket (TLS with the webpki roots, as chat uses).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WsConnector;
@@ -165,9 +168,13 @@ impl SocketConnector for WsConnector {
     fn connect<'a>(&'a self, url: &'a str) -> SocketFuture<'a> {
         use async_tungstenite::tungstenite::Message;
         Box::pin(async move {
-            let (mut ws, _) = async_tungstenite::tokio::connect_async(url)
-                .await
-                .map_err(|e| format!("could not connect to EventSub: {e}"))?;
+            let (mut ws, _) = timeout(
+                CONNECT_TIMEOUT,
+                async_tungstenite::tokio::connect_async(url),
+            )
+            .await
+            .map_err(|_| "could not connect to EventSub: timed out".to_owned())?
+            .map_err(|e| format!("could not connect to EventSub: {e}"))?;
             let (tx, rx) = mpsc::channel(FRAME_BUFFER);
             // Reading also answers Twitch's pings (tungstenite queues the pong and flushes it on
             // the next read).
@@ -191,6 +198,24 @@ impl SocketConnector for WsConnector {
             })
         })
     }
+}
+
+/// Whether `url` is a `wss://` address on twitch.tv or one of its subdomains. The reconnect URL is
+/// the only address taken from the wire, so it must not send us anywhere else.
+fn is_twitch_wss(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("wss://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    host == "twitch.tv" || host.ends_with(".twitch.tv")
 }
 
 enum Ctl {
@@ -541,6 +566,12 @@ impl<T: TokenSource> Runner<T> {
                     last_heard = Instant::now();
                     match parse(&text) {
                         Ok((_, Incoming::Reconnect(url))) => {
+                            let url = if is_twitch_wss(&url) {
+                                url
+                            } else {
+                                tracing::warn!("EventSub sent a reconnect URL off Twitch, ignoring it");
+                                self.cfg.ws_url.clone()
+                            };
                             // The old socket keeps working until the new one says welcome.
                             match self.open(&url).await {
                                 Ok(new) => {
@@ -781,6 +812,17 @@ mod tests {
         };
         let waits: Vec<u64> = (1..=5).map(|a| cfg.backoff(a).as_secs()).collect();
         assert_eq!(waits, [1, 2, 4, 5, 5]);
+    }
+
+    #[test]
+    fn a_reconnect_url_must_be_twitch_wss() {
+        assert!(is_twitch_wss("wss://eventsub.wss.twitch.tv/ws?x=1"));
+        assert!(is_twitch_wss("wss://twitch.tv/ws"));
+        assert!(!is_twitch_wss("ws://eventsub.wss.twitch.tv/ws"));
+        assert!(!is_twitch_wss("wss://eviltwitch.tv/ws"));
+        assert!(!is_twitch_wss("wss://twitch.tv.evil.com/ws"));
+        assert!(!is_twitch_wss("wss://evil.com\\@twitch.tv/ws"));
+        assert!(!is_twitch_wss("wss://evil.com/twitch.tv"));
     }
 
     #[test]

@@ -319,7 +319,7 @@ struct ChannelStream {
     title: Option<String>,
     #[serde(default)]
     viewers_count: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::helix::lenient_opt")]
     game: Option<GameNode>,
     #[serde(rename = "previewImageURL", default)]
     preview_image_url: Option<String>,
@@ -561,7 +561,9 @@ struct HypeTrainExecution {
     is_active: bool,
     #[serde(default)]
     ended_at: Option<String>,
-    progress: HypeTrainProgress,
+    /// `null` while the train has no progress to show.
+    #[serde(default)]
+    progress: Option<HypeTrainProgress>,
     #[serde(default)]
     all_time_high: Option<HypeTrainRecord>,
 }
@@ -592,12 +594,12 @@ struct HypeTrainRecord {
 }
 
 impl HypeTrainExecution {
-    /// `None` for a train that has ended but is still listed.
+    /// `None` for a train that has ended but is still listed, or has no progress.
     fn into_train(self) -> Option<HypeTrain> {
         if !self.is_active || self.ended_at.is_some() {
             return None;
         }
-        let p = self.progress;
+        let p = self.progress?;
         Some(HypeTrain {
             id: self.id,
             level: p.level.value.max(1),
@@ -639,9 +641,10 @@ struct GqlErrorExt {
 }
 
 #[derive(Deserialize)]
-#[serde(bound = "N: Deserialize<'de>")]
+#[serde(bound = "N: DeserializeOwned")]
 struct Connection<N> {
-    #[serde(default)]
+    /// An edge whose node does not fit is logged and left out.
+    #[serde(default, deserialize_with = "crate::helix::lenient_items")]
     edges: Vec<Edge<N>>,
     #[serde(rename = "pageInfo", default)]
     page_info: PageInfo,
@@ -669,6 +672,8 @@ struct StreamNode {
     viewers_count: u64,
     /// `null` for streams whose broadcaster is hidden or banned. Those are skipped.
     broadcaster: Option<UserNode>,
+    /// A game without id or name is read as no game.
+    #[serde(default, deserialize_with = "crate::helix::lenient_opt")]
     game: Option<GameNode>,
     #[serde(rename = "previewImageURL", default)]
     preview_image_url: Option<String>,
@@ -973,6 +978,34 @@ impl TwitchApi for GqlClient {
         Ok(at::<DetailsNode>(&data, &["video"])?.map(DetailsNode::into_details))
     }
 
+    async fn storyboard_info(&self, url: &str) -> Result<Option<String>> {
+        // The description is a few KB; anything bigger is not one.
+        const MAX_BYTES: usize = 512 * 1024;
+        if !url
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+        {
+            return Err(Error::Decode("storyboard URL is not https".to_owned()));
+        }
+        let resp = self.http.get(url).send().await.map_err(Error::Network)?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(map_status(status, error_message(resp).await));
+        }
+        if resp.url().scheme() != "https" {
+            return Err(Error::Decode(
+                "storyboard redirected to a non-https URL".to_owned(),
+            ));
+        }
+        let bytes = resp.bytes().await.map_err(Error::Network)?;
+        if bytes.len() > MAX_BYTES {
+            return Err(Error::Decode("storyboard description too large".to_owned()));
+        }
+        String::from_utf8(bytes.to_vec())
+            .map(Some)
+            .map_err(|e| Error::Decode(e.to_string()))
+    }
+
     async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
         let data = self
             .query(LIVE_ARCHIVE_QUERY, json!({ "login": login }))
@@ -1000,6 +1033,18 @@ impl TwitchApi for GqlClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_malformed_edge_is_skipped_and_the_rest_of_the_page_survives() {
+        let json = r#"{"edges":[
+            {"cursor":"a","node":{"id":"1","name":"One"}},
+            {"cursor":"b","node":{"id":"2"}},
+            {"cursor":"c","node":{"id":"3","name":"Three"}}],
+            "pageInfo":{"hasNextPage":false}}"#;
+        let conn: Connection<GameNode> = serde_json::from_str(json).unwrap();
+        let page = into_page(conn, |g| Some(g.id));
+        assert_eq!(page.items, vec!["1".to_string(), "3".to_string()]);
+    }
 
     #[test]
     fn after_cursor_is_spliced_into_the_query() {

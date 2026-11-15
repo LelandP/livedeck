@@ -267,10 +267,46 @@ fn env_token(client_id: Option<&str>) -> Result<Option<String>> {
     }
 }
 
+/// Whether an API base URL from the environment may be used. The bearer token goes to it, so it
+/// must be https, or http to a loopback host (a local test server).
+fn url_allowed(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match host_port.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host_port.split(':').next().unwrap_or(""),
+    };
+    match scheme.to_ascii_lowercase().as_str() {
+        "https" => true,
+        "http" => matches!(
+            host.to_ascii_lowercase().as_str(),
+            "localhost" | "127.0.0.1" | "::1"
+        ),
+        _ => false,
+    }
+}
+
+/// A base URL override from the environment, if it is one `url_allowed` accepts. Others are
+/// ignored with a warning, so the default endpoint is used.
+fn base_url_override(name: &str) -> Option<String> {
+    let url = env_var(name)?;
+    if url_allowed(&url) {
+        return Some(url);
+    }
+    tracing::warn!(
+        variable = name,
+        "ignoring the base URL: only https, or http to localhost, is accepted"
+    );
+    None
+}
+
 /// The Helix client. It starts without credentials: the session installs them once there is a
 /// login (or a token from the environment), and until then `HybridApi` browses anonymously.
 fn helix_client() -> Result<HelixClient> {
-    let client = match env_var(ENV_BASE_URL) {
+    let client = match base_url_override(ENV_BASE_URL) {
         Some(url) => HelixClient::with_base_url(url, None, RetryPolicy::default()),
         None => HelixClient::new(None),
     };
@@ -279,7 +315,7 @@ fn helix_client() -> Result<HelixClient> {
 
 /// The OAuth client for the device-code login.
 fn auth_client(client_id: &str) -> Result<HttpAuth> {
-    let auth = match env_var(ENV_AUTH_URL) {
+    let auth = match base_url_override(ENV_AUTH_URL) {
         Some(url) => HttpAuth::with_base_url(url, client_id),
         None => HttpAuth::new(client_id),
     };
@@ -792,6 +828,15 @@ fn run_app<P: Provider, R: StreamResolver>(
     state.last_multiview = last_multiview;
     state.continue_watching = continue_watching;
     state.can_open_browser = browser::can_open_browser();
+    // The Steam Deck names its board in DMI ("Jupiter" LCD, "Galileo" OLED). Other platforms have
+    // no such file, so they are not a Deck.
+    state.device = if cfg!(target_os = "linux") {
+        let board =
+            std::fs::read_to_string("/sys/devices/virtual/dmi/id/board_name").unwrap_or_default();
+        htpc_core::Device::from_board_name(board.trim())
+    } else {
+        htpc_core::Device::Other
+    };
     // Captions: the menu row says so when there is no engine, and the saved setting starts it.
     state.captions_gpu = captions.as_ref().is_some_and(|e| e.gpu);
     let captions = Arc::new(captions::Captions::with_engine(
@@ -799,9 +844,8 @@ fn run_app<P: Provider, R: StreamResolver>(
         state.captions_quality(),
     ));
     state.captions_unavailable = !captions.available();
-    state.captions.show_after = std::env::var("HTPC_CAPTION_OFFSET_MS")
-        .ok()
-        .and_then(|v| v.trim().parse().ok());
+    state.captions.show_after =
+        env_var("HTPC_CAPTION_OFFSET_MS").and_then(|v| v.trim().parse().ok());
     if settings.captions && captions.available() {
         startup.push(htpc_core::Command::SetCaptions(true));
     }
@@ -1208,6 +1252,23 @@ fn find_bundled_streamlink(
         .find(|p| exists(p))
 }
 
+/// On Windows, the `streamlink.exe` that `PATH` names first. A bare `streamlink` is looked up in the
+/// working folder before `PATH`, where a planted copy would run.
+#[cfg(windows)]
+fn path_streamlink() -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("streamlink.exe"))
+        .find(|candidate| candidate.is_file())
+        .map(|found| found.to_string_lossy().into_owned())
+}
+
+/// Elsewhere there is no lookup here: the bare name is used, as before.
+#[cfg(not(windows))]
+fn path_streamlink() -> Option<String> {
+    None
+}
+
 /// Streamlink: the program named by `HTPC_STREAMLINK`, else a copy shipped next to the
 /// executable, else `streamlink` from `PATH`.
 fn streamlink() -> StreamlinkResolver<TokioRunner> {
@@ -1224,7 +1285,10 @@ fn streamlink() -> StreamlinkResolver<TokioRunner> {
             tracing::info!(path = %path.display(), "using the bundled Streamlink");
             resolver.with_program(path.to_string_lossy().into_owned())
         }
-        None => resolver,
+        None => match path_streamlink() {
+            Some(path) => resolver.with_program(path),
+            None => resolver,
+        },
     }
 }
 

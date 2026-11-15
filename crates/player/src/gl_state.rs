@@ -16,6 +16,9 @@ const CAPS: [u32; 5] = [
     glow::CULL_FACE,
 ];
 
+/// The texture units whose 2D bindings are saved and restored.
+const TEXTURE_UNITS: usize = 8;
+
 pub struct SavedGlState {
     draw_fbo: i32,
     read_fbo: i32,
@@ -23,7 +26,7 @@ pub struct SavedGlState {
     vao: i32,
     array_buffer: i32,
     active_texture: i32,
-    texture_units: [i32; 2],
+    texture_units: [i32; TEXTURE_UNITS],
     viewport: [i32; 4],
     scissor_box: [i32; 4],
     clear_color: [f32; 4],
@@ -43,7 +46,7 @@ impl SavedGlState {
         unsafe {
             let int = |p| gl.get_parameter_i32(p);
             let active_texture = int(glow::ACTIVE_TEXTURE);
-            let mut texture_units = [0; 2];
+            let mut texture_units = [0; TEXTURE_UNITS];
             for (unit, slot) in texture_units.iter_mut().enumerate() {
                 gl.active_texture(glow::TEXTURE0 + unit as u32);
                 *slot = int(glow::TEXTURE_BINDING_2D);

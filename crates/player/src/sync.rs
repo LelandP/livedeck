@@ -34,8 +34,16 @@ pub const WAIT_AHEAD_MAX_MS: u64 = 3_000;
 /// With the old picture frozen (a stall, a hold), a spare this little ahead of it goes: a frame.
 pub const FROZEN_SLACK_MS: u64 = 40;
 
-/// The longest a spare waits, from its first frame, before it goes wherever it is.
+/// The longest a spare waits, from its first frame, before it goes if it is not ahead of the old
+/// picture (behind it, a short repeat at most).
 pub const SYNC_MAX: Duration = Duration::from_secs(8);
+
+/// The longest a spare waits, from its first frame, before it goes whatever the old picture does
+/// (a frozen one, say): a swap is never stuck forever.
+pub const SYNC_HARD_MAX: Duration = Duration::from_secs(30);
+
+/// A seek this old that has not finished is aimed again at its target (see [`seek_running_step`]).
+pub const SEEK_MAX: Duration = Duration::from_secs(3);
 
 /// Where a player's picture was at one moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,17 +168,25 @@ pub enum SyncStep {
 }
 
 /// The rule: go once the old picture has reached its own (at most [`CLOSE_MS`] past it), never
-/// before; seek forward when it is further behind; give up and go after [`SYNC_MAX`]. A paused
-/// old player, or one that cannot tell, means no wait at all: going back to live from a pause
-/// loads the stream again, and must not land where the pause was.
+/// before; seek forward when it is further behind. After [`SYNC_MAX`] the spare goes if it is not
+/// ahead of the old picture, and after [`SYNC_HARD_MAX`] whatever the old picture does. An old
+/// player that cannot tell means no wait at all: going back to live from a pause loads the stream
+/// again, and must not land where the pause was. A paused old player is sought to its moment
+/// first (it does not move), then gone to.
 pub fn sync_step(v: &SyncView) -> SyncStep {
-    if v.ready_for >= SYNC_MAX {
+    if v.ready_for >= SYNC_HARD_MAX {
         return SyncStep::Go;
     }
-    let Some(old) = v.old.filter(|o| !o.paused) else {
+    let Some(old) = v.old else {
         return SyncStep::Go;
     };
     let old_ms = old.ms_at(v.now);
+    if v.ready_for >= SYNC_MAX && v.own_ms <= old_ms {
+        return SyncStep::Go;
+    }
+    if old.paused {
+        return paused_step(v, old_ms);
+    }
     if old_ms >= v.own_ms {
         let behind = old_ms - v.own_ms;
         if behind <= CLOSE_MS || v.seeks >= MAX_SEEKS {
@@ -197,6 +213,36 @@ pub fn sync_step(v: &SyncView) -> SyncStep {
         return SyncStep::Seek(old_ms + v.lead_ms);
     }
     SyncStep::Wait
+}
+
+/// A paused old picture does not move: the spare seeks to it, then goes once it has landed at or
+/// behind it (within [`CLOSE_MS`]). Where it cannot get there (a live stream paused for longer
+/// than the spare holds, or out of seeks) it goes at once, as before: going back to live from a
+/// pause loads the stream again anyway, and waiting would only hold the swap for nothing.
+fn paused_step(v: &SyncView, old_ms: u64) -> SyncStep {
+    let at_or_behind = v.own_ms <= old_ms;
+    let landed = v.seeks > 0 && at_or_behind && old_ms - v.own_ms <= CLOSE_MS;
+    let reachable = v.seek_anywhere || old_ms <= v.cached_until_ms;
+    if landed {
+        SyncStep::Go
+    } else if v.seeks < MAX_SEEKS && reachable {
+        SyncStep::Seek(old_ms)
+    } else {
+        SyncStep::Go
+    }
+}
+
+/// While a seek to `target` runs, since `running` ago: wait for it, and after [`SEEK_MAX`] aim it
+/// at the same target again rather than go, as it may still land ahead of the old picture later.
+/// Whatever happens, go at [`SYNC_HARD_MAX`] from the first frame.
+pub fn seek_running_step(running: Duration, ready_for: Duration, target: u64) -> SyncStep {
+    if ready_for >= SYNC_HARD_MAX {
+        SyncStep::Go
+    } else if running < SEEK_MAX {
+        SyncStep::Wait
+    } else {
+        SyncStep::Seek(target)
+    }
 }
 
 /// How far ahead the next seek aims, after one that took `took`: long enough for a seek as slow
@@ -279,15 +325,70 @@ mod tests {
     }
 
     #[test]
-    fn a_paused_or_silent_old_player_or_a_long_wait_means_go() {
-        // Back to live from a pause: not to where the pause was.
-        let mut v = view(101_500, Some(100_000));
-        v.old.as_mut().unwrap().paused = true;
-        assert_eq!(sync_step(&v), SyncStep::Go);
+    fn a_silent_old_player_means_go_and_a_long_wait_goes_only_when_not_ahead() {
         assert_eq!(sync_step(&view(101_500, None)), SyncStep::Go);
+        // At 8 s: a spare ahead of the old picture waits on, one at or behind goes.
         let mut v = view(101_500, Some(100_000));
         v.ready_for = SYNC_MAX;
+        assert_eq!(sync_step(&v), SyncStep::Wait);
+        v.own_ms = 99_500;
         assert_eq!(sync_step(&v), SyncStep::Go);
+    }
+
+    #[test]
+    fn a_frozen_old_picture_with_the_spare_ahead_goes_only_at_the_hard_cap() {
+        let mut v = view(100_500, Some(100_000));
+        v.old.as_mut().unwrap().frozen = true;
+        for ms in [0, 8_000, 29_999] {
+            v.ready_for = Duration::from_millis(ms);
+            assert_eq!(sync_step(&v), SyncStep::Wait, "at {ms} ms");
+        }
+        v.ready_for = SYNC_HARD_MAX;
+        assert_eq!(sync_step(&v), SyncStep::Go);
+    }
+
+    #[test]
+    fn a_paused_old_picture_is_sought_to_then_gone_to() {
+        // Back to live from a pause: not to where the pause was. First to its moment.
+        let mut v = view(101_500, Some(100_000));
+        v.old.as_mut().unwrap().paused = true;
+        assert_eq!(sync_step(&v), SyncStep::Seek(100_000));
+        // Landed at it: go.
+        v.own_ms = 100_000;
+        v.seeks = 1;
+        assert_eq!(sync_step(&v), SyncStep::Go);
+        // Landed ahead of it: seek again.
+        v.own_ms = 100_200;
+        assert_eq!(sync_step(&v), SyncStep::Seek(100_000));
+        // A live stream paused longer than the spare holds: no way back there, so straight to
+        // live as before, not a wait to the hard cap.
+        v.seek_anywhere = false;
+        v.cached_until_ms = 99_000;
+        v.seeks = 0;
+        v.own_ms = 101_500;
+        assert_eq!(sync_step(&v), SyncStep::Go);
+    }
+
+    #[test]
+    fn a_seek_pending_past_seek_max_is_aimed_again_not_gone() {
+        let target = 100_600;
+        let short = Duration::from_millis(2_900);
+        assert_eq!(
+            seek_running_step(short, Duration::from_secs(4), target),
+            SyncStep::Wait
+        );
+        assert_eq!(
+            seek_running_step(SEEK_MAX, Duration::from_secs(4), target),
+            SyncStep::Seek(target)
+        );
+        assert_eq!(
+            seek_running_step(Duration::from_secs(10), Duration::from_secs(20), target),
+            SyncStep::Seek(target)
+        );
+        assert_eq!(
+            seek_running_step(Duration::from_secs(4), SYNC_HARD_MAX, target),
+            SyncStep::Go
+        );
     }
 
     #[test]

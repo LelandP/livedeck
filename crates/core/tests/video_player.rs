@@ -912,3 +912,86 @@ fn stats_follow_a_video_like_a_stream() {
         ]
     );
 }
+
+fn board() -> Storyboard {
+    Storyboard {
+        sheets: vec!["https://cdn/s-0.jpg".into(), "https://cdn/s-1.jpg".into()],
+        cols: 10,
+        rows: 10,
+        width: 220,
+        height: 124,
+        interval_ms: 30_000,
+        count: 200,
+    }
+}
+
+#[test]
+fn details_with_previews_ask_for_the_storyboard_once() {
+    let (s, _) = reduce(&page(), Intent::Select);
+    let (s, cmds) = reduce(&s, details("1"));
+    assert!(cmds.contains(&Command::LoadStoryboard {
+        id: "1".into(),
+        url: "https://cdn/storyboard-info.json".into(),
+    }));
+    // Details for another video are ignored, and ask for nothing.
+    let (_, cmds) = reduce(&s, details("2"));
+    assert!(!cmds
+        .iter()
+        .any(|c| matches!(c, Command::LoadStoryboard { .. })));
+}
+
+#[test]
+fn a_storyboard_is_kept_for_the_video_on_screen_and_its_sheet_fetched() {
+    let s = playing_at(10 * MIN);
+    assert_eq!(v(&s).storyboard, None);
+    let (s, cmds) = reduce(
+        &s,
+        Event::Storyboard {
+            id: "1".into(),
+            storyboard: board(),
+        },
+    );
+    assert_eq!(v(&s).storyboard, Some(board()));
+    // 10 min is frame 20: the first sheet, asked for through the thumbnail pipeline.
+    assert_eq!(
+        cmds,
+        [Command::FetchThumbnails {
+            urls: vec!["https://cdn/s-0.jpg".into()]
+        }]
+    );
+    // Once: the next health report at the same sheet asks for nothing.
+    let (_, cmds) = reduce(&s, health(11 * MIN));
+    assert!(cmds.is_empty(), "{cmds:?}");
+    // Playing on into the second sheet (frame 100 at 50 min) asks for that one.
+    let (_, cmds) = reduce(&s, health(50 * MIN));
+    assert_eq!(
+        cmds,
+        [Command::FetchThumbnails {
+            urls: vec!["https://cdn/s-1.jpg".into()]
+        }]
+    );
+}
+
+#[test]
+fn a_storyboard_for_another_video_is_ignored() {
+    let s = playing_at(10 * MIN);
+    let (s, cmds) = reduce(
+        &s,
+        Event::Storyboard {
+            id: "3".into(),
+            storyboard: board(),
+        },
+    );
+    assert_eq!(v(&s).storyboard, None);
+    assert!(cmds.is_empty());
+    // And none at all once the player is left.
+    let (s, _) = reduce(&s, Intent::Back);
+    let (s, _) = reduce(
+        &s,
+        Event::Storyboard {
+            id: "1".into(),
+            storyboard: board(),
+        },
+    );
+    assert!(s.video.is_none() || v(&s).storyboard.is_none());
+}

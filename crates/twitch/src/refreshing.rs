@@ -138,6 +138,11 @@ impl<A: TwitchApi, R: Refresher> TwitchApi for RefreshingApi<A, R> {
         self.with_refresh(|| self.inner.video_details(id)).await
     }
 
+    async fn storyboard_info(&self, url: &str) -> Result<Option<String>> {
+        // A plain CDN fetch: no token involved, so nothing to refresh.
+        self.inner.storyboard_info(url).await
+    }
+
     async fn live_archive(&self, login: &str) -> Result<Option<LiveArchive>> {
         self.with_refresh(|| self.inner.live_archive(login)).await
     }

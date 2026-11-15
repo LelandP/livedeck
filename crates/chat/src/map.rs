@@ -72,7 +72,7 @@ impl Mapper {
         ChatMessage {
             id: m.message_id,
             login: m.sender.login,
-            user: m.sender.name,
+            user: clean(&m.sender.name),
             color: m.name_color.map(rgb),
             badges: self.badge_urls(&m.badges),
             spans: build_spans(&m.message_text, &m.emotes, self.emotes.as_ref()),
@@ -96,7 +96,7 @@ impl Mapper {
             out.push(Mapped::Line(ChatMessage {
                 id: m.message_id,
                 login: m.sender.login,
-                user: m.sender.name,
+                user: clean(&m.sender.name),
                 color: m.name_color.map(rgb),
                 badges: self.badge_urls(&m.badges),
                 spans: build_spans(text, &m.emotes, self.emotes.as_ref()),
@@ -173,7 +173,7 @@ pub fn build_spans(text: &str, tagged: &[Emote], provider: &dyn EmoteProvider) -
         cursor = end;
     }
     push_words(&mut spans, &chars[cursor.min(chars.len())..], provider);
-    merge_text(spans)
+    clean_spans(merge_text(spans))
 }
 
 /// Joins text spans that ended up next to each other (an emote that stayed text).
@@ -214,4 +214,88 @@ fn push_words(spans: &mut Vec<ChatSpan>, chars: &[char], provider: &dyn EmotePro
         }
     }
     flush(spans, &mut plain);
+}
+
+/// Longest chat text kept, in characters.
+const MAX_CHARS: usize = 500;
+
+/// Whether `c` is dropped from names and chat text: control characters, and the invisible format
+/// characters that can flip the direction of a name or hide text. ZWJ (U+200D) is not listed, so
+/// emoji sequences survive.
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'
+                | '\u{200C}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+/// A name, or a line of text, without hidden characters, at most `MAX_CHARS` long.
+pub(crate) fn clean(text: &str) -> String {
+    text.chars()
+        .filter(|&c| !hidden(c))
+        .take(MAX_CHARS)
+        .collect()
+}
+
+/// `clean` for each text span. The message as a whole is held to `MAX_CHARS` (emotes do not count).
+pub(crate) fn clean_spans(spans: Vec<ChatSpan>) -> Vec<ChatSpan> {
+    let mut budget = MAX_CHARS;
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        match span {
+            ChatSpan::Text(text) => {
+                let kept: String = text.chars().filter(|&c| !hidden(c)).take(budget).collect();
+                budget -= kept.chars().count();
+                if !kept.is_empty() {
+                    out.push(ChatSpan::Text(kept));
+                }
+            }
+            emote => out.push(emote),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bidi_overrides_and_controls_are_dropped() {
+        assert_eq!(clean("evil\u{202E}gnp"), "evilgnp");
+        assert_eq!(clean("a\u{1b}[0mb"), "a[0mb");
+        assert_eq!(clean("zero\u{200B}width"), "zerowidth");
+        assert_eq!(clean("\u{FEFF}x"), "x");
+    }
+
+    #[test]
+    fn zwj_keeps_emoji_sequences() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(clean(family), family);
+    }
+
+    #[test]
+    fn long_text_is_capped() {
+        assert_eq!(clean(&"a".repeat(600)).chars().count(), MAX_CHARS);
+    }
+
+    #[test]
+    fn spans_are_cleaned_and_capped_in_total() {
+        let spans = vec![
+            ChatSpan::Text("a\u{1b}b".into()),
+            ChatSpan::Text("c".repeat(499)),
+            ChatSpan::Text("dropped".into()),
+        ];
+        let out = clean_spans(spans);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], ChatSpan::Text("ab".into()));
+        assert_eq!(out[1], ChatSpan::Text("c".repeat(MAX_CHARS - 2)));
+    }
 }

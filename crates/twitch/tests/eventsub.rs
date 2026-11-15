@@ -338,11 +338,11 @@ async fn session_reconnect_hands_over_without_subscribing_again() {
     old.send(welcome("s1", 10)).await.unwrap();
     h.wait_for_calls(1).await;
 
-    old.send(reconnect("s1", "wss://other.test/ws"))
+    old.send(reconnect("s1", "wss://eventsub-2.twitch.tv/ws"))
         .await
         .unwrap();
     let (url, new) = h.next_connect().await;
-    assert_eq!(url, "wss://other.test/ws");
+    assert_eq!(url, "wss://eventsub-2.twitch.tv/ws");
     // Until the new socket says welcome, the old one still delivers.
     old.send(raid("n1", "ender", "via_old", 1)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;

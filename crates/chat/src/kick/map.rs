@@ -11,6 +11,8 @@
 use htpc_core::{ChatKind, ChatMessage, ChatSpan, Moderation, Rgb};
 use serde::Deserialize;
 
+use crate::map::{clean, clean_spans};
+
 /// Kick's emote images, by id.
 pub fn emote_url(id: &str) -> String {
     format!("https://files.kick.com/emotes/{id}/fullsize")
@@ -163,7 +165,7 @@ fn line(l: Line) -> ChatMessage {
     ChatMessage {
         id: l.id,
         login,
-        user: l.sender.username,
+        user: clean(&l.sender.username),
         color: l.sender.identity.color.as_deref().and_then(parse_color),
         badges: badges
             .into_iter()
@@ -212,7 +214,7 @@ pub fn spans(content: &str) -> Vec<ChatSpan> {
         }
     }
     flush(&mut out, &mut words);
-    out
+    clean_spans(out)
 }
 
 /// The first well-formed `[emote:<digits>:<name>]` in `text`: where it starts, its length, the id
@@ -279,6 +281,18 @@ mod tests {
                 },
                 ChatSpan::Text("!".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn hidden_characters_are_dropped_from_text() {
+        assert_eq!(
+            spans("fake\u{202E}gnp \u{1b}ok"),
+            vec![ChatSpan::Text("fakegnp ok".into())]
+        );
+        assert_eq!(
+            spans("x\u{200D}y"),
+            vec![ChatSpan::Text("x\u{200D}y".into())]
         );
     }
 
