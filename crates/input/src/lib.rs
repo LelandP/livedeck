@@ -8,6 +8,8 @@
 //! | ToggleChat | (`y`, see Text)     | Y (North)                           |
 //! | Retry      | (`r`, see Text)     | X (West)                            |
 //! | Menu       | Menu key            | Start                               |
+//! | View       | (`v`, see Text)     | View (small left button)            |
+//! | Pages      | PageUp / PageDown   | LB / RB                             |
 //! | Text       | Printable keys      | -                                   |
 //! | Erase      | Backspace           | -                                   |
 //!

@@ -789,7 +789,7 @@ export component MainWindow inherits Window {
             alignment: end;
             if root.select-label != "" : Hint { glyph: "A"; label: root.select-label; clicked => { root.action(UiAction.select); } }
             if root.can-retry : Hint { glyph: "X"; label: "Retry"; clicked => { root.action(UiAction.retry); } }
-            Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Chat"; clicked => { root.action(UiAction.toggle-chat); } }
+            Hint { glyph: "Y"; label: root.chat-open ? "Hide chat" : "Show chat"; clicked => { root.action(UiAction.toggle-chat); } }
             Hint { glyph: "RB"; label: "LB/RB Layout"; clicked => { root.action(UiAction.page-right); } }
             Hint { glyph: "View"; label: "Options"; clicked => { root.action(UiAction.view); } }
             Hint { glyph: "B"; label: "Leave"; clicked => { root.action(UiAction.back); } }

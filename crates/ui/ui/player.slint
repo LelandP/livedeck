@@ -1027,7 +1027,7 @@ export component PlayerScreen inherits Rectangle {
                 // playback.rs) and plays it as soon as it is back, e.g. after a 24 h restart.
                 Text {
                     visible: root.playback == 2;
-                    text: "Checking every 10 seconds, it will play as soon as it is back";
+                    text: "Checking every 10 seconds. It will play as soon as it is back";
                     color: Theme.muted;
                     font-size: Theme.fs-body;
                     horizontal-alignment: center;
@@ -1057,7 +1057,7 @@ export component PlayerScreen inherits Rectangle {
                     }
                 }
                 if root.end-rows.length == 0 : Text {
-                    text: "Press A or X to try again  ·  B to go back";
+                    text: "Press A or X to retry  ·  B to go back";
                     color: Theme.accent-light;
                     font-size: Theme.fs-body;
                     horizontal-alignment: center;

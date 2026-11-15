@@ -292,7 +292,7 @@ pub struct ViewModel {
     /// photo of the screen to be a useful bug report. Empty when there is nothing.
     pub playback_details: String,
     /// The end card of a Twitch stream that ended, instead of the offline screen's "Press A or X
-    /// to try again": its rows, top to bottom (*Follow the raid to X*, *Watch from where you
+    /// to retry": its rows, top to bottom (*Follow the raid to X*, *Watch from where you
     /// joined*, ...). Empty without one.
     pub live_end_rows: Vec<String>,
     /// Its focused row, as an index into `live_end_rows`.
@@ -680,7 +680,7 @@ fn player_menu_help(state: &AppState, row: PlayerMenuRow) -> &'static str {
             "Back to this channel's past broadcasts, highlights and clips. Stops the video."
         }
         PlayerMenuRow::ChannelVideos => {
-            "Past broadcasts, highlights and clips of this channel. Stops the stream."
+            "Past broadcasts, highlights and clips of this channel. The stream keeps playing until you pick one."
         }
         PlayerMenuRow::Speed => "Faster or slower, with the pitch kept. For this video only.",
         PlayerMenuRow::Chapters => "Left and Right pick a chapter, A jumps there. With the menu closed, LB and RB jump to the previous and next one.",
@@ -688,7 +688,7 @@ fn player_menu_help(state: &AppState, row: PlayerMenuRow) -> &'static str {
         PlayerMenuRow::Captions if video => "Subtitles made on this device from the video's speech, ahead of the picture. English. Uses the processor. The first seconds after a jump have none. Remembered for next time.",
         PlayerMenuRow::Captions => "Subtitles made on this device from the stream's speech, a few seconds behind. English. Uses the processor. Remembered for next time.",
         PlayerMenuRow::CaptionsQuality => "Fast is the smallest model, Standard the default. Another model is downloaded the first time it is used. Remembered for next time.",
-        PlayerMenuRow::CaptionDelay => "With captions on, the picture and chat run about 10 s later, so every caption is ready in time. Off: closer to live, captions a few seconds late. Remembered.",
+        PlayerMenuRow::CaptionDelay => "With captions on, the picture and chat run about 10 s later, so every caption is ready in time. Off: closer to live, captions a few seconds late. Remembered for next time.",
     }
 }
 
@@ -1415,7 +1415,7 @@ fn empty_text(id: &FeedId) -> &'static str {
     match id {
         FeedId::Following => "You are not following anyone yet",
         FeedId::Favorites => {
-            "No favorites yet. Press View on a channel's card, or while watching, to star it"
+            "No favorites yet. Press View on a channel's card, or while watching, to star it."
         }
         // Search says it in `search_status`.
         FeedId::Search(_) => "",
@@ -1454,8 +1454,8 @@ fn qr_modules(text: &str) -> (Vec<bool>, i32) {
 /// The line under the code on the sign-in screen.
 fn login_status(state: &AppState) -> String {
     match &state.login_problem {
-        None if state.login.is_some() => "Waiting for approval...".to_owned(),
-        None => "Getting a code from Twitch...".to_owned(),
+        None if state.login.is_some() => "Waiting for approval…".to_owned(),
+        None => "Getting a code from Twitch…".to_owned(),
         Some(LoginProblem::Expired) => "That code expired.".to_owned(),
         Some(LoginProblem::Denied) => "Sign-in was declined on your phone.".to_owned(),
         Some(LoginProblem::Failed(message)) => format!("Could not sign in: {message}"),
@@ -3318,12 +3318,12 @@ mod tests {
     #[test]
     fn the_sign_in_screen_tells_the_stages_apart() {
         let vm = view_model(&on_login());
-        assert_eq!(vm.login_status, "Getting a code from Twitch...");
+        assert_eq!(vm.login_status, "Getting a code from Twitch…");
         assert!(!vm.login_failed && vm.qr.is_empty());
 
         let s = issue(&on_login(), ACTIVATE);
         let vm = view_model(&s);
-        assert_eq!(vm.login_status, "Waiting for approval...");
+        assert_eq!(vm.login_status, "Waiting for approval…");
         assert_eq!(vm.device_code, "ABCD-EFGH");
         assert!(!vm.login_failed);
 
