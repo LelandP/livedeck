@@ -31,6 +31,8 @@ pub struct FakeAuth {
     identity: Identity,
     polls: Arc<Mutex<VecDeque<Result<PollOutcome>>>>,
     refreshes: Arc<Mutex<VecDeque<Result<TokenGrant>>>>,
+    /// Scripted `validate` answers; once empty, it answers with `identity`.
+    validations: Arc<Mutex<VecDeque<Result<Identity>>>>,
     calls: Arc<Mutex<Vec<FakeAuthCall>>>,
     /// Answer `Granted` instead of `Pending` once the poll queue is empty.
     auto_approve: bool,
@@ -64,6 +66,7 @@ impl FakeAuth {
             },
             polls: Arc::default(),
             refreshes: Arc::default(),
+            validations: Arc::default(),
             calls: Arc::default(),
             auto_approve: false,
         }
@@ -108,6 +111,12 @@ impl FakeAuth {
         self
     }
 
+    /// Queues the answer to the next unanswered validate.
+    pub fn then_validate(self, answer: Result<Identity>) -> Self {
+        lock(&self.validations).push_back(answer);
+        self
+    }
+
     pub fn calls(&self) -> Vec<FakeAuthCall> {
         lock(&self.calls).clone()
     }
@@ -144,7 +153,8 @@ impl AuthApi for FakeAuth {
 
     async fn validate(&self, access_token: &str) -> Result<Identity> {
         self.log(FakeAuthCall::Validate(access_token.to_owned()));
-        Ok(self.identity.clone())
+        let scripted = lock(&self.validations).pop_front();
+        scripted.unwrap_or_else(|| Ok(self.identity.clone()))
     }
 
     async fn revoke(&self, access_token: &str) -> Result<()> {

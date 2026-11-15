@@ -427,6 +427,35 @@ async fn a_dead_refresh_token_signs_the_user_out() {
 }
 
 #[tokio::test]
+async fn a_failed_check_after_a_refresh_keeps_the_new_tokens() {
+    // Twitch has already spent the old refresh token, so losing the new one here would sign the
+    // user out at the next refresh.
+    let outage = Error::Server {
+        status: 503,
+        message: "down".into(),
+    };
+    let tokens = stored(Some("1000"), Some("old-refresh"), Some(now_secs() - 10));
+    let auth = FakeAuth::new()
+        .then_refresh(Ok(FakeAuth::token("new")))
+        .then_validate(Err(outage));
+    let h = restarted(&tokens, auth);
+    h.session.restore();
+    assert!(h.session.resume().await);
+
+    assert!(h.session.is_signed_in());
+    assert_eq!(h.last_applied().as_deref(), Some("new-access"));
+    let kept = h.store.load().unwrap().unwrap();
+    assert_eq!(kept.access_token, "new-access");
+    assert_eq!(kept.refresh_token.as_deref(), Some("new-refresh"));
+    assert_eq!(
+        kept.user_id.as_deref(),
+        Some("1000"),
+        "the stored user is kept"
+    );
+    assert!(h.events().is_empty());
+}
+
+#[tokio::test]
 async fn a_refresh_outage_keeps_the_session() {
     let outage = Error::Server {
         status: 503,
