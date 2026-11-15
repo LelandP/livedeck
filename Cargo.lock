@@ -2135,14 +2135,12 @@ name = "htpc-player"
 version = "0.7.0"
 dependencies = [
  "glow",
- "htpc-resolver",
  "libmpv2",
  "reqwest",
  "serde_json",
  "slint",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

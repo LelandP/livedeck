@@ -10,7 +10,7 @@ publish = false
 # See crates/player/README.md for the setup.
 default = []
 mpv = ["htpc-player/mpv"]
-# Generated captions with whisper.cpp (captions-plan.md). Needs CMake and a C++ compiler to build.
+# Generated captions with whisper.cpp. Needs CMake and a C++ compiler to build.
 # Off by default: without it the player menu's Captions row says "Captions unavailable" (--mock
 # still has scripted captions).
 captions = ["htpc-captions/whisper"]
@@ -42,16 +42,6 @@ open.workspace = true
 # The captions' speech models are downloaded on first use and checked with their SHA-256.
 reqwest.workspace = true
 sha2.workspace = true
-
-[[example]]
-# Live captions' timing against a delayed live picture (captions-plan.md, phase 3b).
-name = "caption_timing_probe"
-required-features = ["mpv", "captions"]
-
-[[example]]
-# A video's captions against its picture, and after a seek (captions-plan.md, phase 5).
-name = "caption_video_probe"
-required-features = ["mpv", "captions"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
