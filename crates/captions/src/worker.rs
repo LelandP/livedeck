@@ -216,6 +216,10 @@ fn transcribe_chunk<E: SegmentEngine>(engine: &mut E, chunk: &SpeechChunk) -> Ve
     segments
         .into_iter()
         .filter_map(|s| {
+            // `clamp` panics on NaN bounds, and a NaN time would take the thread down with it.
+            if !(s.start_s.is_finite() && s.end_s.is_finite()) {
+                return None;
+            }
             let start = s.start_s.clamp(0.0, len);
             let end = s.end_s.clamp(start, len);
             if is_hallucination(&s.text, end - start, rms) {
@@ -376,6 +380,26 @@ mod tests {
             words,
             [(101.0, "a"), (101.6, "b"), (101.6, "c"), (102.0, "d")]
         );
+    }
+
+    #[test]
+    fn a_segment_with_a_time_that_is_not_a_number_is_dropped() {
+        struct NotANumber;
+        impl SegmentEngine for NotANumber {
+            fn transcribe(&mut self, _samples: &[f32]) -> Result<Vec<RawSegment>, String> {
+                Ok(vec![RawSegment {
+                    start_s: f64::NAN,
+                    end_s: 1.0,
+                    text: "hello there".into(),
+                    words: Vec::new(),
+                }])
+            }
+        }
+        let chunk = SpeechChunk {
+            start_s: 10.0,
+            samples: vec![0.3; 16_000],
+        };
+        assert!(transcribe_chunk(&mut NotANumber, &chunk).is_empty());
     }
 
     #[test]

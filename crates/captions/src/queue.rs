@@ -54,8 +54,17 @@ impl AudioQueue {
         }
         self.queued_s += secs(samples.len());
         self.items.push_back(QueueItem::Audio { start_s, samples });
-        while self.queued_s > self.cap_s && self.items.len() > 1 {
-            if let Some(QueueItem::Audio { samples, .. }) = self.items.pop_front() {
+        while self.queued_s > self.cap_s {
+            // The oldest audio goes. A reset marker is never dropped (the chunker must see it), and
+            // the newest audio is kept even over the cap.
+            let is_audio = |i: &QueueItem| matches!(i, QueueItem::Audio { .. });
+            let Some(oldest) = self.items.iter().position(is_audio) else {
+                break;
+            };
+            if self.items.iter().rposition(is_audio) == Some(oldest) {
+                break;
+            }
+            if let Some(QueueItem::Audio { samples, .. }) = self.items.remove(oldest) {
                 let s = secs(samples.len());
                 self.queued_s -= s;
                 self.dropped_s += s;
@@ -178,6 +187,21 @@ mod tests {
         q.push_audio(1.0, half_second());
         q.reset();
         assert_eq!(q.pop(), Some(QueueItem::Reset));
+    }
+
+    #[test]
+    fn a_reset_marker_survives_the_backlog_cap() {
+        // A seek, then more audio than the cap before the thread takes the marker: the marker must
+        // still come out first, or the chunker keeps the audio from before the seek.
+        let mut q = AudioQueue::new(1.0);
+        q.push_audio(0.0, half_second());
+        q.reset();
+        for i in 0..6 {
+            q.push_audio(f64::from(i) * 0.5, half_second());
+        }
+        assert_eq!(q.pop(), Some(QueueItem::Reset));
+        assert_eq!(start_of(q.pop()), 2.0);
+        assert!((q.dropped_s() - 2.0).abs() < 1e-9, "{}", q.dropped_s());
     }
 
     #[test]

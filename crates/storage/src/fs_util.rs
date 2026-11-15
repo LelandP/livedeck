@@ -3,6 +3,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{Error, Result};
 
@@ -40,9 +41,13 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], access: Access) -> Result<
     result
 }
 
+/// A temp name unique to this process and call. Two writes of the same file at once (two tasks
+/// saving favorites, say) must not share one temp file: one would rename the other's away.
 fn tmp_path(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".tmp{}", std::process::id()));
+    name.push(format!(".tmp{}-{seq}", std::process::id()));
     path.with_file_name(name)
 }
 
@@ -120,6 +125,12 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"two");
         // No temp file left behind.
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn temp_names_are_not_shared_between_writes() {
+        let path = Path::new("/x/favorites.toml");
+        assert_ne!(tmp_path(path), tmp_path(path));
     }
 
     #[cfg(unix)]

@@ -225,8 +225,11 @@ impl Session {
             Ok(())
         })
         .map_err(|e| format!("libmpv failed to start for the audio tap: {e}"))?;
-        mpv.command("loadfile", &[url, "replace"])
-            .map_err(|e| format!("the audio tap could not load the stream: {e}"))?;
+        if let Err(e) = mpv.command("loadfile", &[url, "replace"]) {
+            // No `Session` exists yet to delete the file, so do it here (it may not exist).
+            let _ = std::fs::remove_file(&path);
+            return Err(format!("the audio tap could not load the stream: {e}"));
+        }
         Ok(Self {
             mpv: Some(mpv),
             path,

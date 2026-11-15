@@ -179,7 +179,7 @@ fn watching(state: &AppState) -> bool {
 pub struct Store<P, R, S> {
     state: AppState,
     /// `None` when there is nowhere to save (no config folder, tests, `--mock`).
-    save_settings: Option<SaveSettings>,
+    save_settings: Option<LatestWriter<htpc_core::Settings>>,
     /// The same for the favorites.
     save_favorites: Option<LatestWriter<Vec<htpc_core::ChannelRef>>>,
     /// And for the last multiview session.
@@ -272,7 +272,7 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
 
     /// Persists changed settings with `save`.
     pub fn with_settings_saver(mut self, save: SaveSettings) -> Self {
-        self.save_settings = Some(save);
+        self.save_settings = Some(LatestWriter::new(move |s: &htpc_core::Settings| save(*s)));
         self
     }
 
@@ -349,6 +349,9 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
     /// The window is closing: what the last message asked to save is written before the signal,
     /// not left to tasks the runtime may drop.
     fn finish_saving(&self) {
+        if let Some(w) = &self.save_settings {
+            w.flush();
+        }
         if let Some(w) = &self.save_favorites {
             w.flush();
         }
@@ -550,9 +553,10 @@ impl<P: Provider, R: StreamResolver, S: Sink> Store<P, R, S> {
                 continue;
             }
             if let Command::SaveSettings(settings) = cmd {
-                if let Some(save) = self.save_settings.clone() {
-                    // File IO: keep it off the async workers.
-                    tokio::task::spawn_blocking(move || save(settings));
+                // Off the async workers, and newest last: two saves in a row must not land out of
+                // order (both write the whole config.toml).
+                if let Some(writer) = &self.save_settings {
+                    writer.write(settings);
                 }
                 continue;
             }

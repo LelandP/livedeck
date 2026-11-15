@@ -160,7 +160,14 @@ impl<D: SpeechDetector> Chunker<D> {
     fn drain(&mut self, force: bool, out: &mut Vec<SpeechChunk>) {
         let cfg = self.cfg.clone();
         loop {
-            let spans = self.detector.detect(&self.buf);
+            // A span that ends at the very start of the buffer drops no audio when it is cut, so
+            // it would be found again on every pass: leave it out.
+            let spans: Vec<Span> = self
+                .detector
+                .detect(&self.buf)
+                .into_iter()
+                .filter(|s| Self::idx(s.end_s) > 0)
+                .collect();
             let end_t = secs(self.buf.len());
             let Some(&first) = spans.first() else {
                 // Nothing but silence: keep only a little in case speech starts.
@@ -396,6 +403,25 @@ mod tests {
         c.reset();
         let out = feed(&mut c, 50.0, &quiet(5.0));
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_span_that_cannot_be_consumed_does_not_loop() {
+        // A detector that always reports a zero-length span at the start: it must be ignored,
+        // not handed back forever.
+        struct ZeroSpan;
+        impl SpeechDetector for ZeroSpan {
+            fn detect(&mut self, _samples: &[f32]) -> Vec<Span> {
+                vec![Span {
+                    start_s: 0.0,
+                    end_s: 0.0,
+                }]
+            }
+        }
+        let mut c = Chunker::new(ZeroSpan, ChunkerConfig::default());
+        let out = c.push(0.0, &tone(3.0));
+        assert!(out.is_empty());
+        assert!(c.buffered_s() <= 0.6, "{}", c.buffered_s());
     }
 
     #[test]
