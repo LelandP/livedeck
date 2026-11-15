@@ -67,6 +67,12 @@ const DRY_BUFFER_MS: u32 = 50;
 /// `low-latency` profile (set once at start), the normal ones mpv's defaults plus a longer
 /// read-ahead and a short wait to refill the cache after a stall. Applied before each load, as
 /// most of them are only read when a file opens.
+///
+/// `video-latency-hacks` stays on for both: without it mpv estimates the frame rate from frame
+/// timings to decide which frames are late, and as frames are drawn when the UI redraws (not on
+/// mpv's schedule) that estimate drifts and it drops frames that were not late. On the Steam
+/// Machine (0.7.1, 2026-11-15) every video, and a live stream set to Normal, stuttered with the
+/// "dropped" count climbing even at 480p, while Low was smooth.
 const LATENCY_OPTIONS: &[(&str, &str, &str)] = &[
     ("audio-buffer", "0", "0.2"),
     ("vd-lavc-threads", "1", "0"),
@@ -76,7 +82,7 @@ const LATENCY_OPTIONS: &[(&str, &str, &str)] = &[
     ("demuxer-lavf-probe-info", "nostreams", "auto"),
     ("demuxer-lavf-analyzeduration", "0.1", "0"),
     ("demuxer-readahead-secs", "1", "10"),
-    ("video-latency-hacks", "yes", "no"),
+    ("video-latency-hacks", "yes", "yes"),
     ("stream-buffer-size", "4k", "128k"),
 ];
 
