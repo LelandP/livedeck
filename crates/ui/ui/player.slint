@@ -295,27 +295,35 @@ component MenuRow inherits Rectangle {
 // widens it; one wider than the area is elided rather than wrapped. The player places it.
 export component CaptionLines inherits Rectangle {
     in property <[string]> lines;
+    // The size against Medium's (Settings: Small 0.8, Medium 1, Large 1.35).
+    in property <float> scale: 1.0;
+    // The box behind each line: 0 none (the text is outlined instead), 1 light, 2 dark.
+    in property <int> box: 2;
+
+    property <length> fs: Theme.caption-fs * root.scale;
+    property <length> pad-x: Theme.caption-pad-x * root.scale;
+    property <length> pad-y: Theme.caption-pad-y * root.scale;
 
     // A typical full line, and the two shown, measured off screen.
     full := Text {
         visible: false;
         text: "the quick brown fox jumps over the lazy dogs";
-        font-size: Theme.caption-fs;
+        font-size: root.fs;
         font-weight: 700;
     }
     first := Text {
         visible: false;
         text: root.lines.length > 0 ? root.lines[0] : "";
-        font-size: Theme.caption-fs;
+        font-size: root.fs;
         font-weight: 700;
     }
     second := Text {
         visible: false;
         text: root.lines.length > 1 ? root.lines[1] : "";
-        font-size: Theme.caption-fs;
+        font-size: root.fs;
         font-weight: 700;
     }
-    property <length> block-w: min(root.width, max(full.preferred-width, first.preferred-width, second.preferred-width) + 2 * Theme.caption-pad-x);
+    property <length> block-w: min(root.width, max(full.preferred-width, first.preferred-width, second.preferred-width) + 2 * root.pad-x);
 
     height: cap-layout.preferred-height;
 
@@ -323,21 +331,25 @@ export component CaptionLines inherits Rectangle {
         x: (root.width - root.block-w) / 2;
         width: root.block-w;
         alignment: end;
-        spacing: Theme.caption-gap;
+        spacing: Theme.caption-gap * root.scale;
         for line in root.lines : HorizontalLayout {
             alignment: start;
             Rectangle {
-                width: min(cap-text.preferred-width + 2 * Theme.caption-pad-x, root.block-w);
-                height: cap-text.preferred-height + 2 * Theme.caption-pad-y;
+                width: min(cap-text.preferred-width + 2 * root.pad-x, root.block-w);
+                height: cap-text.preferred-height + 2 * root.pad-y;
                 border-radius: 8px;
-                background: #000000c8;
+                background: root.box == 2 ? #000000c8 : root.box == 1 ? #00000078 : transparent;
                 cap-text := Text {
-                    x: Theme.caption-pad-x;
-                    y: Theme.caption-pad-y;
-                    width: parent.width - 2 * Theme.caption-pad-x;
+                    x: root.pad-x;
+                    y: root.pad-y;
+                    width: parent.width - 2 * root.pad-x;
                     text: line;
                     color: #ffffff;
-                    font-size: Theme.caption-fs;
+                    // Without a box, a dark outline keeps the text readable on a bright picture.
+                    stroke: root.box == 0 ? #000000 : transparent;
+                    stroke-width: root.box == 0 ? 2.5px * root.scale : 0px;
+                    stroke-style: outside;
+                    font-size: root.fs;
                     font-weight: 700;
                     horizontal-alignment: left;
                     overflow: elide;
@@ -909,6 +921,11 @@ export component PlayerScreen inherits Rectangle {
     in property <string> sleep-label: "";
     // Generated captions, oldest line first, at most two. Empty hides them.
     in property <[string]> caption-lines: [];
+    // How they look (the Settings screen): size against Medium's, at the top, and the box behind
+    // them (0 none, 1 light, 2 dark).
+    in property <float> caption-scale: 1.0;
+    in property <bool> caption-top: false;
+    in property <int> caption-box: 2;
     // The subscribe card (player menu): open, the page's QR code (one pixel per module, with its
     // quiet zone), its address to type, and whether A opens it in a browser (not in Game Mode).
     in property <bool> subscribe-open: false;
@@ -1179,14 +1196,19 @@ export component PlayerScreen inherits Rectangle {
         // shows (above the hints bar when it does not), and clear of the chat overlay's column and
         // of the chat keyboard that covers the bottom in the overlay layout. The side panel has
         // already narrowed this rectangle. Under the menu, the stats box and the cards.
+        // At the top (Settings), they sit below a video's title while its HUD shows and below the
+        // hype bar while it is open.
         if root.caption-lines.length > 0 && root.playback == 1 : CaptionLines {
             property <length> right-clear: root.chat-open && root.chat-overlay ? Theme.chat-overlay-w : 0px;
             property <length> bottom-clear: root.compose-open && root.chat-overlay ? Theme.compose-h + Theme.hints-h : (root.hud-shown ? 190px : Theme.hints-h);
+            property <length> top-clear: max(root.hud.on && root.hud-shown ? 150px : 24px, root.hype-open ? 110px : 24px);
             x: Theme.safe-x / 2;
             width: max(0px, parent.width - Theme.safe-x - self.right-clear);
-            y: parent.height - self.bottom-clear - 12px - self.height;
+            y: root.caption-top ? self.top-clear : parent.height - self.bottom-clear - 12px - self.height;
             animate y { duration: Theme.t-med; easing: ease-out; }
             lines: root.caption-lines;
+            scale: root.caption-scale;
+            box: root.caption-box;
         }
 
         // Player menu: bottom left, just above the HUD text. Up/Down pick a row, Left/Right change

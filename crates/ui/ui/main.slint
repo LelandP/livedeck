@@ -87,6 +87,9 @@ export component MainWindow inherits Window {
     in property <string> live-notifications-label: "";
     in property <string> background-play-label: "";
     in property <string> show-kick-label: "";
+    in property <string> caption-size-label: "";
+    in property <string> caption-position-label: "";
+    in property <string> caption-background-label: "";
     // "<channel> is live" popups, newest first (at most three), and how many more there are.
     in property <[ToastItem]> toasts;
     in property <int> toast-more: 0;
@@ -212,6 +215,10 @@ export component MainWindow inherits Window {
     in property <string> stats-text: "";
     // Generated captions over the video, oldest line first, at most two.
     in property <[string]> caption-lines: [];
+    // How they look (Settings): size against Medium's, top instead of bottom, box 0 none 1 light 2 dark.
+    in property <float> caption-scale: 1.0;
+    in property <bool> caption-top: false;
+    in property <int> caption-box: 2;
     // Changes whenever the HUD should come back. It fades out again after `hud-timeout`.
     in property <int> hud-pulse: 0;
     // The "Quit LiveDeck?" prompt (B on a root screen). A quits, B cancels.
@@ -441,6 +448,9 @@ export component MainWindow inherits Window {
         live-notifications: root.live-notifications-label;
         background-play: root.background-play-label;
         show-kick: root.show-kick-label;
+        caption-size: root.caption-size-label;
+        caption-position: root.caption-position-label;
+        caption-background: root.caption-background-label;
         version: root.version;
         focus-row: root.rail-focused ? -1 : root.settings-focus;
     }
@@ -492,6 +502,9 @@ export component MainWindow inherits Window {
         audio-only: root.audio-only;
         stats-text: root.stats-text;
         caption-lines: root.caption-lines;
+        caption-scale: root.caption-scale;
+        caption-top: root.caption-top;
+        caption-box: root.caption-box;
         sleep-label: root.sleep-label;
         subscribe-open: root.subscribe-open;
         subscribe-qr: root.subscribe-qr;

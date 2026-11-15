@@ -218,6 +218,16 @@ fn change_setting(s: &mut AppState, row: SettingsRow, forward: bool, cmds: &mut 
             s.home.error = None;
             cmds.push(Command::LoadFeed { feed: FeedId::Home });
         }
+        // How captions look: the player reads these when it draws them, so nothing to apply.
+        SettingsRow::CaptionSize => {
+            s.settings.caption_size = s.settings.caption_size.cycled(forward);
+        }
+        SettingsRow::CaptionPosition => {
+            s.settings.caption_position = s.settings.caption_position.cycled(forward);
+        }
+        SettingsRow::CaptionBackground => {
+            s.settings.caption_background = s.settings.caption_background.cycled(forward);
+        }
     }
     cmds.push(Command::SaveSettings(s.settings));
 }

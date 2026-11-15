@@ -9,7 +9,7 @@ component SettingRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> choice: false;
 
-    // Six rows and the about lines fit above the hints bar at 800 px.
+    // Six rows and the about lines fit above the hints bar at 800 px; more scroll (`SettingsScreen`).
     height: 74px;
     max-width: 720px;
     background: Theme.surface;
@@ -62,9 +62,13 @@ export component SettingsScreen inherits Rectangle {
     in property <string> live-notifications;
     in property <string> background-play;
     in property <string> show-kick;
+    in property <string> caption-size;
+    in property <string> caption-position;
+    in property <string> caption-background;
     in property <string> version;
-    // 0 account, 1 chat layout, 2 quality, 3 live notifications, 4 background play, 5 show Kick
-    // (SettingsRow order). -1 while the rail has focus.
+    // 0 account, 1 chat layout, 2 quality, 3 live notifications, 4 background play, 5 show Kick,
+    // 6 caption size, 7 caption position, 8 caption background (SettingsRow order). -1 while the
+    // rail has focus.
     in property <int> focus-row;
 
     VerticalLayout {
@@ -73,7 +77,6 @@ export component SettingsScreen inherits Rectangle {
         padding-top: 36px;
         padding-bottom: Theme.hints-h;
         spacing: 12px;
-        alignment: start;
 
         Text {
             text: "Settings";
@@ -81,6 +84,24 @@ export component SettingsScreen inherits Rectangle {
             font-size: Theme.fs-display;
             font-weight: 900;
         }
+
+        // The rows scroll when they don't all fit (the Deck's 800 px), keeping the focused one and
+        // a bit of the next in view. On a taller screen they all show and nothing moves.
+        rows-view := Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            property <length> step: 74px + 12px;
+            property <length> spill: max(0px, rows.preferred-height - self.height);
+            property <length> want: (max(0, root.focus-row) + 1.5) * self.step - self.height;
+            property <length> scroll: max(0px, min(self.spill, self.want));
+
+        rows := VerticalLayout {
+            y: -rows-view.scroll;
+            width: rows-view.width;
+            height: self.preferred-height;
+            spacing: 12px;
+            alignment: start;
+            animate y { duration: Theme.t-fast; easing: ease-out; }
 
         SettingRow {
             title: root.user-name == "" ? "Not signed in" : root.user-name;
@@ -122,6 +143,29 @@ export component SettingsScreen inherits Rectangle {
             value: root.show-kick;
             choice: true;
             focused: root.focus-row == 5;
+        }
+        SettingRow {
+            title: "Caption size";
+            help: "How big generated captions are drawn";
+            value: root.caption-size;
+            choice: true;
+            focused: root.focus-row == 6;
+        }
+        SettingRow {
+            title: "Caption position";
+            help: "Top keeps them clear of a stream's own text at the bottom";
+            value: root.caption-position;
+            choice: true;
+            focused: root.focus-row == 7;
+        }
+        SettingRow {
+            title: "Caption background";
+            help: "The box behind them. None outlines the text instead";
+            value: root.caption-background;
+            choice: true;
+            focused: root.focus-row == 8;
+        }
+        }
         }
 
         Text {

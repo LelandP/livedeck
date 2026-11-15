@@ -175,10 +175,39 @@ fn on_settings() -> htpc_core::AppState {
 fn down_and_up_move_between_the_settings_rows_and_stop_at_the_ends() {
     let (s, _) = run(on_settings(), &[Intent::Down]);
     assert_eq!(s.settings_focus, SettingsRow::ChatLayout);
-    let (s, _) = run(s, &[Intent::Down; 5]);
+    let (s, _) = run(s, &[Intent::Down; 4]);
     assert_eq!(s.settings_focus, SettingsRow::ShowKick);
-    let (s, _) = run(s, &[Intent::Up; 6]);
+    // Three more to the last row, and a fourth stays there.
+    let (s, _) = run(s, &[Intent::Down; 4]);
+    assert_eq!(s.settings_focus, SettingsRow::CaptionBackground);
+    let (s, _) = run(s, &[Intent::Up; 9]);
     assert_eq!(s.settings_focus, SettingsRow::Account);
+}
+
+#[test]
+fn the_caption_rows_step_their_looks_both_ways_and_save() {
+    let s = on_settings();
+    assert_eq!(s.settings.caption_size, CaptionSize::Medium);
+    assert_eq!(s.settings.caption_position, CaptionPosition::Bottom);
+    assert_eq!(s.settings.caption_background, CaptionBackground::Dark);
+
+    let (s, _) = run(s, &[Intent::Down; 6]);
+    assert_eq!(s.settings_focus, SettingsRow::CaptionSize);
+    let (s, cmds) = reduce(&s, Intent::Right);
+    assert_eq!(s.settings.caption_size, CaptionSize::Large);
+    assert_eq!(cmds, vec![Command::SaveSettings(s.settings)]);
+    let (s, _) = run(s, &[Intent::Left, Intent::Left]);
+    assert_eq!(s.settings.caption_size, CaptionSize::Small);
+
+    let (s, _) = run(s, &[Intent::Down, Intent::Select]);
+    assert_eq!(s.settings.caption_position, CaptionPosition::Top);
+
+    let (s, cmds) = run(s, &[Intent::Down, Intent::Right]);
+    assert_eq!(s.settings.caption_background, CaptionBackground::None);
+    assert_eq!(cmds, vec![Command::SaveSettings(s.settings)]);
+    // Nothing else changed on the way.
+    assert_eq!(s.settings.caption_size, CaptionSize::Small);
+    assert_eq!(s.settings.caption_position, CaptionPosition::Top);
 }
 
 #[test]

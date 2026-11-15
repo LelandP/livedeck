@@ -10,11 +10,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 use htpc_core::{
-    grid_cols, subscribe_url, AppState, CaptionsRow, ChannelPage, ChannelTab, ChatKind, ChatLayout,
-    ChatMessage, ChatSpan, ChatStatus, Feed, FeedId, HypeTrain, Key, LiveEndRow, LoginProblem,
-    Paging, Platform, Playback, PlayerMenuRow, RailEntry, Rgb, RoomMode, Row, RowKind, Screen,
-    SearchState, SendProblem, SettingsRow, Shift, Stream, Tile, Toast, ToastKind, CHAT_MAX,
-    RESUME_MOSAIC, TOASTS_SHOWN,
+    grid_cols, subscribe_url, AppState, CaptionBackground, CaptionPosition, CaptionsRow,
+    ChannelPage, ChannelTab, ChatKind, ChatLayout, ChatMessage, ChatSpan, ChatStatus, Feed, FeedId,
+    HypeTrain, Key, LiveEndRow, LoginProblem, Paging, Platform, Playback, PlayerMenuRow, RailEntry,
+    Rgb, RoomMode, Row, RowKind, Screen, SearchState, SendProblem, SettingsRow, Shift, Stream,
+    Tile, Toast, ToastKind, CHAT_MAX, RESUME_MOSAIC, TOASTS_SHOWN,
 };
 use slint::{
     Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
@@ -281,6 +281,10 @@ pub struct ViewModel {
     pub background_play_label: String,
     /// "On" or "Off".
     pub show_kick_label: String,
+    /// The Settings screen's caption rows: "Small", "Bottom", "Dark" and so on.
+    pub caption_size_label: String,
+    pub caption_position_label: String,
+    pub caption_background_label: String,
     /// The newest "is live" popups, at most `TOASTS_SHOWN`, newest first.
     pub toasts: Vec<ToastVm>,
     /// How many more there are than `toasts` shows ("+2 more"). 0 for none.
@@ -313,6 +317,11 @@ pub struct ViewModel {
     /// The generated captions on screen, oldest first, at most two lines (captions-plan.md).
     /// Empty while none show. Drawn over the bottom of the video, above the HUD when it is up.
     pub caption_lines: Vec<String>,
+    /// How they look (the Settings screen): the text size against Medium's, at the top instead of
+    /// the bottom, and the box behind them (0 none, 1 light, 2 dark).
+    pub caption_scale: f32,
+    pub caption_top: bool,
+    pub caption_box: i32,
     /// Changes whenever the HUD should come back (the window hides it again after a timeout).
     pub hud_pulse: i32,
     /// The "Quit LiveDeck?" prompt is open.
@@ -1673,7 +1682,10 @@ pub fn view_model(state: &AppState) -> ViewModel {
             | SettingsRow::Quality
             | SettingsRow::LiveNotifications
             | SettingsRow::BackgroundPlay
-            | SettingsRow::ShowKick => "Change",
+            | SettingsRow::ShowKick
+            | SettingsRow::CaptionSize
+            | SettingsRow::CaptionPosition
+            | SettingsRow::CaptionBackground => "Change",
         };
         (label, false)
     } else if search_on_keys {
@@ -1812,6 +1824,9 @@ pub fn view_model(state: &AppState) -> ViewModel {
         live_notifications_label: on_off(state.settings.live_notifications).to_owned(),
         background_play_label: on_off(state.settings.background_play).to_owned(),
         show_kick_label: on_off(state.settings.show_kick).to_owned(),
+        caption_size_label: state.settings.caption_size.label().to_owned(),
+        caption_position_label: state.settings.caption_position.label().to_owned(),
+        caption_background_label: state.settings.caption_background.label().to_owned(),
         toasts: state.toasts.iter().take(TOASTS_SHOWN).map(toast).collect(),
         toast_more: to_i32(state.toasts.len().saturating_sub(TOASTS_SHOWN)),
         playback,
@@ -1834,6 +1849,13 @@ pub fn view_model(state: &AppState) -> ViewModel {
             state.captions.shown.clone()
         } else {
             Vec::new()
+        },
+        caption_scale: state.settings.caption_size.scale(),
+        caption_top: state.settings.caption_position == CaptionPosition::Top,
+        caption_box: match state.settings.caption_background {
+            CaptionBackground::None => 0,
+            CaptionBackground::Light => 1,
+            CaptionBackground::Dark => 2,
         },
         hud_pulse: state.hud_pulse as i32,
         exit_prompt: state.exit_prompt,
@@ -2112,6 +2134,9 @@ impl Update {
         ui.set_live_notifications_label(vm.live_notifications_label.into());
         ui.set_background_play_label(vm.background_play_label.into());
         ui.set_show_kick_label(vm.show_kick_label.into());
+        ui.set_caption_size_label(vm.caption_size_label.into());
+        ui.set_caption_position_label(vm.caption_position_label.into());
+        ui.set_caption_background_label(vm.caption_background_label.into());
         ui.set_playback(vm.playback as i32);
         ui.set_playback_error(vm.playback_error.into());
         ui.set_playback_details(vm.playback_details.into());
@@ -2140,6 +2165,9 @@ impl Update {
         let caption_lines: Vec<slint::SharedString> =
             vm.caption_lines.iter().map(|l| l.as_str().into()).collect();
         ui.set_caption_lines(ModelRc::new(VecModel::from(caption_lines)));
+        ui.set_caption_scale(vm.caption_scale);
+        ui.set_caption_top(vm.caption_top);
+        ui.set_caption_box(vm.caption_box);
         ui.set_hud_pulse(vm.hud_pulse);
         ui.set_exit_prompt(vm.exit_prompt);
         ui.set_sleep_label(vm.sleep_label.into());
@@ -3410,6 +3438,24 @@ mod tests {
         assert_eq!(vm.quality_label, "Best available");
         assert_eq!(vm.live_notifications_label, "On");
         assert_eq!(vm.background_play_label, "Off");
+        assert_eq!(vm.caption_size_label, "Medium");
+        assert_eq!(vm.caption_position_label, "Bottom");
+        assert_eq!(vm.caption_background_label, "Dark");
+        assert_eq!(
+            (vm.caption_scale, vm.caption_top, vm.caption_box),
+            (1.0, false, 2)
+        );
+
+        let mut big = s.clone();
+        big.settings.caption_size = htpc_core::CaptionSize::Large;
+        big.settings.caption_position = CaptionPosition::Top;
+        big.settings.caption_background = CaptionBackground::None;
+        let vm = view_model(&big);
+        assert_eq!(vm.caption_size_label, "Large");
+        assert_eq!(
+            (vm.caption_scale, vm.caption_top, vm.caption_box),
+            (1.35, true, 0)
+        );
 
         let (s, _) = reduce(&s, Intent::Down);
         let (s, _) = reduce(&s, Intent::Select);

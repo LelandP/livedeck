@@ -47,8 +47,8 @@ pub use reduce::{init, reduce, PREFETCH_DISTANCE};
 pub use replay::{ReplayChat, ReplayLine, LOOKAHEAD_MS};
 pub use seek::{Scrub, Seeking, TapRun};
 pub use settings::{
-    CaptionsQuality, ChatLayout, Hwdec, Latency, Quality, Settings, UnknownSetting, Zoom,
-    DEFAULT_CAPTIONS_QUALITY,
+    CaptionBackground, CaptionPosition, CaptionSize, CaptionsQuality, ChatLayout, Hwdec, Latency,
+    Quality, Settings, UnknownSetting, Zoom, DEFAULT_CAPTIONS_QUALITY,
 };
 pub use state::{
     default_quick_messages, subscribe_url, AppState, CategoryFeed, ChannelPage, ChannelTab,

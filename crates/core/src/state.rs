@@ -124,16 +124,25 @@ pub enum SettingsRow {
     BackgroundPlay,
     /// On or off: Kick streams next to Twitch.
     ShowKick,
+    /// How the captions look: Small, Medium or Large.
+    CaptionSize,
+    /// Bottom or Top.
+    CaptionPosition,
+    /// The box behind them: None, Light or Dark.
+    CaptionBackground,
 }
 
 impl SettingsRow {
-    pub const ALL: [SettingsRow; 6] = [
+    pub const ALL: [SettingsRow; 9] = [
         SettingsRow::Account,
         SettingsRow::ChatLayout,
         SettingsRow::Quality,
         SettingsRow::LiveNotifications,
         SettingsRow::BackgroundPlay,
         SettingsRow::ShowKick,
+        SettingsRow::CaptionSize,
+        SettingsRow::CaptionPosition,
+        SettingsRow::CaptionBackground,
     ];
 
     pub fn index(self) -> usize {

@@ -9,6 +9,9 @@
 //! captions = false            # generated captions on Twitch streams (player menu)
 //! captions_quality = "standard"   # fast | standard | best (GPU builds)
 //! caption_delay = true        # with captions on, delay video and chat so captions are on time
+//! caption_size = "medium"     # small | medium | large
+//! caption_position = "bottom" # bottom | top
+//! caption_background = "dark" # none | light | dark
 //! image_cache_max_mb = 256
 //! quick_messages = ["GG", "LUL", "Hi!", "o7", "Thanks for the stream!"]   # chips while writing in chat
 //! # client_id = "..."         # public Twitch client ID (TWITCH_CLIENT_ID overrides it)
@@ -21,7 +24,10 @@
 
 use std::path::{Path, PathBuf};
 
-use htpc_core::{default_quick_messages, CaptionsQuality, ChatLayout, Quality, Settings, CHAT_MAX};
+use htpc_core::{
+    default_quick_messages, CaptionBackground, CaptionPosition, CaptionSize, CaptionsQuality,
+    ChatLayout, Quality, Settings, CHAT_MAX,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::fs_util::{self, Access};
@@ -83,6 +89,9 @@ struct ConfigFile {
     captions: Option<bool>,
     captions_quality: Option<String>,
     caption_delay: Option<bool>,
+    caption_size: Option<String>,
+    caption_position: Option<String>,
+    caption_background: Option<String>,
     image_cache_max_mb: Option<u64>,
     quick_messages: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +127,12 @@ impl From<ConfigFile> for Config {
                 captions_quality: named::<CaptionsQuality>("captions_quality", f.captions_quality),
                 // On in a file from before the setting, as in a fresh install.
                 caption_delay: f.caption_delay.unwrap_or(Settings::default().caption_delay),
+                caption_size: named::<CaptionSize>("caption_size", f.caption_size),
+                caption_position: named::<CaptionPosition>("caption_position", f.caption_position),
+                caption_background: named::<CaptionBackground>(
+                    "caption_background",
+                    f.caption_background,
+                ),
             },
             client_id: f
                 .client_id
@@ -153,6 +168,9 @@ impl From<&Config> for ConfigFile {
             captions: Some(c.settings.captions),
             captions_quality: Some(c.settings.captions_quality.as_str().to_owned()),
             caption_delay: Some(c.settings.caption_delay),
+            caption_size: Some(c.settings.caption_size.as_str().to_owned()),
+            caption_position: Some(c.settings.caption_position.as_str().to_owned()),
+            caption_background: Some(c.settings.caption_background.as_str().to_owned()),
             image_cache_max_mb: Some(c.image_cache_max_mb),
             quick_messages: Some(c.quick_messages.clone()),
             client_id: c.client_id.clone(),

@@ -2,7 +2,9 @@
 
 use std::fs;
 
-use htpc_core::{CaptionsQuality, ChatLayout, Quality, Settings};
+use htpc_core::{
+    CaptionBackground, CaptionPosition, CaptionSize, CaptionsQuality, ChatLayout, Quality, Settings,
+};
 use htpc_storage::{Config, ConfigStore, Error, Paths, DEFAULT_IMAGE_CACHE_MB, MIN_IMAGE_CACHE_MB};
 
 fn store() -> (tempfile::TempDir, ConfigStore) {
@@ -32,6 +34,9 @@ fn round_trip_survives_a_restart() {
             captions: true,
             captions_quality: CaptionsQuality::Fast,
             caption_delay: false,
+            caption_size: CaptionSize::Large,
+            caption_position: CaptionPosition::Top,
+            caption_background: CaptionBackground::None,
         },
         client_id: Some("abc123".to_owned()),
         image_cache_max_mb: 64,
@@ -51,6 +56,20 @@ fn round_trip_survives_a_restart() {
     assert!(text.contains("captions = true"), "{text}");
     assert!(text.contains("captions_quality = \"fast\""), "{text}");
     assert!(text.contains("caption_delay = false"), "{text}");
+    assert!(text.contains("caption_size = \"large\""), "{text}");
+    assert!(text.contains("caption_position = \"top\""), "{text}");
+    assert!(text.contains("caption_background = \"none\""), "{text}");
+}
+
+#[test]
+fn caption_looks_default_to_medium_bottom_dark_and_survive_nonsense() {
+    let old = Config::from_toml("captions = true\n").unwrap();
+    assert_eq!(old.settings.caption_size, CaptionSize::Medium);
+    assert_eq!(old.settings.caption_position, CaptionPosition::Bottom);
+    assert_eq!(old.settings.caption_background, CaptionBackground::Dark);
+    let bad = Config::from_toml("caption_size = \"huge\"\ncaption_position = \"left\"\n").unwrap();
+    assert_eq!(bad.settings.caption_size, CaptionSize::Medium);
+    assert_eq!(bad.settings.caption_position, CaptionPosition::Bottom);
 }
 
 #[test]

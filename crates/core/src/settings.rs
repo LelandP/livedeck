@@ -255,6 +255,131 @@ impl CaptionsQuality {
     }
 }
 
+/// How big the captions are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionSize {
+    /// For the Deck in your hands.
+    Small,
+    #[default]
+    Medium,
+    /// For a TV across the room.
+    Large,
+}
+
+impl CaptionSize {
+    pub const ALL: [CaptionSize; 3] = [CaptionSize::Small, CaptionSize::Medium, CaptionSize::Large];
+
+    /// Stable name used in the config file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaptionSize::Small => "small",
+            CaptionSize::Medium => "medium",
+            CaptionSize::Large => "large",
+        }
+    }
+
+    /// The next (or, with `forward == false`, the previous) size, wrapping around.
+    pub fn cycled(self, forward: bool) -> Self {
+        cycle(&Self::ALL, self, if forward { 1 } else { -1 })
+    }
+
+    /// Text for the Settings screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            CaptionSize::Small => "Small",
+            CaptionSize::Medium => "Medium",
+            CaptionSize::Large => "Large",
+        }
+    }
+
+    /// The text size against Medium's.
+    pub fn scale(self) -> f32 {
+        match self {
+            CaptionSize::Small => 0.8,
+            CaptionSize::Medium => 1.0,
+            CaptionSize::Large => 1.35,
+        }
+    }
+}
+
+/// Where on the picture the captions go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionPosition {
+    /// At the bottom, above the HUD while it shows.
+    #[default]
+    Bottom,
+    /// At the top, for streams with their own text or a scoreboard at the bottom.
+    Top,
+}
+
+impl CaptionPosition {
+    pub const ALL: [CaptionPosition; 2] = [CaptionPosition::Bottom, CaptionPosition::Top];
+
+    /// Stable name used in the config file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaptionPosition::Bottom => "bottom",
+            CaptionPosition::Top => "top",
+        }
+    }
+
+    /// The other position (two values, so both directions are the same).
+    pub fn cycled(self, forward: bool) -> Self {
+        cycle(&Self::ALL, self, if forward { 1 } else { -1 })
+    }
+
+    /// Text for the Settings screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            CaptionPosition::Bottom => "Bottom",
+            CaptionPosition::Top => "Top",
+        }
+    }
+}
+
+/// The box behind each caption line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionBackground {
+    /// No box: the text gets a dark outline instead, so it still reads on a bright picture.
+    None,
+    /// A see-through box.
+    Light,
+    /// A nearly solid box: the easiest to read.
+    #[default]
+    Dark,
+}
+
+impl CaptionBackground {
+    pub const ALL: [CaptionBackground; 3] = [
+        CaptionBackground::None,
+        CaptionBackground::Light,
+        CaptionBackground::Dark,
+    ];
+
+    /// Stable name used in the config file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaptionBackground::None => "none",
+            CaptionBackground::Light => "light",
+            CaptionBackground::Dark => "dark",
+        }
+    }
+
+    /// The next (or, with `forward == false`, the previous) value, wrapping around.
+    pub fn cycled(self, forward: bool) -> Self {
+        cycle(&Self::ALL, self, if forward { 1 } else { -1 })
+    }
+
+    /// Text for the Settings screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            CaptionBackground::None => "None",
+            CaptionBackground::Light => "Light",
+            CaptionBackground::Dark => "Dark",
+        }
+    }
+}
+
 /// A value that is not one of the known setting names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownSetting(pub String);
@@ -295,6 +420,30 @@ impl FromStr for Quality {
 }
 
 impl FromStr for CaptionsQuality {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for CaptionSize {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for CaptionPosition {
+    type Err = UnknownSetting;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_named(&Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for CaptionBackground {
     type Err = UnknownSetting;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -351,6 +500,11 @@ pub struct Settings {
     /// `config.toml`, the player menu's *Delay video for caption sync*). Off: live latency, and
     /// captions come a few seconds late.
     pub caption_delay: bool,
+    /// How the captions look, from the Settings screen (`caption_size`, `caption_position` and
+    /// `caption_background` in `config.toml`).
+    pub caption_size: CaptionSize,
+    pub caption_position: CaptionPosition,
+    pub caption_background: CaptionBackground,
 }
 
 impl Default for Settings {
@@ -365,6 +519,9 @@ impl Default for Settings {
             captions: false,
             captions_quality: DEFAULT_CAPTIONS_QUALITY,
             caption_delay: true,
+            caption_size: CaptionSize::default(),
+            caption_position: CaptionPosition::default(),
+            caption_background: CaptionBackground::default(),
         }
     }
 }
@@ -391,6 +548,18 @@ mod tests {
         }
         for v in Zoom::ALL {
             assert_eq!(v.as_str().parse::<Zoom>(), Ok(v));
+            assert_eq!(v.cycled(true).cycled(false), v);
+        }
+        for v in CaptionSize::ALL {
+            assert_eq!(v.as_str().parse::<CaptionSize>(), Ok(v));
+            assert_eq!(v.cycled(true).cycled(false), v);
+        }
+        for v in CaptionPosition::ALL {
+            assert_eq!(v.as_str().parse::<CaptionPosition>(), Ok(v));
+            assert_eq!(v.cycled(true).cycled(false), v);
+        }
+        for v in CaptionBackground::ALL {
+            assert_eq!(v.as_str().parse::<CaptionBackground>(), Ok(v));
             assert_eq!(v.cycled(true).cycled(false), v);
         }
     }
