@@ -32,7 +32,9 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Favorites: your own list of channels, Kick and Twitch mixed, with a Home row and a screen of their own. Signed in
 - Slow networks: when a multiview stream stalls, the muted tiles drop to a lower quality first, and the stream with sound last
 - Captions for Twitch streams, videos and clips, made on your device (see [Captions](#captions))
-- Settings for chat layout, video quality and live notifications, saved between runs
+- Videos and clips (Twitch): a channel's Videos and Clips tabs, playback with seeking, and Continue watching on Home for a video you left part-way
+- Kick, read-only and off until you turn on *Show Kick* in Settings: a Top Live on Kick row on Home, Kick channels in Search, playback through Streamlink, and chat
+- Settings for chat layout, video quality, live notifications, background play and Show Kick, saved between runs
 - Everything controllable with a gamepad (D-pad, A/B/X/Y, Start, LB/RB, View)
 
 **What does not**
@@ -41,15 +43,12 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - Signed out, each row shows only its first page (about 30 items), because Twitch's anonymous API allows no more. Sign in for full paging
 - It does not block or skip ads
 - Captions are not in multiview, not for sound-only streams and not for Kick
+- Kick is read-only: no sign-in, no follows, no chat messages and no captions
 - Linux/Steam Deck builds are new and **not yet tested on a real Deck**
 
 ## To do
 
 Ideas and plans, from easiest to hardest. Nothing here exists yet.
-
-**Big project**
-
-- [x] **Kick support:** watch Kick streams next to Twitch, read-only: a Top Live row on Home, Kick channels in Search, playback through Streamlink, and chat over Kick's own WebSocket. Parked: Kick sign-in (it needs a client secret, so it would need a pairing service) and Kick follows, which Kick has no API for. See `plan/11-kick-support.md`
 
 **Parked**
 
@@ -73,6 +72,8 @@ flatpak install --user LiveDeck-vX.Y.Z-linux-x86_64.flatpak
 flatpak run io.github.livedeck.LiveDeck
 ```
 
+The bundle uses the Flathub runtime. If `flatpak install` cannot find it, first run `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`.
+
 To use it in Game Mode, switch to Desktop Mode, then in Steam choose *Add a Non-Steam Game* and pick **LiveDeck**. Leave the controller layout on the default **Gamepad** template (see [packaging/steam-input](packaging/steam-input/README.md)). The Flatpak is experimental: if it does not build or run for you, please open an issue with the output.
 
 ### Build from source
@@ -95,6 +96,8 @@ With video you also need libmpv and Streamlink:
 
 - **Linux:** install libmpv 2.x development files (`libmpv-dev` / `mpv-libs`), `libudev-dev`, `libfontconfig1-dev`, `libxkbcommon-dev` and Streamlink, then `cargo run -p livedeck --release --features mpv`.
 
+The captions need the `captions` feature too (CMake and a C++ compiler), for example `--features mpv,captions`.
+
 To make the portable Windows zip yourself, see `packaging/windows/package.ps1`. For captions during development, `HTPC_CAPTIONS_MODEL` and `HTPC_CAPTIONS_VAD_MODEL` point at local model files instead of the download.
 
 ## Use
@@ -113,13 +116,13 @@ To make the portable Windows zip yourself, see `packaging/windows/package.ps1`. 
 - **Sign in:** open the left menu, choose *Sign in*, and scan the QR code (or go to the address shown and type the code) on your phone. Signing out is on the Settings screen.
 - **Search:** in the left menu (sign in first). Type with the on-screen keyboard: the D-pad moves, A types, X deletes, Y adds a space, Start jumps to the results. Results update as you type, from two characters on: live channels, categories, then offline channels. Up from the first row (or B) goes back to the keyboard. On a PC you can also just type.
 - **Write in chat:** while signed in, press X with chat shown (or choose *Write in chat* in the player menu). A keyboard opens under the video (side panel) or over its bottom (overlay), and the stream keeps playing. The D-pad moves and A types; LB/RB switch between letters, digits and punctuation, and common emotes (typed as their codes, which Twitch turns into emotes). Shift capitalises the next letter, pressed twice it locks. X deletes, Y adds a space, Start sends, B closes the keyboard (the text waits until you send it or change channel). Up from the top row reaches the quick messages: A sends one at once. Slow mode, followers-only and subscribers-only show above the box, and if Twitch refuses a message the reason shows there and the text stays. On a PC, or with Steam's keyboard (STEAM + X), you can also just type. Messages go through Twitch's official API with the `user:write:chat` permission. If you signed in before this feature, LiveDeck asks you to sign in once more. The quick messages are `quick_messages` in `config.toml`. LiveDeck keeps to Twitch's limit of 20 messages in 30 seconds.
-- **Settings:** chat layout (side panel or over the video), video quality (applies to the next stream you open) and live notifications.
+- **Settings:** chat layout (side panel or over the video), video quality (applies to the next stream you open), live notifications, background play (keep playing while another app has focus) and *Show Kick*.
 - **Live notifications:** while signed in, LiveDeck checks every 30 seconds which channels you follow are live, and shows a popup at the top right for each one that just went live (not the one you are watching, and not after a quick stream restart). Popups stay 8 seconds and take no buttons. Turning them off in Settings stops the checks.
 - **Follow raids:** while signed in, LiveDeck listens through Twitch EventSub (a WebSocket, one subscription for the channel on screen) for that channel raiding another one. A card shows who is raiding whom and counts down 10 seconds; then, or when you press A, the player switches to the raided channel with its chat, keeping your player-menu choices, the sleep timer and audio only. B keeps you where you are. Back from the new channel returns to the browse screens.
 - **Player menu:** press Start while watching. Up/Down pick a row, Left/Right change it, B closes it. Quality and latency reload the stream; hardware decoding and zoom (*Fill* crops the picture to fill a 16:10 screen) apply at once. *Stats* shows a box with live numbers and stays on from stream to stream. *Sleep timer* counts down whatever you watch (switching channels does not reset it); a minute before the end any button keeps going for the same length again, otherwise the sound fades, the stream stops and the device suspends. Nothing in this menu is saved: it lasts until the app quits, and every run starts from the Settings screen's values.
 - **Multiview:** while signed in, press View on a live channel card to add it to the set (a tick shows it, and a tray in the corner counts them). *Watch the N together* starts the set in a grid. In the grid, A moves the sound to the stream you press it on, or goes full screen on the stream with sound; B goes back to browsing with the set still picked. LB/RB change the layout, and Y shows the chat of the stream with sound. View opens the options: add a stream (Favorites or Following), remove one, star it, or leave. A stream's quality follows its size on screen, and a change of quality loads the new picture behind the old one, so it does not go black. After five seconds without a button the captions and controls fade and the streams fill the window. Full screen: A pauses, and play jumps back to live; LB/RB move to the previous or next stream.
 - **Favorites:** View on a channel card (or the picker in multiview) stars it. Favorites are listed on their own screen and in a Home row, live ones first. They are saved in `favorites.toml`.
-- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `image_cache_max_mb`, `quick_messages`, `captions`, `captions_quality`, `caption_delay` and an optional `client_id`. The starred channels are in `favorites.toml` and the last multiview set (which Home's *Resume multiview* card starts) in `multiview.toml`, both in the data folder next to the sign-in fallback. LiveDeck writes those two itself.
+- **Config file:** `config.toml` is created on first run in `%APPDATA%\livedeck\config` (Windows) or `~/.config/livedeck` (Linux). It holds `chat_layout`, `quality`, `live_notifications`, `background_play`, `show_kick`, `image_cache_max_mb`, `quick_messages`, `captions`, `captions_quality`, `caption_delay` and an optional `client_id`. The starred channels are in `favorites.toml`, the last multiview set (which Home's *Resume multiview* card starts) in `multiview.toml`, and where each video was left (for *Continue watching*) in `continue.toml`. These three are in the data folder next to the sign-in fallback, and LiveDeck writes them itself.
 - **Try it offline:** `livedeck --mock` runs with fixture data and no network. Its live channels play generated test pictures, so the player and multiview can be tried too (this needs the video build, see *Build from source*).
 - **Logs:** set `RUST_LOG=livedeck=debug`, or `RUST_LOG=livedeck::captions=debug` for caption timing. `HTPC_LOG=<file>` writes the log, and any crash, to that file instead of the terminal (a Windows release build has none unless started from one). `livedeck --help` lists every option and environment variable.
 
@@ -178,6 +181,8 @@ cargo deny check        # optional locally, needs cargo-deny (see deny.toml)
 | `crates/twitch` (`htpc-twitch-api`) | Helix client (including sending chat), anonymous GQL client, device-code login |
 | `crates/chat` | Anonymous IRC-over-WebSocket chat for reading, emotes, badges, room modes |
 | `crates/resolver` | Stream URL lookup through Streamlink |
+| `crates/kick` (`htpc-kick-api`) | Kick's read-only API and live chat |
+| `crates/captions` | Generated captions: whisper.cpp, models and the caption timing (feature `captions`) |
 | `crates/player` | libmpv rendering into the Slint window (feature `mpv`) |
 | `crates/storage` | Config, token storage (keyring or private file), image cache |
 | `crates/app` | The `livedeck` binary: wiring, store loop, command execution |

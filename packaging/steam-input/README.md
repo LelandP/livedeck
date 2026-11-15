@@ -18,7 +18,7 @@ XInput-style pad) and also accepts the keyboard keys Steam Input can send.
 | D-pad / left stick | Move focus |
 | A | Select / watch / change a setting |
 | B | Back. On a main screen (Home, Following, Browse, Settings) it asks whether to quit: A quits, B stays |
-| X | Retry a failed load |
+| X | Retry a failed load. While watching with chat shown: write in chat |
 | Y | Show or hide chat |
 | Start (Menu) | Open or close the left rail |
 
