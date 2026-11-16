@@ -334,7 +334,7 @@ pub(super) fn track_saved(s: &mut AppState, cmds: &mut Vec<Command>) {
 }
 
 /// After every message: on a Steam Deck, the first time the set has more than 3 streams, one
-/// toast says they can stutter. Once per run.
+/// toast says they get small and use a lot of data. Once per run.
 pub(crate) fn warn_if_crowded(s: &mut AppState, cmds: &mut Vec<Command>) {
     if !s.on_deck() || s.multiview_warned {
         return;

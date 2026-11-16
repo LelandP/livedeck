@@ -420,8 +420,9 @@ pub enum ToastKind {
     /// away 2 h 10 min · X watches from where you left off*. X on the live player opens the
     /// broadcast there while it is up.
     Away { away_ms: u64 },
-    /// Multiview went past 3 streams on the Steam Deck: *More than 3 streams can stutter on the
-    /// Steam Deck*. Once per run.
+    /// Multiview went past 3 streams on the Steam Deck: they get too small on its screen to watch
+    /// and use a lot of data (the Deck itself copes: 9 streams at about 33% CPU, 2026-11-15).
+    /// Once per run.
     DeckCrowded,
 }
 

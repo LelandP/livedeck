@@ -1350,7 +1350,10 @@ fn toast(t: &Toast) -> ToastVm {
         }
         ToastKind::NoChatReplay => return note("No chat replay for this video".to_owned()),
         ToastKind::DeckCrowded => {
-            return note("More than 3 streams can stutter on the Steam Deck".to_owned())
+            return note(
+                "More than 3 streams get small on the Deck's screen and use a lot of data"
+                    .to_owned(),
+            )
         }
         ToastKind::Resumed { pos_s } => {
             return note(format!(
