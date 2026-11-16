@@ -26,7 +26,7 @@ jobs:
     name: Windows portable zip
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Name and version
         id: ver
@@ -109,7 +109,7 @@ jobs:
       contents: write
     steps:
       # Full history and tags, so the notes can list the commits since the previous release.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
