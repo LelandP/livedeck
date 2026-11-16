@@ -176,7 +176,7 @@ jobs:
           # sha256sum format over every file in dist/ (the sums file itself excluded), so users can run sha256sum -c.
           (cd dist && find . -type f ! -name SHA256SUMS -printf '%P\0' | sort -z | xargs -0 sha256sum) > dist/SHA256SUMS
           cat dist/SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           # v0.1.0-rc1 and the like are marked as pre-releases.
