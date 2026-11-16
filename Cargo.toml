@@ -66,7 +66,7 @@ async-tungstenite = { version = "0.35.0", features = ["tokio-rustls-webpki-roots
 qrcode = { version = "0.14.1", default-features = false }
 # Linux only: D-Bus, to keep the screen awake during a stream. Already in the tree through Slint and
 # keyring (same version), and used through its blocking API, so the runtime it uses is unchanged.
-zbus = "5.19.0"
+zbus = "6.3.0"
 pico-args = "0.5.0"
 # Opens a web page in the system browser (the subscribe card). ShellExecute on Windows, so no
 # console window flashes; xdg-open (or the OpenURI portal in a Flatpak) on Linux.
