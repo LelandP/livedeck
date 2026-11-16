@@ -44,7 +44,6 @@ LiveDeck is a free, open-source Twitch app you drive entirely with a gamepad: br
 - It does not block or skip ads
 - Captions are not in multiview, not for sound-only streams and not for Kick
 - Kick is read-only: no sign-in, no follows, no chat messages and no captions
-- Linux/Steam Deck builds are new and **not yet tested on a real Deck**
 
 ## To do
 
@@ -65,16 +64,19 @@ Download the latest build from the **Releases** page of this repository. Each re
 
 The program is not code-signed, so Windows SmartScreen may warn about an unknown publisher. Choose *More info*, then *Run anyway*. To remove it, delete the folder (settings stay in `%APPDATA%\livedeck`).
 
-### Steam Deck / Linux (Flatpak, experimental)
+### Steam Deck / Steam Machine / Linux (Flatpak)
+
+In Desktop Mode, open **Konsole** (on a Deck, **Steam + X** brings up the keyboard) and run:
 
 ```bash
-flatpak install --user LiveDeck-vX.Y.Z-linux-x86_64.flatpak
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ~/Downloads/LiveDeck-vX.Y.Z-linux-x86_64.flatpak
 flatpak run io.github.livedeck.LiveDeck
 ```
 
-The bundle uses the Flathub runtime. If `flatpak install` cannot find it, first run `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`.
+`--user` installs it for your account only, so **no admin (sudo) password** is needed. Double-clicking the file opens Discover instead, which installs for the whole system and asks for that password. The first line adds Flathub, where the bundle's runtime comes from. To update, run the install line again with the new file and `--reinstall`.
 
-To use it in Game Mode, switch to Desktop Mode, then in Steam choose *Add a Non-Steam Game* and pick **LiveDeck**. Leave the controller layout on the default **Gamepad** template (see [packaging/steam-input](packaging/steam-input/README.md)). The Flatpak is experimental: if it does not build or run for you, please open an issue with the output.
+To use it in Game Mode, in Steam choose *Add a Non-Steam Game* and pick **LiveDeck** (if it isn't listed, add any program, then set its target to `flatpak` and its launch options to `run io.github.livedeck.LiveDeck`). Leave the controller layout on the default **Gamepad** template (see [packaging/steam-input](packaging/steam-input/README.md)). Tested on a Steam Deck and a Steam Machine: nine streams in multiview ran at about a third of the Deck's CPU.
 
 ### Build from source
 

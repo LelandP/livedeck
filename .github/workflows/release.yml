@@ -10,10 +10,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Pinned release tags of the bundled downloads. TODO: set (both values are inferred from the file
-  # names in deps\ and not checked against the release pages; confirm before the next tag).
-  MPV_TAG: "20261106"  # TODO: set (libmpv: shinchiro/mpv-winbuild-cmake)
-  STREAMLINK_TAG: "8.6.3-1"  # TODO: set (Streamlink: streamlink/windows-builds)
+  # The bundled downloads, pinned: release tag and the archive's SHA-256 (checked 2026-11-15 against
+  # GitHub's asset digests and the copies in deps\). To update, change both together.
+  MPV_TAG: "20261106"  # libmpv: shinchiro/mpv-winbuild-cmake, mpv-dev-x86_64-20261106-git-9028187538.7z
+  MPV_SHA256: "b5a3cc91b5dabf88ad5bb21d000834da4fd0bbda30f4584d39c082127bd62414"
+  STREAMLINK_TAG: "8.6.3-1"  # Streamlink: streamlink/windows-builds, streamlink-8.6.3-1-py315-x86_64.zip
+  STREAMLINK_SHA256: "3b1f1470d4b135080a8107ca2917379ca3ff5acadbcdc215568b79eea1450497"
 
 # Read-only by default. The publish job below asks for contents: write itself.
 permissions:
@@ -49,13 +51,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force deps\mpv, deps\streamlink | Out-Null
+          # Stops the build if a pinned archive is not the one checked in (a release replaced, say).
+          function Assert-Hash($pattern, $want) {
+            $files = @(Get-ChildItem $pattern)
+            if ($files.Count -ne 1) { throw "expected one file for $pattern, found $($files.Count)" }
+            $got = (Get-FileHash $files[0].FullName -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $want) { throw "$($files[0].Name): SHA-256 $got, expected $want" }
+          }
           # Prebuilt libmpv (x86-64, not the "v3" CPU-specific one). The package has only the DLL and a MinGW
           # import library, so mpv.lib for MSVC is generated from the DLL.
           gh release download $env:MPV_TAG --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*' --dir deps\mpv
+          Assert-Hash deps\mpv\mpv-dev-x86_64-2*.7z $env:MPV_SHA256
           Push-Location deps\mpv; tar -xf (Get-ChildItem mpv-dev-x86_64-2*.7z).Name; Pop-Location
           ./packaging/windows/make-import-lib.ps1 -Dir deps\mpv
           # Portable Streamlink with its own Python.
           gh release download $env:STREAMLINK_TAG --repo streamlink/windows-builds --pattern 'streamlink-*-x86_64.zip' --dir deps\streamlink
+          Assert-Hash deps\streamlink\streamlink-*-x86_64.zip $env:STREAMLINK_SHA256
           Expand-Archive (Get-ChildItem deps\streamlink\*.zip).FullName deps\streamlink\x
           $sl = Get-ChildItem deps\streamlink\x -Directory | Select-Object -First 1
           "STREAMLINK_DIR=$($sl.FullName)" >> $env:GITHUB_ENV
@@ -121,7 +132,9 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           tag="$GITHUB_REF_NAME"
-          prev=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          # Measured from the last full release: release candidates (v1.0.0-rc.1) are skipped, so
+          # an RC and the final release both list everything since the version before.
+          prev=$(git describe --tags --abbrev=0 --match 'v*' --exclude '*-*' "$tag^" 2>/dev/null || true)
           if [ -n "$prev" ]; then range="$prev..$tag"; else range="$tag"; fi
           # Oldest first, so the summary reads in the order things were done.
           bodies=$(git log --no-merges --reverse --format='%b' "$range" | tr -d '\r')
