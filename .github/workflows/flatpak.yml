@@ -26,7 +26,7 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Software centres (Discover, GNOME Software) compare the <release> versions in the metainfo
       # to tell an update from a fresh install, so opening a newer .flatpak offers to update. The
       # version comes from Cargo.toml (the release workflow checks the tag matches it), stamped in
