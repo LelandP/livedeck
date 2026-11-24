@@ -30,7 +30,7 @@ jobs:
       # xvfb-run; 2026-11, the 1.0.0-rc.1 release). On a volume they install fresh instead.
       options: --privileged --volume /var/lib/flatpak
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Software centres (Discover, GNOME Software) compare the <release> versions in the metainfo
       # to tell an update from a fresh install, so opening a newer .flatpak offers to update. The
       # version comes from Cargo.toml (the release workflow checks the tag matches it), stamped in
