@@ -12,7 +12,7 @@ Last updated: 2026-11-08
 
 **AI-authored, with human review.** An AI model wrote most of the code, tests and
 documentation edits in this repository. A human drove the architecture: the crate layout, the
-design of each feature and the decisions about what the app should do. A human also directed
+design of each feature and the decisions about what the app should do and how. A human also directed
 each change, reviewed every change before it was committed, and ran the tests.
 
 The categories the group describes, from most to least human involvement, are:
