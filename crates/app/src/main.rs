@@ -14,6 +14,7 @@ mod captions;
 mod captions_tap;
 mod chat;
 mod chat_limit;
+mod heap;
 mod hype_train;
 mod kick;
 mod live_watch;
@@ -89,6 +90,8 @@ PLAYBACK:
   (streamlink/bin/, streamlink/ or bin/), otherwise `streamlink` from PATH.
   HTPC_STREAMLINK       Path of the streamlink program (overrides both)
   HTPC_MPV_LOG          Write an mpv log to this file (builds with the `mpv` feature)
+  HTPC_MPV_OPTS         Extra mpv options for every player, for testing:
+                        name=value pairs separated by `;` (e.g. hwdec=no;vid=no)
   Video needs a build with `--features mpv` and libmpv installed.
 
 CHAT:
@@ -1068,6 +1071,10 @@ fn attach_parent_console() {
     }
 }
 
+/// Counts Rust's own allocations, so the log can tell a Rust leak from a native one (`heap`).
+#[global_allocator]
+static ALLOCATOR: heap::Counting = heap::Counting;
+
 fn main() -> Result<()> {
     #[cfg(all(windows, not(debug_assertions)))]
     attach_parent_console();
@@ -1075,6 +1082,7 @@ fn main() -> Result<()> {
         return Ok(());
     };
     init_logging();
+    heap::report_every_minute();
     let Storage {
         config,
         images,

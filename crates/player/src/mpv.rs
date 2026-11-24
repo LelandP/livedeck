@@ -210,8 +210,35 @@ impl MpvPlayer {
             );
             // Streamlink already resolved the playlist. Only exists in builds with Lua.
             optional("ytdl", init.set_option("ytdl", false));
+            // The demuxer cache, in memory, per player. mpv's defaults (150 MiB ahead, 50 MiB
+            // behind, unused space ahead lent to the back) let each stream and each spare keep
+            // hundreds of MiB, and multiview grew by 20-46 MB a minute for hours: a 16 GB Steam
+            // Machine went down after 8 h with 4 streams (1.0.0-rc.1, 2026-11-18). With these
+            // limits it stayed flat. 32 MiB ahead is ~30 s at Twitch's top bitrate, more than the
+            // captions delay (12.5 s) or Normal latency's read-ahead (10 s) need; 8 MiB behind is
+            // a few seconds, which live never seeks into (a video seeking further back reloads).
+            optional(
+                "demuxer-max-bytes",
+                init.set_option("demuxer-max-bytes", "32MiB"),
+            );
+            optional(
+                "demuxer-max-back-bytes",
+                init.set_option("demuxer-max-back-bytes", "8MiB"),
+            );
+            optional(
+                "demuxer-donate-buffer",
+                init.set_option("demuxer-donate-buffer", "no"),
+            );
             if let Ok(path) = std::env::var("HTPC_MPV_LOG") {
                 optional("log-file", init.set_option("log-file", path.as_str()));
+            }
+            // For testing: extra mpv options for every player, `name=value` pairs separated by
+            // `;` (values such as lavf options may hold commas). Last, so they win over the above.
+            // The latency options are set again before each load (`LATENCY_OPTIONS`).
+            if let Ok(extra) = std::env::var("HTPC_MPV_OPTS") {
+                for (name, value) in extra_options(&extra) {
+                    optional(name, init.set_option(name, value));
+                }
             }
             Ok(())
         })
@@ -342,6 +369,15 @@ fn apply_latency(mpv: &Mpv, latency: Latency) {
             tracing::warn!(option = name, value, %e, "mpv latency option not applied");
         }
     }
+}
+
+/// `HTPC_MPV_OPTS`: `name=value` pairs separated by `;`, blanks and pairs without `=` skipped.
+fn extra_options(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.split(';').filter_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        let name = name.trim();
+        (!name.is_empty()).then_some((name, value.trim()))
+    })
 }
 
 /// A latency's own value of `option` in [`LATENCY_OPTIONS`].
@@ -1167,6 +1203,20 @@ mod tests {
         assert_eq!(fade_volume(five, five), 0.0);
         assert_eq!(fade_volume(Duration::from_secs(9), five), 0.0);
         assert_eq!(fade_volume(Duration::ZERO, Duration::ZERO), 0.0);
+    }
+
+    #[test]
+    fn extra_options_split_on_semicolons_and_keep_commas() {
+        let got: Vec<_> =
+            extra_options(" hwdec=no ; demuxer-lavf-o=a=1,b=2;;junk; =x;vid=no").collect();
+        assert_eq!(
+            got,
+            [
+                ("hwdec", "no"),
+                ("demuxer-lavf-o", "a=1,b=2"),
+                ("vid", "no")
+            ]
+        );
     }
 
     #[test]
