@@ -57,7 +57,7 @@ export component MainWindow inherits Window {
     in property <bool> can-retry: false;
     in property <bool> can-back: false;
     // A stream or channel card has focus: View opens its popup, which the hint calls `view-label`
-    // ("Multiview" on a live stream, "Favorites" on an offline channel).
+    // ("Multiview · Favorite" on a live stream, "Add to favorites" on an offline channel).
     in property <bool> can-view: false;
     in property <string> view-label: "Multiview";
     // The multiview tray on browse screens ("Multiview · 3 picked"). Empty: hidden.

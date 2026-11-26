@@ -247,8 +247,8 @@ pub struct ViewModel {
     pub can_back: bool,
     /// A stream or channel card has focus on a browse screen: View opens its popup.
     pub can_view: bool,
-    /// What the hints bar calls that: "Multiview" on a live stream, "Favorites" on an offline
-    /// channel, and on a channel page (where View stars at once) "Add to favorites" or "Remove
+    /// What the hints bar calls that: "Multiview · Favorite" on a live stream, "Add to favorites"
+    /// on an offline channel (each "un-" once starred), and on a channel page (where View stars at once) "Add to favorites" or "Remove
     /// from favorites". Empty when `can_view` is off.
     pub view_label: String,
     /// The tray above the hints bar on browse screens: "Multiview · 3 picked". Empty while
@@ -1509,9 +1509,10 @@ pub fn view_model(state: &AppState) -> ViewModel {
         .as_ref()
         .filter(|_| state.screen == Screen::Channel)
         .is_some_and(|p| state.is_favorite(&p.channel));
-    // What View does on the focused card: multiview on a live stream, favorites on an offline
-    // channel, nothing on a category. On a channel page it stars or unstars the channel at once,
-    // with the words of the View popup's row.
+    // What View does on the focused card: multiview or a favorite on a live stream, a favorite
+    // on an offline channel, nothing on a category. Both name the favorite, so starring is easy
+    // to find from any card. On a channel page it stars or unstars the channel at once, with the
+    // words of the View popup's row.
     let view_label = match state.focused_tile() {
         _ if state.screen == Screen::Channel => {
             if state.channel_page.is_none() || state.rail.focused || state.subscribe_card {
@@ -1523,8 +1524,10 @@ pub fn view_model(state: &AppState) -> ViewModel {
             }
         }
         _ if !browsing || state.rail.focused || search_on_keys => "",
-        Some(Tile::Stream(_)) => "Multiview",
-        Some(Tile::Channel(_)) => "Favorites",
+        Some(Tile::Stream(s)) if state.is_favorite(&s.channel) => "Multiview · Unfavorite",
+        Some(Tile::Stream(_)) => "Multiview · Favorite",
+        Some(Tile::Channel(c)) if state.is_favorite(&c.channel) => "Remove from favorites",
+        Some(Tile::Channel(_)) => "Add to favorites",
         Some(Tile::Category(_) | Tile::Resume(_) | Tile::Video(_) | Tile::Clip(_)) | None => "",
     };
     // Y opens the channel page of a Twitch stream, channel or *Continue watching* card (Kick has none).

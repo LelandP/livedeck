@@ -324,6 +324,39 @@ fn typing_in_the_results_returns_to_the_keyboard() {
 }
 
 #[test]
+fn in_the_results_v_and_y_are_shortcuts_not_letters() {
+    let (s, _) = reduce(&with_results(), Intent::Menu);
+    let (v, cmds) = reduce(&s, Intent::Text('v'));
+    assert!(v.search.in_results);
+    assert_eq!(v.search.query, "ab");
+    assert!(searches(&cmds).is_empty());
+    assert_eq!(v, reduce(&s, Intent::View).0, "v is the View button");
+    let (y, _) = reduce(&s, Intent::Text('y'));
+    assert_eq!(y.search.query, "ab");
+    assert_eq!(y, reduce(&s, Intent::ToggleChat).0, "y is the Y button");
+}
+
+#[test]
+fn a_kick_result_can_be_starred_with_the_v_key() {
+    let (s, _) = typed(&search(), "zig");
+    let kick = Tile::Channel(Channel {
+        channel: ChannelRef::kick("ziggy-sleeps"),
+        name: "ZiggySleeps".into(),
+        tint: Rgb::default(),
+    });
+    let rows = vec![Row::new(RowKind::SearchOffline, vec![kick]).on(Platform::Kick)];
+    let id = s.search.id;
+    let (s, _) = reduce(&s, Event::SearchResults { id, rows });
+    let (s, _) = reduce(&s, Intent::Menu);
+    let (s, _) = reduce(&s, Intent::Text('v'));
+    let popup = s.popup.as_ref().expect("the View popup");
+    assert_eq!(popup.rows, [PopupRow::Favorite]);
+    let (s, cmds) = reduce(&s, Intent::Select);
+    assert!(s.is_favorite(&ChannelRef::kick("ziggy-sleeps")));
+    assert!(cmds.iter().any(|c| matches!(c, Command::SaveFavorites(_))));
+}
+
+#[test]
 fn a_stream_from_the_results_keeps_the_search_for_when_b_comes_back() {
     let (s, _) = reduce(&with_results(), Intent::Menu);
     let (s, cmds) = reduce(&s, Intent::Select);

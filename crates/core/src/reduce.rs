@@ -117,14 +117,18 @@ fn on_intent(s: &mut AppState, intent: Intent, cmds: &mut Vec<Command>) {
 /// What a physical keyboard's typing means here. Only the Search keyboard and the chat compose
 /// panel take text (while they have focus and nothing is in front of them). Everywhere else `y`,
 /// `r` and `v` stay the chat, retry and View shortcuts, Backspace is Back, and other characters do
-/// nothing.
+/// nothing. In the Search results those three are the shortcuts too, so a result can be starred
+/// (View) or its channel page opened (`y`) from the keyboard; other letters still edit the text.
 fn typed_key(s: &AppState, intent: Intent) -> Option<Intent> {
     let in_front = s.exit_prompt || s.sleep.is_some_and(|t| t.warning);
     let searching = s.screen == Screen::Search && !s.rail.focused;
+    let in_results = searching && s.search.in_results;
     let composing = s.composing() && s.can_chat() && s.raid.is_none() && !s.subscribe_card;
     let typing = (searching || composing) && !in_front;
+    let shortcut = |c: char| matches!(c, 'y' | 'Y' | 'r' | 'R' | 'v' | 'V');
     match intent {
-        Intent::Text(_) | Intent::Erase if typing => Some(intent),
+        Intent::Text(c) if typing && !(in_results && shortcut(c)) => Some(intent),
+        Intent::Erase if typing => Some(intent),
         Intent::Text('y' | 'Y') => Some(Intent::ToggleChat),
         Intent::Text('r' | 'R') => Some(Intent::Retry),
         Intent::Text('v' | 'V') => Some(Intent::View),
