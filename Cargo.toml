@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/app", "crates/core", "crates/input", "crates/ui", "crates/twitch", "crates/storage", "crates/resolver", "crates/player", "crates/chat", "crates/kick", "crates/captions"]
 
 [workspace.package]
-version = "1.0.0-rc.2"
+version = "1.0.0-rc.3"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/LelandP/livedeck"
@@ -14,17 +14,17 @@ homepage = "https://github.com/LelandP/livedeck"
 # libmpv2 (7.0.0) is intentionally absent: it needs a system libmpv, so it is added per crate.
 [workspace.dependencies]
 # Internal crates. Package names carry an `htpc-` prefix because `core` would shadow Rust's `core`.
-htpc-core = { path = "crates/core", version = "1.0.0-rc.2" }
-htpc-input = { path = "crates/input", version = "1.0.0-rc.2" }
-htpc-ui = { path = "crates/ui", version = "1.0.0-rc.2" }
+htpc-core = { path = "crates/core", version = "1.0.0-rc.3" }
+htpc-input = { path = "crates/input", version = "1.0.0-rc.3" }
+htpc-ui = { path = "crates/ui", version = "1.0.0-rc.3" }
 # Named after what it talks to; the binary package is `livedeck`.
-htpc-twitch-api = { path = "crates/twitch", version = "1.0.0-rc.2" }
-htpc-storage = { path = "crates/storage", version = "1.0.0-rc.2" }
-htpc-resolver = { path = "crates/resolver", version = "1.0.0-rc.2" }
-htpc-player = { path = "crates/player", version = "1.0.0-rc.2" }
-htpc-chat = { path = "crates/chat", version = "1.0.0-rc.2" }
-htpc-kick-api = { path = "crates/kick", version = "1.0.0-rc.2" }
-htpc-captions = { path = "crates/captions", version = "1.0.0-rc.2" }
+htpc-twitch-api = { path = "crates/twitch", version = "1.0.0-rc.3" }
+htpc-storage = { path = "crates/storage", version = "1.0.0-rc.3" }
+htpc-resolver = { path = "crates/resolver", version = "1.0.0-rc.3" }
+htpc-player = { path = "crates/player", version = "1.0.0-rc.3" }
+htpc-chat = { path = "crates/chat", version = "1.0.0-rc.3" }
+htpc-kick-api = { path = "crates/kick", version = "1.0.0-rc.3" }
+htpc-captions = { path = "crates/captions", version = "1.0.0-rc.3" }
 
 # UI
 slint = "1.18.1"
