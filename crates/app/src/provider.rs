@@ -576,8 +576,9 @@ impl<A: TwitchApi> ApiProvider<A> {
             tracing::warn!(what, %err, "search failed");
             errors.push(err.to_string());
         };
-        // Kick's channels come after Twitch's in the live and offline rows. Those rows page on
-        // Twitch's cursor; Kick's search has one page.
+        // Kick's channels get rows of their own, right after Twitch's live and offline rows, so a
+        // long Twitch row (which keeps growing as it pages) never buries them. Kick's search has
+        // one page, so its rows end there.
         let (kick_live, kick_offline) = match kick {
             Some(Ok(found)) => found,
             Some(Err(err)) => {
@@ -588,20 +589,22 @@ impl<A: TwitchApi> ApiProvider<A> {
         };
         let mut rows = Vec::new();
         let mut live_logins = HashSet::new();
-        let (mut live_tiles, live_paging) = match live {
+        let (live_tiles, live_paging) = match live {
             Ok((tiles, paging)) => (tiles, paging),
             Err(err) => {
                 note("live channels", &err);
                 (Vec::new(), Paging::End)
             }
         };
-        live_tiles.extend(kick_live);
-        live_logins.extend(live_tiles.iter().map(|t| {
+        live_logins.extend(live_tiles.iter().chain(&kick_live).map(|t| {
             let (platform, key) = t.key();
             (platform, key.to_ascii_lowercase())
         }));
         if !live_tiles.is_empty() {
             rows.push(Row::new(RowKind::SearchLive, live_tiles).with_paging(live_paging));
+        }
+        if !kick_live.is_empty() {
+            rows.push(Row::new(RowKind::SearchLive, kick_live).on(Platform::Kick));
         }
         match games {
             Ok(found) => {
@@ -621,16 +624,22 @@ impl<A: TwitchApi> ApiProvider<A> {
                 (Vec::new(), Paging::End)
             }
         };
-        let tiles: Vec<Tile> = offline
-            .into_iter()
-            .chain(kick_offline)
-            .filter(|t| {
-                let (platform, key) = t.key();
-                !live_logins.contains(&(platform, key.to_ascii_lowercase()))
-            })
-            .collect();
+        let not_live = |tiles: Vec<Tile>| -> Vec<Tile> {
+            tiles
+                .into_iter()
+                .filter(|t| {
+                    let (platform, key) = t.key();
+                    !live_logins.contains(&(platform, key.to_ascii_lowercase()))
+                })
+                .collect()
+        };
+        let tiles = not_live(offline);
         if !tiles.is_empty() {
             rows.push(Row::new(RowKind::SearchOffline, tiles).with_paging(offline_paging));
+        }
+        let kick_offline = not_live(kick_offline);
+        if !kick_offline.is_empty() {
+            rows.push(Row::new(RowKind::SearchOffline, kick_offline).on(Platform::Kick));
         }
         if rows.is_empty() && errors.len() == 3 {
             Err(errors.join("; "))
@@ -1581,7 +1590,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_adds_kick_channels_after_twitchs() {
+    async fn search_gives_kick_channels_rows_of_their_own() {
         let kick = htpc_kick_api::FakeKick::new()
             .with_pages(vec![vec![htpc_kick_api::fake_live("ziggy_k", 70)]])
             .with_offline("ziggy-sleeps", "ZiggySleeps");
@@ -1590,19 +1599,35 @@ mod tests {
         let [Event::SearchResults { rows, .. }] = events.as_slice() else {
             panic!("{events:?}")
         };
-        let live = rows.iter().find(|r| r.kind == RowKind::SearchLive).unwrap();
-        assert_eq!(
-            live.tiles.last().unwrap().key(),
-            (Platform::Kick, "ziggy_k")
-        );
-        let offline = rows
-            .iter()
-            .find(|r| r.kind == RowKind::SearchOffline)
-            .unwrap();
-        assert_eq!(
-            offline.tiles.last().unwrap().key(),
-            (Platform::Kick, "ziggy-sleeps")
-        );
+        let kick_row = |kind| {
+            rows.iter()
+                .find(|r| {
+                    r.id()
+                        == RowId {
+                            kind,
+                            platform: Platform::Kick,
+                        }
+                })
+                .unwrap_or_else(|| panic!("no Kick {kind:?} row in {rows:?}"))
+        };
+        let live = kick_row(RowKind::SearchLive);
+        assert_eq!(keys_of(live), [(Platform::Kick, "ziggy_k")]);
+        assert_eq!(live.paging, Paging::End);
+        let offline = kick_row(RowKind::SearchOffline);
+        assert_eq!(keys_of(offline), [(Platform::Kick, "ziggy-sleeps")]);
+        // Twitch's rows hold only Twitch channels.
+        for row in rows.iter().filter(|r| r.platform == Platform::Twitch) {
+            assert!(
+                row.tiles.iter().all(|t| t.key().0 == Platform::Twitch),
+                "{row:?}"
+            );
+        }
+        // Each Kick row comes right after its Twitch counterpart, or first if Twitch has none.
+        let at = |id: RowId| rows.iter().position(|r| r.id() == id);
+        let live_at = at(live.id()).unwrap();
+        assert!(at(RowId::twitch(RowKind::SearchLive)).map_or(true, |t| t + 1 == live_at));
+        assert!(at(RowId::twitch(RowKind::SearchOffline))
+            .map_or(true, |t| { t + 1 == at(offline.id()).unwrap() }));
     }
 
     // ---- favorites ------------------------------------------------------------------------

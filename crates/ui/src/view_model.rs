@@ -919,7 +919,9 @@ fn row_title(kind: RowKind, platform: Platform, feed: &FeedId) -> &'static str {
         RowKind::TopLive if platform == Platform::Kick => "Top Live on Kick",
         RowKind::TopLive => "Top Live",
         RowKind::Categories | RowKind::SearchCategories => "Categories",
+        RowKind::SearchLive if platform == Platform::Kick => "Live on Kick",
         RowKind::SearchLive => "Live channels",
+        RowKind::SearchOffline if platform == Platform::Kick => "Offline on Kick",
         RowKind::SearchOffline => "Offline channels",
         // Only drawn when it holds the resume card alone (Home has no other row of streams).
         RowKind::Resume => "Multiview",
