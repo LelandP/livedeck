@@ -7,7 +7,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
-async-tungstenite.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -20,5 +19,6 @@ tracing.workspace = true
 tokio.workspace = true
 wiremock.workspace = true
 serde_json.workspace = true
-# Only for the `kick_probe` example: argument parsing.
+# Only for the `kick_probe` example: argument parsing and the chat socket.
 pico-args.workspace = true
+async-tungstenite.workspace = true

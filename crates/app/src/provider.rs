@@ -1625,9 +1625,9 @@ mod tests {
         // Each Kick row comes right after its Twitch counterpart, or first if Twitch has none.
         let at = |id: RowId| rows.iter().position(|r| r.id() == id);
         let live_at = at(live.id()).unwrap();
-        assert!(at(RowId::twitch(RowKind::SearchLive)).map_or(true, |t| t + 1 == live_at));
-        assert!(at(RowId::twitch(RowKind::SearchOffline))
-            .map_or(true, |t| { t + 1 == at(offline.id()).unwrap() }));
+        assert!(at(RowId::twitch(RowKind::SearchLive)).is_none_or(|t| t + 1 == live_at));
+        let offline_at = at(offline.id()).unwrap();
+        assert!(at(RowId::twitch(RowKind::SearchOffline)).is_none_or(|t| t + 1 == offline_at));
     }
 
     // ---- favorites ------------------------------------------------------------------------
